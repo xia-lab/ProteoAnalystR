@@ -285,18 +285,21 @@ build.dendrogram.plot <- function(dat, group.colors, group.map) {
     scale_y_reverse(expand = expansion(mult = c(0.02, 0.05))) +
     coord_flip(clip = "off") +
     labs(x = NULL, y = "Distance") +
-    theme_bw() +
+    theme_minimal() +
     theme(
       axis.text.x = element_text(size = 9, color = "#233647"),
       axis.text.y = element_blank(),
       axis.ticks.y = element_blank(),
       axis.title.y = element_blank(),
       panel.grid = element_blank(),
-      plot.margin = margin(10, 12, 10, 8)
+      panel.border = element_blank(),
+      axis.line.x = element_line(color = "#233647", linewidth = 0.4),
+      axis.line.y = element_blank(),
+      plot.margin = margin(4, 0, 4, 2)
     )
 }
 
-build.boxplot.overview.plot <- function(dat, sample.order, group.colors, group.map) {
+build.violin.overview.plot <- function(dat, sample.order, group.colors, group.map) {
   dat <- coerce.numeric.matrix(dat)
   subgene <- 10000
 
@@ -325,24 +328,82 @@ build.boxplot.overview.plot <- function(dat, sample.order, group.colors, group.m
   df$Group <- factor(df$Group)
 
   q_vals <- stats::quantile(df$values, probs = c(0.01, 0.99), na.rm = TRUE)
+  violin.df <- do.call(
+    rbind,
+    lapply(split(df, df$sample_id), function(subdf) {
+      iqr_bounds <- stats::quantile(subdf$values, probs = c(0.25, 0.75), na.rm = TRUE)
+      subdf[subdf$values >= iqr_bounds[[1]] & subdf$values <= iqr_bounds[[2]], , drop = FALSE]
+    })
+  )
+  point.df <- do.call(
+    rbind,
+    lapply(split(df, df$sample_id), function(subdf) {
+      iqr_bounds <- stats::quantile(subdf$values, probs = c(0.25, 0.75), na.rm = TRUE)
+      subdf <- subdf[subdf$values < iqr_bounds[[1]] | subdf$values > iqr_bounds[[2]], , drop = FALSE]
+      keep_n <- min(nrow(subdf), 900L)
+      if (nrow(subdf) > keep_n) {
+        subdf <- subdf[sample.int(nrow(subdf), keep_n), , drop = FALSE]
+      }
+      subdf
+    })
+  )
 
-  p <- ggplot(df, aes(sample_id, values, fill = Group)) +
-    stat_boxplot(geom = "errorbar", color = "black", width = 0.45) +
-    geom_boxplot(outlier.size = 0.35, outlier.alpha = 0.35, width = 0.65) +
-    coord_flip() +
-    scale_y_continuous(limits = unname(q_vals)) +
+  p <- ggplot(df, aes(x = values, y = sample_id, fill = Group, color = Group)) +
+    geom_violin(
+      data = violin.df,
+      scale = "width",
+      trim = TRUE,
+      adjust = 0.5,
+      alpha = 0.88,
+      linewidth = 0.35,
+      width = 0.62
+    ) +
+    geom_point(
+      data = point.df,
+      aes(x = values, y = sample_id, color = Group),
+      inherit.aes = FALSE,
+      position = position_jitter(height = 0.085, width = 0),
+      size = 0.6,
+      alpha = 0.28,
+      stroke = 0
+    ) +
+    geom_boxplot(
+      width = 0.095,
+      outlier.shape = NA,
+      fill = "#fbfbfb",
+      color = "#4f4f4f",
+      linewidth = 0.3
+    ) +
+    stat_summary(
+      fun = stats::median,
+      geom = "point",
+      shape = 21,
+      size = 1.8,
+      stroke = 0.35,
+      fill = "#ffffff",
+      color = "#1f2d3d"
+    ) +
+    scale_x_continuous(limits = unname(q_vals), expand = expansion(mult = c(0.01, 0.02))) +
     scale_fill_manual(values = group.colors) +
-    labs(x = NULL, y = "Intensity") +
-    guides(fill = guide_legend(title = "Group")) +
-    theme_bw() +
+    scale_color_manual(values = group.colors) +
+    labs(x = "Intensity", y = NULL) +
+    guides(fill = guide_legend(title = "Group"), color = "none") +
+    theme_minimal() +
     theme(
-      axis.text.y = element_text(size = 7.5, hjust = 0, color = "#233647"),  # Sample names on right
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      axis.text.y = element_text(size = 7.5, hjust = 1, color = "#233647"),
       axis.ticks.y = element_blank(),
       panel.grid.major.y = element_blank(),
+      panel.grid.major.x = element_line(color = "#e7ebee", linewidth = 0.35),
+      panel.grid.minor = element_blank(),
+      panel.border = element_blank(),
+      axis.line.x = element_line(color = "#233647", linewidth = 0.4),
+      axis.line.y = element_blank(),
       legend.position = "bottom",
       legend.title = element_text(size = 9),
       legend.text = element_text(size = 8),
-      plot.margin = margin(10, 8, 10, 10)
+      plot.margin = margin(4, 2, 4, 0)
     )
 
   return(p)
@@ -380,7 +441,8 @@ qc.overview.patchwork <- function(dat, imgNm, dpi = 96, format = "png", meta = N
     return("NA")
   }
 
-  if (!requireNamespace("patchwork", quietly = TRUE) || !requireNamespace("ggdendro", quietly = TRUE)) {
+  if (!requireNamespace("patchwork", quietly = TRUE) ||
+      !requireNamespace("ggdendro", quietly = TRUE)) {
     return("NA")
   }
   suppressMessages(require("ggplot2"))
@@ -400,12 +462,14 @@ qc.overview.patchwork <- function(dat, imgNm, dpi = 96, format = "png", meta = N
 
   # Build plots with shared sample order, colors, and group mapping
   dendro.plot <- build.dendrogram.plot(dat, group.colors, group.map)
-  box.plot <- build.boxplot.overview.plot(dat, sample.order, group.colors, group.map)
+  violin.plot <- build.violin.overview.plot(dat, sample.order, group.colors, group.map)
 
-  # Only show dendrogram and boxplot (removed median plot)
-  overview.plot <- dendro.plot + box.plot +
-    patchwork::plot_layout(ncol = 2, widths = c(1.4, 1.6), guides = "collect") &
-    theme(legend.position = "bottom")
+  overview.plot <- dendro.plot + violin.plot +
+    patchwork::plot_layout(ncol = 2, widths = c(1.1, 1.9), guides = "collect") &
+    theme(
+      legend.position = "bottom",
+      plot.margin = margin(2, 2, 2, 2)
+    )
 
   sample_count <- length(sample.order)
   height_in <- max(6.5, min(16, 2.8 + sample_count * 0.22))
@@ -1029,6 +1093,21 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
   cor.ord <- cor.mat[ord, ord, drop = FALSE]
   sample.nms <- colnames(cor.ord)
 
+  corr.range <- cor.ord[row(cor.ord) != col(cor.ord)]
+  corr.range <- corr.range[is.finite(corr.range)]
+  if (length(corr.range) == 0) {
+    corr.min <- -1
+    corr.max <- 1
+  } else {
+    corr.min <- min(corr.range)
+    corr.max <- max(corr.range)
+    if (!is.finite(corr.min) || !is.finite(corr.max) || corr.min == corr.max) {
+      pad <- max(0.01, abs(corr.min) * 0.05)
+      corr.min <- corr.min - pad
+      corr.max <- corr.max + pad
+    }
+  }
+
   ann.df <- NULL
   ann.cols <- list()
   ann.pals <- list()
@@ -1094,7 +1173,7 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
         y = seq_len(n),
         z = t(cor.ord[n:1, , drop = FALSE]),
         col = heat_cols,
-        zlim = c(-1, 1),
+        zlim = c(corr.min, corr.max),
         axes = FALSE,
         xlab = "",
         ylab = "",
@@ -1119,9 +1198,9 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
              col = grad_cols[i], border = NA)
       }
       rect(x0, y0, x0 + grad_w, y0 + grad_h, border = "grey40")
-      text(x0, y0 - 0.08, labels = "-1", adj = c(0, 1), cex = 0.8)
-      text(x0 + grad_w / 2, y0 - 0.08, labels = "0", adj = c(0.5, 1), cex = 0.8)
-      text(x0 + grad_w, y0 - 0.08, labels = "1", adj = c(1, 1), cex = 0.8)
+      text(x0, y0 - 0.08, labels = format(signif(corr.min, 3), trim = TRUE), adj = c(0, 1), cex = 0.8)
+      text(x0 + grad_w / 2, y0 - 0.08, labels = format(signif((corr.min + corr.max) / 2, 3), trim = TRUE), adj = c(0.5, 1), cex = 0.8)
+      text(x0 + grad_w, y0 - 0.08, labels = format(signif(corr.max, 3), trim = TRUE), adj = c(1, 1), cex = 0.8)
       text(x0, y0 + grad_h + 0.08, labels = "Pearson correlation", adj = c(0, 0), cex = 0.85, font = 2)
 
       if (ann.count > 0) {
