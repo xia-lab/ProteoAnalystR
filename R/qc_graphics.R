@@ -328,6 +328,11 @@ build.violin.overview.plot <- function(dat, sample.order, group.colors, group.ma
   df$Group <- factor(df$Group)
 
   q_vals <- stats::quantile(df$values, probs = c(0.01, 0.99), na.rm = TRUE)
+  x_breaks <- pretty(unname(q_vals), n = 5)
+  x_breaks <- x_breaks[x_breaks >= q_vals[[1]] & x_breaks <= q_vals[[2]]]
+  if (length(x_breaks) > 1) {
+    x_breaks <- x_breaks[-length(x_breaks)]
+  }
   violin.df <- do.call(
     rbind,
     lapply(split(df, df$sample_id), function(subdf) {
@@ -383,7 +388,11 @@ build.violin.overview.plot <- function(dat, sample.order, group.colors, group.ma
       fill = "#ffffff",
       color = "#1f2d3d"
     ) +
-    scale_x_continuous(limits = unname(q_vals), expand = expansion(mult = c(0.01, 0.02))) +
+    scale_x_continuous(
+      limits = unname(q_vals),
+      breaks = x_breaks,
+      expand = expansion(mult = c(0.01, 0.02))
+    ) +
     scale_fill_manual(values = group.colors) +
     scale_color_manual(values = group.colors) +
     labs(x = "Intensity", y = NULL) +
