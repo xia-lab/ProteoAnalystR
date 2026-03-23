@@ -88,9 +88,14 @@ build.sample.qc.table <- function(dat, meta = NULL) {
   miss.count <- colSums(miss.ind)
   n.features <- nrow(dat)
   nonmiss.pct <- 100 * (n.features - miss.count) / n.features
-  median.int <- apply(dat, 2, stats::median, na.rm = TRUE)
-  iqr.val <- apply(dat, 2, stats::IQR, na.rm = TRUE)
-  total.signal <- colSums(dat, na.rm = TRUE)
+  num.detected <- n.features - miss.count
+
+  # For mean calculation, exclude missing values (NA and <=0)
+  # by converting them to NA first
+  dat_valid <- dat
+  dat_valid[miss.ind] <- NA
+
+  mean.int <- apply(dat_valid, 2, mean, na.rm = TRUE)
 
   primary.group <- rep("Group1", length(sample_names))
   if (!is.null(meta) && ncol(meta) >= 1) {
@@ -122,21 +127,73 @@ build.sample.qc.table <- function(dat, meta = NULL) {
   }
 
   outlier.flag <- tukey.flag(nonmiss.pct, reverse = TRUE) |
-    tukey.flag(median.int) |
-    tukey.flag(iqr.val) |
-    tukey.flag(total.signal)
+    tukey.flag(num.detected, reverse = TRUE) |
+    tukey.flag(mean.int)
 
   data.frame(
     Sample = sample_names,
     Group = primary.group,
     NonMissingPct = round(as.numeric(nonmiss.pct), 1),
-    MedianIntensity = signif(as.numeric(median.int), 4),
-    IQR = signif(as.numeric(iqr.val), 4),
-    TotalSignal = signif(as.numeric(total.signal), 4),
+    NumDetected = as.integer(num.detected),
+    MeanIntensity = signif(as.numeric(mean.int), 4),
     OutlierFlag = ifelse(outlier.flag, "Review", "OK"),
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
+}
+
+get.primary.group.values <- function(sample_names, meta = NULL) {
+  primary.group <- rep("Group1", length(sample_names))
+  if (!is.null(meta) && ncol(meta) >= 1) {
+    meta.df <- as.data.frame(meta, stringsAsFactors = FALSE)
+    if (!is.null(rownames(meta.df))) {
+      matched <- meta.df[sample_names, 1, drop = TRUE]
+      matched[is.na(matched) | matched == ""] <- "NA"
+      primary.group <- as.character(matched)
+    }
+  }
+  stats::setNames(primary.group, sample_names)
+}
+
+get.qc.group.palette <- function(group_values) {
+  unique_groups <- unique(as.character(group_values))
+  n_groups <- length(unique_groups)
+  # Reordered to maximize contrast among the first several categorical groups.
+  okabe_ito <- c("#E69F00", "#56B4E9", "#009E73", "#0072B2",
+                 "#D55E00", "#CC79A7", "#F0E442", "#999999")
+
+  if (n_groups <= length(okabe_ito)) {
+    group.colors <- okabe_ito[seq_len(n_groups)]
+  } else {
+    group.colors <- grDevices::colorRampPalette(okabe_ito)(n_groups)
+  }
+
+  stats::setNames(as.character(group.colors), unique_groups)
+}
+
+get.qc.annotation.palette <- function(values, annotation_index = 1L, use_master_group_palette = FALSE) {
+  values <- as.character(values)
+  values[is.na(values) | values == ""] <- "NA"
+
+  if (use_master_group_palette) {
+    return(get.qc.group.palette(values))
+  }
+
+  annotation.palettes <- list(
+    c("#1F77B4", "#2CA02C", "#17BECF", "#4DB6AC", "#6BAED6", "#31A354", "#9EDAE5", "#74C476"),
+    c("#D62728", "#FF7F0E", "#9467BD", "#E377C2", "#8C564B", "#BCBD22", "#C49C94", "#F7B6D2"),
+    c("#7F7F7F", "#BCBD22", "#8C564B", "#AEC7E8", "#FFBB78", "#98DF8A", "#C5B0D5", "#C7C7C7")
+  )
+
+  levs <- unique(values)
+  base.palette <- annotation.palettes[[((annotation_index - 1L) %% length(annotation.palettes)) + 1L]]
+  if (length(levs) <= length(base.palette)) {
+    pal <- base.palette[seq_along(levs)]
+  } else {
+    pal <- grDevices::colorRampPalette(base.palette)(length(levs))
+  }
+
+  stats::setNames(as.character(pal), levs)
 }
 
 get.sample.dendrogram.order <- function(dat, linkage = "complete") {
@@ -300,6 +357,7 @@ build.sample.median.plot <- function(dat, sample.order, meta = NULL) {
   ggplot(df, aes(x = Sample, y = MedianIntensity, fill = Group)) +
     geom_col(width = 0.72) +
     coord_flip() +
+    scale_fill_manual(values = get.qc.group.palette(as.character(df$Group))) +
     labs(title = "Sample median intensity", x = NULL, y = "Median intensity") +
     guides(fill = "none") +
     theme_bw() +
@@ -334,32 +392,8 @@ qc.overview.patchwork <- function(dat, imgNm, dpi = 96, format = "png", meta = N
     colnames(dat) <- sample_names
   }
 
-  primary.group <- rep("Group1", length(sample_names))
-  if (!is.null(meta) && ncol(meta) >= 1) {
-    meta.df <- as.data.frame(meta, stringsAsFactors = FALSE)
-    if (!is.null(rownames(meta.df))) {
-      matched <- meta.df[sample_names, 1, drop = TRUE]
-      matched[is.na(matched) | matched == ""] <- "NA"
-      primary.group <- as.character(matched)
-    }
-  }
-  group.map <- stats::setNames(primary.group, sample_names)
-
-  # Generate color palette based on number of groups
-  unique_groups <- unique(primary.group)
-  n_groups <- length(unique_groups)
-  if (n_groups <= 8) {
-    # Okabe-Ito palette (colorblind-friendly)
-    okabe_ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
-                   "#0072B2", "#D55E00", "#CC79A7", "#999999")
-    group.colors <- okabe_ito[1:n_groups]
-  } else {
-    group.colors <- grDevices::colorRampPalette(c("#E69F00","#56B4E9","#009E73",
-                                                   "#F0E442","#0072B2","#D55E00",
-                                                   "#CC79A7","#999999"))(n_groups)
-  }
-  group.colors <- as.character(group.colors)
-  names(group.colors) <- unique_groups
+  group.map <- get.primary.group.values(sample_names, meta = meta)
+  group.colors <- get.qc.group.palette(group.map)
 
   # Get sample order from dendrogram clustering
   sample.order <- get.sample.dendrogram.order(dat, linkage = "complete")
@@ -448,6 +482,13 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     dat <- as.matrix(dat);
   }
 
+  full_sample_names <- colnames(dat)
+  if (is.null(full_sample_names)) {
+    full_sample_names <- paste0("Sample_", seq_len(ncol(dat)))
+    colnames(dat) <- full_sample_names
+  }
+  full_group_palette <- get.qc.group.palette(get.primary.group.values(full_sample_names, meta = meta))
+
   if (nrow(dat)>subgene) {
     set.seed(28051968);
     sg  <- sample(nrow(dat), subgene);
@@ -470,21 +511,13 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     sample_names <- paste0("Sample_", seq_len(ncol(Mss)))
     colnames(Mss) <- sample_names
   }
+  sample_order <- sort(sample_names, method = "radix")
 
-  primary.group <- rep("Group1", length(sample_names))
-  if (!is.null(meta) && ncol(meta) >= 1) {
-    meta.df <- as.data.frame(meta, stringsAsFactors = FALSE)
-    if (!is.null(rownames(meta.df))) {
-      matched <- meta.df[sample_names, 1, drop = TRUE]
-      matched[is.na(matched) | matched == ""] <- "NA"
-      primary.group <- as.character(matched)
-    }
-  }
-  group.map <- stats::setNames(primary.group, sample_names)
+  group.map <- get.primary.group.values(sample_names, meta = meta)
 
   df <- data.frame(
     values = as.numeric(Mss),
-    sample_id = factor(rep(sample_names, each = nrow(Mss)), levels = sample_names),
+    sample_id = factor(rep(sample_names, each = nrow(Mss)), levels = sample_order),
     Group = factor(rep(group.map[sample_names], each = nrow(Mss)))
   )
 
@@ -497,14 +530,16 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
   }
   
   bp <- ggplot(df, aes(sample_id, values, fill = Group)) +
-    ylab("Values") + 
-    xlab("Samples") + 
-    scale_x_discrete(labels=sample_names) + 
-    ylim(xlower, xupper) + 
-    stat_boxplot(geom = "errorbar", color="black") + 
+    ylab("Values") +
+    xlab("Samples") +
+    scale_x_discrete(limits = sample_order, labels = sample_order) +
+    ylim(xlower, xupper) +
+    stat_boxplot(geom = "errorbar", color="black") +
     geom_boxplot(outlier.size=0.5, outlier.alpha=0.4) +
     theme_bw() + coord_flip() +
     guides(fill = guide_legend(title = "Group"));
+
+  bp <- bp + scale_fill_manual(values = full_group_palette)
 
   if(interactive){
     library(plotly);
@@ -799,19 +834,9 @@ qc.maplot.json <- function(dat, imgNm, meta = NULL) {
     colnames(dat) <- sample_names
   }
 
-  group_values <- rep("Group1", length(sample_names))
-  if (!is.null(meta) && ncol(meta) >= 1) {
-    meta.df <- as.data.frame(meta, stringsAsFactors = FALSE)
-    if (!is.null(rownames(meta.df))) {
-      matched <- meta.df[sample_names, 1, drop = TRUE]
-      matched[is.na(matched) | matched == ""] <- "NA"
-      group_values <- as.character(matched)
-    }
-  }
-  names(group_values) <- sample_names
+  group_values <- get.primary.group.values(sample_names, meta = meta)
   group_levels <- unique(group_values)
-  group_palette <- grDevices::hcl.colors(max(length(group_levels), 3), "Dark 3")[seq_along(group_levels)]
-  names(group_palette) <- group_levels
+  group_palette <- get.qc.group.palette(group_values)
 
   row_mean <- rowMeans(dat, na.rm = TRUE)
   row_mean[!is.finite(row_mean)] <- NA_real_
@@ -1016,12 +1041,11 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
     ann.keep <- ann.keep[seq_len(min(2, length(ann.keep)))]
     if (length(ann.keep) > 0) {
       ann.df <- ann.df[, ann.keep, drop = FALSE]
-      for (nm in ann.keep) {
+      for (idx in seq_along(ann.keep)) {
+        nm <- ann.keep[idx]
         vals <- as.character(ann.df[[nm]])
         vals[is.na(vals) | vals == ""] <- "NA"
-        levs <- unique(vals)
-        pal <- grDevices::hcl.colors(max(3, length(levs)), "Set 2")[seq_along(levs)]
-        names(pal) <- levs
+        pal <- get.qc.annotation.palette(vals, annotation_index = idx, use_master_group_palette = idx == 1L)
         ann.cols[[nm]] <- pal[vals]
         ann.pals[[nm]] <- pal
       }
@@ -1321,12 +1345,6 @@ qc.sample.corr.json <- function(dataSet, imgNm, method = "pearson") {
   if (!is.null(annotation.df) && ncol(annotation.df) > 0) {
     anno_band <- anno_total / anno_count
     legend_traces <- list()
-    annotation.palettes <- list(
-      c("#1F77B4", "#2CA02C", "#17BECF", "#4DB6AC", "#6BAED6", "#31A354", "#9EDAE5", "#74C476"),
-      c("#D62728", "#FF7F0E", "#9467BD", "#E377C2", "#8C564B", "#BCBD22", "#C49C94", "#F7B6D2"),
-      c("#7F7F7F", "#BCBD22", "#8C564B", "#AEC7E8", "#FFBB78", "#98DF8A", "#C5B0D5", "#C7C7C7")
-    )
-
     for (i in seq_len(ncol(annotation.df))) {
       col_name <- colnames(annotation.df)[i]
       vals <- annotation.df[[i]]
@@ -1351,12 +1369,7 @@ qc.sample.corr.json <- function(dataSet, imgNm, method = "pearson") {
         vals <- as.character(vals)
         vals[is.na(vals) | vals == ""] <- "NA"
         levs <- unique(vals)
-        base.palette <- annotation.palettes[[((i - 1) %% length(annotation.palettes)) + 1]]
-        if (length(levs) <= length(base.palette)) {
-          pal <- base.palette[seq_along(levs)]
-        } else {
-          pal <- grDevices::colorRampPalette(base.palette)(length(levs))
-        }
+        pal <- get.qc.annotation.palette(vals, annotation_index = i, use_master_group_palette = i == 1L)
         idx <- match(vals, levs) - 1
         if (length(levs) == 1) {
           colorscale <- list(list(0, pal[1]), list(1, pal[1]))
@@ -1815,15 +1828,8 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
         col.pal <- pal(n_conditions)
         pcafig <- pcafig + scale_fill_manual(values = col.pal) + scale_color_manual(values = col.pal)
       } else {
-        # Use Okabe-Ito only if <= 8 conditions, otherwise use color ramp
-        if (n_conditions <= 8) {
-          pcafig <- pcafig + scale_fill_okabeito() + scale_color_okabeito()
-        } else {
-          color_pal <- grDevices::colorRampPalette(c("#E69F00","#56B4E9","#009E73",
-                                                       "#F0E442","#0072B2","#D55E00",
-                                                       "#CC79A7","#999999"))(n_conditions)
-          pcafig <- pcafig + scale_fill_manual(values = color_pal) + scale_color_manual(values = color_pal)
-        }
+        color_pal <- get.qc.group.palette(pca.res$Conditions)
+        pcafig <- pcafig + scale_fill_manual(values = color_pal) + scale_color_manual(values = color_pal)
       }
   }
 
@@ -2263,9 +2269,7 @@ qc.pcaplot.json <- function(dataSet, x, imgNm) {
       paramSet$oneDataAnalType == "dose") {
     pal <- grDevices::colorRampPalette(c("#2196F3", "#DE690D"))(length(unique_grps))
   } else {
-    okabe <- c("#E69F00","#56B4E9","#009E73",
-               "#F0E442","#0072B2","#D55E00","#CC79A7")
-    pal <- rep(okabe, length.out = length(unique_grps))
+    pal <- unname(get.qc.group.palette(unique_grps))
   }
   col.map <- stats::setNames(pal, unique_grps)
 

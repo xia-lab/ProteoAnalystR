@@ -674,6 +674,27 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     data[data<=0] <- min.pos;
     data <- log2(data);
     msg <- paste(msg, "Log2 transformation.", collapse=" ");
+  }else if(norm.opt=="logMedian"){
+    positiveVals <- data[data > 0]
+    if(length(positiveVals) == 0){
+      AddErrMsg("All values are non-positive; log normalization cannot proceed.")
+      return(0)
+    }
+    min.pos <- max(min(positiveVals, na.rm=T)/10, 1e-6)
+    numberOfNeg = sum(data<0, na.rm = TRUE) + 1;
+    totalNumber = length(data)
+    if((numberOfNeg/totalNumber)>0.2){
+      msg <- paste(msg, "Can't perform log2 normalization, over 20% of data are negative. Try a different method or maybe the data already normalized?", collapse=" ");
+      msgSet$norm.msg <- msgSet$current.msg <- msg;
+      saveSet(msgSet, "msgSet");
+      return(0);
+    }
+    data[data<=0] <- min.pos;
+    data <- log2(data);
+    col.medians <- apply(data, 2, median, na.rm=TRUE);
+    global.median <- median(col.medians, na.rm=TRUE);
+    data <- sweep(data, 2, col.medians - global.median);
+    msg <- paste(msg, "Log2 transformation + median centering.", collapse=" ");
   }else if(norm.opt=="vsn"){
     require(limma);
     data <- tryCatch(
