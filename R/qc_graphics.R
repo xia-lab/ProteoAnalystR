@@ -36,6 +36,128 @@ PlotDataMAOverview <- function(fileName, imgNm, dpi, format){
   return("NA");
 }
 
+PlotProteinCV <- function(fileName, imgNm, dpi = 72, format = "png") {
+  if (Sys.info()['sysname'] == 'Darwin') {
+    options(bitmapType = 'cairo')
+    options(device = function(...) grDevices::png(..., type = "cairo"))
+  }
+
+  dataSet <- readDataset(fileName)
+  paramSet <- readSet(paramSet, "paramSet")
+
+  if (is.null(dataSet$meta.info) && is.null(dataSet$cls)) {
+    return("NA")
+  }
+
+  if (!is.null(dataSet$cls)) {
+    groups <- dataSet$cls
+  } else {
+    groups <- dataSet$meta.info[, 1]
+  }
+  groups <- as.factor(groups)
+
+  data_mat <- as.matrix(dataSet$data.norm)
+  if (!grepl("norm", imgNm, ignore.case = TRUE) && file.exists("data.raw.qs")) {
+    raw_mat <- try(readDataQs("data.raw.qs", paramSet$anal.type, fileName), silent = TRUE)
+    if (!inherits(raw_mat, "try-error") && !is.null(raw_mat)) {
+      data_mat <- as.matrix(raw_mat)
+    }
+  }
+
+  qc.protein.cv.hist(data_mat, groups, imgNm, dpi, format)
+  return("NA")
+}
+
+qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png") {
+  if (Sys.info()['sysname'] == 'Darwin') {
+    options(bitmapType = 'cairo')
+  }
+
+  require('ggplot2')
+  require('gridExtra')
+
+  options(device = function(...) grDevices::png(..., type = "cairo"))
+
+  dpi <- as.numeric(dpi)
+  finalFileNm <- paste0(imgNm, "dpi", dpi, ".", format)
+
+  unique_groups <- unique(groups)
+  df_list <- list()
+
+  for (grp in unique_groups) {
+    samples_idx <- which(groups == grp)
+    if (length(samples_idx) < 2) {
+      next
+    }
+
+    sub_data <- data_mat[, samples_idx, drop = FALSE]
+    finite_vals <- sub_data[is.finite(sub_data)]
+    if (length(finite_vals) > 0 && stats::median(finite_vals, na.rm = TRUE) < 100) {
+      sub_data <- 2^sub_data
+    }
+
+    p_means <- rowMeans(sub_data, na.rm = TRUE)
+    p_sds <- apply(sub_data, 1, sd, na.rm = TRUE)
+    p_cvs <- (p_sds / p_means) * 100
+
+    valid_idx <- which(is.finite(p_cvs) & p_means != 0)
+    if (length(valid_idx) > 0) {
+      df_list[[as.character(grp)]] <- data.frame(
+        CV = p_cvs[valid_idx],
+        Condition = as.character(grp)
+      )
+    }
+  }
+
+  if (length(df_list) == 0) {
+    finite_vals <- data_mat[is.finite(data_mat)]
+    if (length(finite_vals) > 0 && stats::median(finite_vals, na.rm = TRUE) < 100) {
+      data_mat <- 2^data_mat
+    }
+    p_means <- rowMeans(data_mat, na.rm = TRUE)
+    p_sds <- apply(data_mat, 1, sd, na.rm = TRUE)
+    p_cvs <- (p_sds / p_means) * 100
+    valid_idx <- which(is.finite(p_cvs) & p_means != 0)
+    if (length(valid_idx) == 0) {
+      return("NA")
+    }
+    df_all <- data.frame(CV = p_cvs[valid_idx], Condition = "All samples")
+  } else {
+    df_all <- do.call(rbind, df_list)
+  }
+
+  medians <- aggregate(CV ~ Condition, data = df_all, median)
+  medians$Label <- round(medians$CV, 1)
+
+  p <- ggplot(df_all, aes(x = CV)) +
+    geom_histogram(fill = "#56B4E9", color = "white", bins = 40, alpha = 0.8) +
+    geom_vline(data = medians, aes(xintercept = CV), color = "red", linetype = "dashed", size = 0.8) +
+    geom_text(data = medians, aes(x = CV, y = Inf, label = Label),
+              vjust = 1.5, hjust = -0.2, color = "red", size = 3.5, fontface = "bold") +
+    facet_wrap(~Condition, scales = "fixed") +
+    labs(
+      title = "Distribution of Protein CV per Condition",
+      x = "Coefficient of Variation (%)",
+      y = "Frequency"
+    ) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+      axis.title = element_text(size = 12),
+      axis.text = element_text(size = 10),
+      strip.text = element_text(size = 11, face = "bold"),
+      strip.background = element_rect(fill = "#e0e0e0")
+    )
+
+  if (format == "png") {
+    ggsave(finalFileNm, plot = p, dpi = dpi, width = 12, height = 7, bg = "white", type = "cairo")
+  } else if (format == "pdf") {
+    ggsave(finalFileNm, plot = p, width = 12, height = 7, device = cairo_pdf, bg = "white")
+  }
+
+  return(finalFileNm)
+}
+
 coerce.numeric.matrix <- function(dat) {
   if (is.data.frame(dat)) {
     dat <- as.matrix(dat)
@@ -96,6 +218,14 @@ build.sample.qc.table <- function(dat, meta = NULL) {
   dat_valid[miss.ind] <- NA
 
   mean.int <- apply(dat_valid, 2, mean, na.rm = TRUE)
+  # CV should be computed on abundance scale, not log scale.
+  finite_vals <- dat_valid[is.finite(dat_valid)]
+  use_logged_scale <- length(finite_vals) > 0 &&
+    stats::median(finite_vals, na.rm = TRUE) < 100
+  dat_for_cv <- if (use_logged_scale) 2^dat_valid else dat_valid
+  sd.int <- apply(dat_for_cv, 2, stats::sd, na.rm = TRUE)
+  mean.for.cv <- apply(dat_for_cv, 2, mean, na.rm = TRUE)
+  cv.pct <- ifelse(is.finite(mean.for.cv) & mean.for.cv != 0, abs(sd.int / mean.for.cv) * 100, NA_real_)
 
   primary.group <- rep("Group1", length(sample_names))
   if (!is.null(meta) && ncol(meta) >= 1) {
@@ -136,6 +266,7 @@ build.sample.qc.table <- function(dat, meta = NULL) {
     NonMissingPct = round(as.numeric(nonmiss.pct), 1),
     NumDetected = as.integer(num.detected),
     MeanIntensity = signif(as.numeric(mean.int), 4),
+    CVPct = round(as.numeric(cv.pct), 1),
     OutlierFlag = ifelse(outlier.flag, "Review", "OK"),
     stringsAsFactors = FALSE,
     check.names = FALSE

@@ -7,6 +7,20 @@
 ## Guangyan Zhou, guangyan.zhou@mail.mcgill.ca
 ###################################################
 
+.safe_numeric_column <- function(x) {
+  if (inherits(x, "integer64") || is.numeric(x)) {
+    return(as.numeric(x))
+  }
+  suppressWarnings(as.numeric(as.character(x)))
+}
+
+.safe_numeric_matrix <- function(df) {
+  df <- as.data.frame(df, check.names = FALSE, stringsAsFactors = FALSE)
+  out <- lapply(df, .safe_numeric_column)
+  out <- as.data.frame(out, check.names = FALSE, stringsAsFactors = FALSE)
+  as.matrix(out)
+}
+
 #' Read Tabular Expression Data and Metadata
 #'
 #' This function reads tabular expression data along with metadata and processes the data.
@@ -1106,7 +1120,7 @@ ReadMetaData <- function(metafilename){
 
   # --- Step 3: Build Intensity Matrix ---
   intens <- dat[, int_cols, drop = FALSE]
-  intens <- apply(intens, 2, function(x) as.numeric(as.character(x)))
+  intens <- .safe_numeric_matrix(intens)
 
   # Replace 0 with NA (MaxQuant convention)
   intens[intens == 0] <- NA
@@ -1735,7 +1749,7 @@ SetFragpipeOptions <- function(quantType = "protein_maxlfq", removeContaminants 
   # keep in the same order as runs vector (mapping run -> selected column)
   run_cols <- setNames(match.cols, runs)
   intens <- dat[, unname(run_cols), drop = FALSE]
-  intens <- apply(intens, 2, function(x) as.numeric(as.character(x)))
+  intens <- .safe_numeric_matrix(intens)
   id.col <- if ("Protein ID" %in% colnames(dat)) {
     dat[["Protein ID"]]
   } else if ("Protein" %in% colnames(dat)) {
@@ -2838,7 +2852,7 @@ SetPhosphoOptions <- function(format = "diann_report", ptm = "phospho", locProb 
   intens <- dat[, unname(run_cols), drop = FALSE]
   
   # Ensure numeric
-  intens <- apply(intens, 2, function(x) as.numeric(as.character(x)))
+  intens <- .safe_numeric_matrix(intens)
   
   # 7. Set Row IDs (Peptide Sequence)
   # Prefer "Modified Sequence" if available to distinguish PTMs, otherwise "Peptide Sequence"
