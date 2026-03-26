@@ -71,27 +71,9 @@
   entrez.ids <- .mapUniprotToEntrezForEnrichment(uniprot.ids, paramSet)
 
   mapped.inx <- !is.na(entrez.ids) & nzchar(as.character(entrez.ids))
-  stripped.inx <- as.character(uniprot.ids) != as.character(phosphosite.ids)
-
-  cat(sprintf("[Phospho Enrichment] Stripped %d/%d phosphosite IDs to UniProt accessions\n",
-              sum(stripped.inx, na.rm = TRUE), length(phosphosite.ids)))
   cat(sprintf("[Phospho Enrichment] UniProt->Entrez mapped %d/%d phosphosite entries (%.1f%%)\n",
               sum(mapped.inx), length(entrez.ids), 100 * sum(mapped.inx) / max(1, length(entrez.ids))))
 
-  if (length(uniprot.ids) > 0) {
-    sample.n <- min(5, length(uniprot.ids))
-    sample.map <- paste0(as.character(phosphosite.ids[seq_len(sample.n)]),
-                         " -> ", as.character(uniprot.ids[seq_len(sample.n)]),
-                         " -> ", ifelse(mapped.inx[seq_len(sample.n)], as.character(entrez.ids[seq_len(sample.n)]), "NA"))
-    cat(sprintf("[Phospho Enrichment] Sample phosphosite->UniProt->Entrez: %s\n",
-                paste(sample.map, collapse=", ")))
-  }
-
-  if (any(!mapped.inx)) {
-    failed.sample <- unique(as.character(uniprot.ids[!mapped.inx]))
-    cat(sprintf("[Phospho Enrichment] Failed to map %d unique UniProt IDs. Sample failures: %s\n",
-                length(failed.sample), paste(head(failed.sample, 10), collapse=", ")))
-  }
 
   # Build gene-level representation from existing mappings
   # Create a named vector: phosphosite -> entrez
@@ -182,27 +164,18 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
   paramSet <- readSet(paramSet, "paramSet")
 
   cat(sprintf("[Phospho Enrichment] Input: %d phosphosite IDs\n", length(phosphosite.vec)))
-  cat(sprintf("[Phospho Enrichment] Sample IDs: %s\n",
-              paste(head(phosphosite.vec, 5), collapse=", ")))
 
   # Collapse phosphosites to genes
-  collapse.res <- .collapsePhosphositesToGenes(phosphosite.vec, paramSet);
-  entrez.vec <- collapse.res$entrez.ids;
-  entrez.to.phospho <- collapse.res$entrez.to.phospho;
-  phospho.to.entrez <- collapse.res$phospho.to.entrez;
+  collapse.res <- .collapsePhosphositesToGenes(phosphosite.vec, paramSet)
+  entrez.vec <- collapse.res$entrez.ids
+  entrez.to.phospho <- collapse.res$entrez.to.phospho
+  phospho.to.entrez <- collapse.res$phospho.to.entrez
 
   # Get gene symbols for entrez IDs
   sym.vec <- doEntrez2SymbolMapping(entrez.vec, paramSet$data.org, "entrez")
   names(entrez.vec) <- sym.vec
   cat(sprintf("[Phospho Enrichment] Unique Entrez IDs entering ORA: %d\n", length(entrez.vec)))
-  cat(sprintf("[Phospho Enrichment] Entrez IDs with gene symbols: %d/%d\n",
-              sum(!is.na(sym.vec) & nzchar(as.character(sym.vec))), length(sym.vec)))
-  if (length(entrez.vec) > 0) {
-    cat(sprintf("[Phospho Enrichment] Sample Entrez IDs: %s\n",
-                paste(head(as.character(entrez.vec), 5), collapse=", ")))
-    cat(sprintf("[Phospho Enrichment] Sample gene symbols: %s\n",
-                paste(head(as.character(sym.vec), 5), collapse=", ")))
-  }
+
 
   # Perform enrichment analysis with entrez IDs
   # Temporarily store phosphosite mapping in paramSet

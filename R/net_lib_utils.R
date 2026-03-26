@@ -7,32 +7,45 @@
 ###################################################
 
 # note, last two par only for STRING database
-QueryPpiSQLite <- function(sqlite.path, table.nm, q.vec, requireExp, min.score){
-  require('RSQLite')
-  db.path <- paste(sqlite.path, "ppi_uniprot.sqlite", sep="");
-  ppi.db <- .connect.sqlite(db.path);
-  query <- paste(shQuote(q.vec),collapse=",");
+QueryPpiSQLite <- function(sqlite.path, table.nm, q.vec, requireExp, min.score, use.uniprot = FALSE){
+  require("RSQLite")
+  db.file <- if (isTRUE(use.uniprot)) "ppi_uniprot.sqlite" else "ppi.sqlite"
+  db.path <- paste(sqlite.path, db.file, sep="")
+  ppi.db <- .connect.sqlite(db.path)
+  query <- paste(shQuote(q.vec), collapse=",")
+  id1.col <- if (isTRUE(use.uniprot)) "uniprot1" else "id1"
+  id2.col <- if (isTRUE(use.uniprot)) "uniprot2" else "id2"
+
 
   if(grepl("string$", table.nm)){
     if(requireExp){
-      statement <- paste("SELECT * FROM ",table.nm, " WHERE ((uniprot1 IN (", query, ")) OR (uniprot2 IN (", query, ")))  AND combined_score >=", min.score, " AND experimental > 0", sep="");
+      statement <- paste("SELECT * FROM ", table.nm, " WHERE ((", id1.col, " IN (", query, ")) OR (", id2.col, " IN (", query, ")))  AND combined_score >=", min.score, " AND experimental > 0", sep="")
     }else{
-      statement <- paste("SELECT * FROM ",table.nm, " WHERE ((uniprot1 IN (", query, ")) OR (uniprot2 IN (", query, ")))  AND combined_score >=", min.score, sep="");
+      statement <- paste("SELECT * FROM ", table.nm, " WHERE ((", id1.col, " IN (", query, ")) OR (", id2.col, " IN (", query, ")))  AND combined_score >=", min.score, sep="")
     }
   }else{
-    statement <- paste("SELECT * FROM ",table.nm, " WHERE ((uniprot1 IN (", query, ")) OR (uniprot2 IN (", query, ")))", sep="");
-  }
-  ppi.res <- .query.sqlite(ppi.db, statement);
-
-  # Rename uniprot1/uniprot2 columns to id1/id2 for compatibility with downstream code
-  if("uniprot1" %in% colnames(ppi.res) && "uniprot2" %in% colnames(ppi.res)){
-    colnames(ppi.res)[colnames(ppi.res) == "uniprot1"] <- "id1"
-    colnames(ppi.res)[colnames(ppi.res) == "uniprot2"] <- "id2"
+    statement <- paste("SELECT * FROM ", table.nm, " WHERE ((", id1.col, " IN (", query, ")) OR (", id2.col, " IN (", query, ")))", sep="")
   }
 
-  # remove dupliated edges
-  ppi.res <- ppi.res[!duplicated(ppi.res$row_id),]
-  return(ppi.res);
+
+  ppi.res <- .query.sqlite(ppi.db, statement)
+
+  if (isTRUE(use.uniprot) && "uniprot1" %in% colnames(ppi.res) && "uniprot2" %in% colnames(ppi.res)) {
+    # Keep raw UniProt columns, but make downstream id1/id2 matching use UniProt in this mode.
+    ppi.res$id1 <- ppi.res$uniprot1
+    ppi.res$id2 <- ppi.res$uniprot2
+  }
+
+  cat(sprintf("[PPI Query] Returned %d rows from %s\n", nrow(ppi.res), table.nm))
+
+  if ("row_id" %in% colnames(ppi.res)) {
+    row.ids <- ppi.res$row_id
+    if (sum(!is.na(row.ids) & nzchar(as.character(row.ids))) > 0) {
+      keep <- is.na(row.ids) | !duplicated(row.ids)
+      ppi.res <- ppi.res[keep, , drop = FALSE]
+    }
+  }
+  return(ppi.res)
 }
 
 #for signaling pathway as well
