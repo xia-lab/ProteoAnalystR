@@ -2271,3 +2271,225 @@ SampleNorm_Specific <- function(data, paramSet, sampleNormParam = "__manual__") 
   
   return(list(data = data_norm, message = message))
 }
+
+#' Apply phosphoproteomics format-specific filtering
+#' Entry point for phospho-specific filtering - routes to appropriate format function
+#' @param dataName Dataset name
+#' @param dataFormat Format type (maxquant, diann, fragpipe)
+#' @param formatOpts List of format-specific options
+#' @return 1 on success, 0 on failure
+ApplyPhosphoFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts = list()) {
+  msgSet <- readSet(msgSet, "msgSet")
+  paramSet <- readSet(paramSet, "paramSet")
+  dataSet <- readDataset(dataName)
+
+  # Load current data
+  if (file.exists("norm.input.anot.qs")) {
+    data <- qs::qread("norm.input.anot.qs")
+  } else if (file.exists("orig.data.anot.qs")) {
+    data <- qs::qread("orig.data.anot.qs")
+  } else {
+    msgSet$current.msg <- c(msgSet$current.msg, "[Phospho Filter] No annotated data found - skipping format-specific filtering")
+    saveSet(msgSet, "msgSet")
+    return(1)
+  }
+
+  msg("[Phospho Filter] Applying ", dataFormat, " format-specific filtering to phospho data")
+
+  # Route to appropriate format-specific function
+  result <- NULL
+  if (dataFormat == "maxquant") {
+    removeContaminants <- if (!is.null(formatOpts$removeContaminants)) formatOpts$removeContaminants else TRUE
+    removeDecoys <- if (!is.null(formatOpts$removeDecoys)) formatOpts$removeDecoys else TRUE
+    minPeptides <- if (!is.null(formatOpts$minPeptides)) formatOpts$minPeptides else 0
+    result <- ApplyMaxQuantPhosphoFiltering(data, removeContaminants, removeDecoys, minPeptides)
+  } else if (dataFormat == "diann") {
+    qvalueFilter <- if (!is.null(formatOpts$qvalueFilter)) formatOpts$qvalueFilter else TRUE
+    minPeptides <- if (!is.null(formatOpts$minPeptides)) formatOpts$minPeptides else 0
+    result <- ApplyDiannPhosphoFiltering(data, qvalueFilter, minPeptides)
+  } else if (dataFormat == "fragpipe") {
+    removeContaminants <- if (!is.null(formatOpts$removeContaminants)) formatOpts$removeContaminants else TRUE
+    minProb <- if (!is.null(formatOpts$minProb)) formatOpts$minProb else 0.0
+    minPeptides <- if (!is.null(formatOpts$minPeptides)) formatOpts$minPeptides else 0
+    result <- ApplyFragpipePhosphoFiltering(data, removeContaminants, minProb, minPeptides)
+  } else {
+    msg <- paste0("[Phospho Filter] Unsupported format: ", dataFormat, " - skipping")
+    msgSet$current.msg <- c(msgSet$current.msg, msg)
+    saveSet(msgSet, "msgSet")
+    return(1)
+  }
+
+  if (is.null(result) || is.null(result$data)) {
+    msgSet$current.msg <- c(msgSet$current.msg, "[Phospho Filter] Format-specific filtering failed")
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+
+  # Save filtered data back
+  qs::qsave(result$data, "norm.input.anot.qs")
+
+  # Generate summary message
+  stats <- result$stats
+  summary_msg <- paste0(
+    "[Phospho Filter] Format-specific filtering complete: ",
+    stats$n_total, " → ", stats$n_final, " phosphosites"
+  )
+  msgSet$current.msg <- c(msgSet$current.msg, summary_msg)
+  saveSet(msgSet, "msgSet")
+
+  return(1)
+}
+
+#' Apply MaxQuant phosphoproteomics filtering
+#' @param data Data matrix to filter
+#' @param removeContaminants Remove contaminant proteins
+#' @param removeDecoys Remove decoy/reverse proteins
+#' @param minPeptides Minimum number of peptides (not typically used for phospho)
+#' @return List with filtered data and statistics
+ApplyMaxQuantPhosphoFiltering <- function(data, removeContaminants = TRUE, removeDecoys = TRUE, minPeptides = 0) {
+  msgSet <- readSet(msgSet, "msgSet")
+
+  # Initialize statistics
+  stats <- list(
+    n_total = nrow(data),
+    n_contaminants = 0,
+    n_decoys = 0,
+    n_min_peptides = 0,
+    n_final = nrow(data)
+  )
+
+  # Check if we have MaxQuant phospho metadata
+  if (!file.exists("maxquant_phospho_metadata.qs")) {
+    msg <- "[MaxQuant Phospho Filter] No MaxQuant phospho metadata found - skipping format-specific filtering"
+    msgSet$current.msg <- c(msgSet$current.msg, msg)
+    saveSet(msgSet, "msgSet")
+    return(list(data = data, stats = stats))
+  }
+
+  mq_meta <- qs::qread("maxquant_phospho_metadata.qs")
+
+  # Filter contaminants
+  if (removeContaminants && "Potential.contaminant" %in% names(mq_meta)) {
+    contaminant_sites <- rownames(mq_meta)[which(mq_meta$Potential.contaminant == "+")]
+    keep_rows <- !(rownames(data) %in% contaminant_sites)
+    prev_count <- nrow(data)
+    data <- data[keep_rows, , drop = FALSE]
+    stats$n_contaminants <- prev_count - nrow(data)
+    if (stats$n_contaminants > 0) {
+      msg <- paste0("[MaxQuant Phospho Filter] Removed ", stats$n_contaminants, " contaminant phosphosites")
+      msgSet$current.msg <- c(msgSet$current.msg, msg)
+    }
+  }
+
+  # Filter decoys/reverse
+  if (removeDecoys && "Reverse" %in% names(mq_meta)) {
+    decoy_sites <- rownames(mq_meta)[which(mq_meta$Reverse == "+")]
+    keep_rows <- !(rownames(data) %in% decoy_sites)
+    prev_count <- nrow(data)
+    data <- data[keep_rows, , drop = FALSE]
+    stats$n_decoys <- prev_count - nrow(data)
+    if (stats$n_decoys > 0) {
+      msg <- paste0("[MaxQuant Phospho Filter] Removed ", stats$n_decoys, " decoy/reverse phosphosites")
+      msgSet$current.msg <- c(msgSet$current.msg, msg)
+    }
+  }
+
+  stats$n_final <- nrow(data)
+  saveSet(msgSet, "msgSet")
+  return(list(data = data, stats = stats))
+}
+
+#' Apply DIA-NN phosphoproteomics filtering
+#' @param data Data matrix to filter
+#' @param qvalueFilter Filter by Q-value < 0.01
+#' @param minPeptides Minimum peptide/precursor evidence count
+#' @return List with filtered data and statistics
+ApplyDiannPhosphoFiltering <- function(data, qvalueFilter = TRUE, minPeptides = 0) {
+  msgSet <- readSet(msgSet, "msgSet")
+
+  # Initialize statistics
+  stats <- list(
+    n_total = nrow(data),
+    n_qvalue = 0,
+    n_min_peptides = 0,
+    n_final = nrow(data)
+  )
+
+  # Check if we have DIA-NN phospho metadata
+  if (!file.exists("diann_phospho_metadata.qs")) {
+    msg <- "[DIA-NN Phospho Filter] No DIA-NN phospho metadata found - skipping format-specific filtering"
+    msgSet$current.msg <- c(msgSet$current.msg, msg)
+    saveSet(msgSet, "msgSet")
+    return(list(data = data, stats = stats))
+  }
+
+  diann_meta <- qs::qread("diann_phospho_metadata.qs")
+
+  # Filter by Q-value
+  if (qvalueFilter && ("Q.Value" %in% names(diann_meta) || "PG.Qvalue" %in% names(diann_meta))) {
+    qval_col <- if ("Q.Value" %in% names(diann_meta)) "Q.Value" else "PG.Qvalue"
+    qvalues <- diann_meta[[qval_col]]
+    names(qvalues) <- rownames(diann_meta)
+
+    matched_qvals <- qvalues[rownames(data)]
+    keep_rows <- !is.na(matched_qvals) & matched_qvals < 0.01
+    prev_count <- nrow(data)
+    data <- data[keep_rows, , drop = FALSE]
+    stats$n_qvalue <- prev_count - nrow(data)
+    if (stats$n_qvalue > 0) {
+      msg <- paste0("[DIA-NN Phospho Filter] Removed ", stats$n_qvalue, " phosphosites with Q-value >= 0.01")
+      msgSet$current.msg <- c(msgSet$current.msg, msg)
+    }
+  }
+
+  stats$n_final <- nrow(data)
+  saveSet(msgSet, "msgSet")
+  return(list(data = data, stats = stats))
+}
+
+#' Apply FragPipe phosphoproteomics filtering
+#' @param data Data matrix to filter
+#' @param removeContaminants Remove contaminant proteins
+#' @param minProb Minimum localization probability (0-1)
+#' @param minPeptides Minimum number of peptides
+#' @return List with filtered data and statistics
+ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minProb = 0.0, minPeptides = 0) {
+  msgSet <- readSet(msgSet, "msgSet")
+
+  # Initialize statistics
+  stats <- list(
+    n_total = nrow(data),
+    n_contaminants = 0,
+    n_min_prob = 0,
+    n_min_peptides = 0,
+    n_final = nrow(data),
+    min_prob = minProb
+  )
+
+  # Check if we have FragPipe phospho metadata
+  if (!file.exists("fragpipe_phospho_metadata.qs")) {
+    msg <- "[FragPipe Phospho Filter] No FragPipe phospho metadata found - skipping format-specific filtering"
+    msgSet$current.msg <- c(msgSet$current.msg, msg)
+    saveSet(msgSet, "msgSet")
+    return(list(data = data, stats = stats))
+  }
+
+  fp_meta <- qs::qread("fragpipe_phospho_metadata.qs")
+
+  # Filter contaminants
+  if (removeContaminants && "Is.Contaminant" %in% names(fp_meta)) {
+    contaminant_sites <- rownames(fp_meta)[which(fp_meta$Is.Contaminant == "+")]
+    keep_rows <- !(rownames(data) %in% contaminant_sites)
+    prev_count <- nrow(data)
+    data <- data[keep_rows, , drop = FALSE]
+    stats$n_contaminants <- prev_count - nrow(data)
+    if (stats$n_contaminants > 0) {
+      msg <- paste0("[FragPipe Phospho Filter] Removed ", stats$n_contaminants, " contaminant phosphosites")
+      msgSet$current.msg <- c(msgSet$current.msg, msg)
+    }
+  }
+
+  stats$n_final <- nrow(data)
+  saveSet(msgSet, "msgSet")
+  return(list(data = data, stats = stats))
+}

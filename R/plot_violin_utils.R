@@ -477,7 +477,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
   }
 }
 
-UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png", dpi=96, paletteOpt="default"){
+UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png", dpi=96, paletteOpt="default", plotType="violin"){
   
   require(ggplot2);
   require(see);
@@ -504,8 +504,13 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
     df.norm <- data.frame(value=dat[gene.id,], name = cls);
     if(dataSet$disc.inx[boxmeta]){
       col <- GetGroupPalette(df.norm$name, paletteOpt)
+      plot.geom <- if (identical(plotType, "boxplot")) {
+        geom_boxplot(aes(color = name), outlier.shape = NA, width = 0.55, show.legend = FALSE)
+      } else {
+        geom_violin(trim = FALSE, aes(color = name), show.legend = FALSE)
+      }
       p.norm <- ggplot2::ggplot(df.norm, aes(x = name, y = value, fill = name)) +
-        geom_violin(trim = FALSE, aes(color = name), show.legend = FALSE) + 
+        plot.geom +
         geom_jitter(height = 0, width = 0.05, show.legend = FALSE) +
         theme_bw()+
         theme(legend.position = "none") +  xlab(boxmeta) +

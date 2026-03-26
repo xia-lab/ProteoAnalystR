@@ -239,26 +239,28 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
   min.score <- .roundScore(confThresh)
 
   # Determine if this database uses UniProt or Entrez IDs
+  # Since we're now using ppi_uniprot.sqlite with uniprot_1/uniprot_2 columns,
+  # ALL tables in this database use UniProt IDs natively
   # Extract database type from dbName (format: "org_dbtype", e.g., "hsa_rolland")
   db_parts <- strsplit(dbName, "_")[[1]]
   db_type <- if (length(db_parts) >= 2) db_parts[2] else "string"
-  # Only Rolland and IRefIndex use UniProt IDs; HuRI and IntAct use Entrez IDs
-  uses_uniprot_ids <- db_type %in% c("rolland", "irefinx")
+  # NEW: ppi_uniprot.sqlite uses UniProt IDs for all database types
+  uses_uniprot_ids <- TRUE
 
   # DIAGNOSTIC: Print database detection info
   msg(sprintf("[PPI] Database name: %s", dbName))
   msg(sprintf("[PPI] Database type detected: %s", db_type))
-  msg(sprintf("[PPI] Uses UniProt IDs: %s", uses_uniprot_ids))
+  msg(sprintf("[PPI] Uses UniProt IDs: %s (ppi_uniprot.sqlite)", uses_uniprot_ids))
   msg(sprintf("[PPI] Initial seed count: %d", length(seeds)))
   if (length(seeds) > 0) {
     msg(sprintf("[PPI] Sample seeds (first 5): %s", paste(head(seeds, 5), collapse=", ")))
   }
 
   # PROTEOMICS: Seeds are UniProt IDs
-  # Most PPI databases use Entrez IDs (STRING, InnateDB, HuRI, IntAct), some use UniProt (Rolland, IRefIndex)
+  # NEW: ppi_uniprot.sqlite uses UniProt IDs for all database types (STRING, InnateDB, HuRI, IntAct, etc.)
   # NOTE: After upload and ID mapping, ProteoAnalyst keeps UniProt IDs internally
   uniprot_seeds <- seeds  # Original UniProt IDs
-  entrez_seeds <- seeds   # Will be converted to Entrez (if needed)
+  entrez_seeds <- seeds   # Since database uses UniProt, these will stay as UniProt (variable name kept for compatibility)
 
   data.idType <- paramSet$data.idType
 
@@ -419,6 +421,28 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
   } else if (nrow(edges) == 0) {
     msg(sprintf("[PPI] Query returned 0 edges (no matches found in %s)", dbName))
     msg("[PPI] Possible reasons: 1) Seeds not in database, 2) ID format mismatch, 3) Empty table")
+
+    # DIAGNOSTIC: Sample database to see what IDs are actually there
+    tryCatch({
+      msg("[PPI] DIAGNOSTIC: Sampling database to check ID format...")
+      sample.query <- "SELECT uniprot1, uniprot2 FROM hsa_string LIMIT 10"
+      sample.edges <- tryCatch({
+        require('RSQLite')
+        db.path <- paste(sqlite.path, "ppi_uniprot.sqlite", sep="")
+        ppi.db <- dbConnect(SQLite(), db.path)
+        result <- dbGetQuery(ppi.db, sample.query)
+        dbDisconnect(ppi.db)
+        result
+      }, error = function(e) NULL)
+
+      if (!is.null(sample.edges) && nrow(sample.edges) > 0) {
+        msg(sprintf("[PPI] Database contains IDs like: %s", paste(head(unique(c(sample.edges$uniprot1, sample.edges$uniprot2)), 10), collapse=", ")))
+        msg(sprintf("[PPI] Your seeds look like: %s", paste(head(seeds, 10), collapse=", ")))
+      }
+    }, error = function(e) {
+      msg(sprintf("[PPI] Could not sample database: %s", e$message))
+    })
+
     if (!exists("current.msg", inherits = TRUE) || is.null(current.msg) || current.msg == "") {
       .setCurrentMessage("No matches found for the given seed features/proteins.")
     }
@@ -426,6 +450,17 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
   } else {
     msg(sprintf("[PPI] Query successful: %d edges found", nrow(edges)))
     msg(sprintf("[PPI] Sample edges (first 3 rows): %s", paste(apply(edges[1:min(3, nrow(edges)), 1:2], 1, paste, collapse=" - "), collapse="; ")))
+
+    # DIAGNOSTIC: Check if any seeds matched
+    all.db.nodes <- unique(c(edges$id1, edges$id2))
+    matched.seeds <- sum(seeds %in% all.db.nodes)
+    msg(sprintf("[PPI] DIAGNOSTIC: %d/%d seeds found in results (%.1f%% match rate)",
+                matched.seeds, length(seeds), 100*matched.seeds/length(seeds)))
+    if (matched.seeds < length(seeds) * 0.1) {
+      msg("[PPI] WARNING: Less than 10% of seeds matched - likely ID format mismatch!")
+      msg(sprintf("[PPI] Database IDs look like: %s", paste(head(all.db.nodes, 10), collapse=", ")))
+      msg(sprintf("[PPI] Your seeds look like: %s", paste(head(seeds, 10), collapse=", ")))
+    }
   }
 
   edges <- unique(.normalizePpiEdges(edges))
@@ -954,14 +989,12 @@ PrepareNetwork <- function(net.nm, json.nm) {
   # msg(sprintf("[exportNetworkToJSON] Exporting network '%s' with %d nodes, %d edges\n",
   #            net.nm, n, ecount(g)))
 
-  # Map Entrez IDs to gene symbols for node labels
   # Get organism from paramSet
   org <- paramSet$data.org
   if(is.null(org)) {
     warning(".exportNetworkToJSON: organism not found in paramSet, using 'hsa' as default")
     org <- "hsa"
   }
-  node.labels <- doEntrez2SymbolMapping(nms, org, "entrez")
 
   # Calculate network metrics
   node.dgr <- igraph::degree(g)
@@ -1066,19 +1099,10 @@ PrepareNetwork <- function(net.nm, json.nm) {
   org <- if (!is.null(paramSet$org)) paramSet$org else "hsa"
   loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
 
-  loc.map <- NULL
-  if (file.exists(loc.path)) {
-    msg(sprintf("[exportNetworkToJSON] Loading localization data from: %s\n", loc.path))
-    loc.data <- qs::qread(loc.path)
-    loc.map <- loc.data[match(nms, as.character(loc.data$EntrezID)), ]
-    msg(sprintf("[exportNetworkToJSON] Mapped %d/%d nodes to localization data\n",
-                sum(!is.na(loc.map$Broad.category)), length(nms)))
-  } else {
-    msg(sprintf("[exportNetworkToJSON] Localization data not found, using single compartment\n"))
-  }
-
-  # Map Entrez IDs to UniProt accessions via database
-  uniprot.vec <- rep(NA_character_, length(nms))
+  # NEW: Since ppi_uniprot.sqlite uses UniProt IDs, nms are now UniProt IDs (not Entrez)
+  # We need to map UniProt → Entrez for localization data lookup and gene symbol mapping
+  entrez.vec <- rep(NA_character_, length(nms))
+  uniprot.vec <- nms  # nms are already UniProt IDs from the graph
 
   tryCatch({
     # Query entrez_uniprot database table
@@ -1086,18 +1110,45 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
     if (!is.null(uniprot.map) && is.data.frame(uniprot.map) &&
         "gene_id" %in% colnames(uniprot.map) && "accession" %in% colnames(uniprot.map)) {
-      # Match Entrez IDs (nms) to get UniProt accessions
-      hit.inx <- match(as.character(nms), as.character(uniprot.map$gene_id))
-      uniprot.vec <- uniprot.map$accession[hit.inx]
+      # NEW: Match UniProt IDs (nms) to get Entrez IDs (reverse of previous logic)
+      # Normalize UniProt IDs first (remove isoforms, phosphosites, etc.)
+      normalized.nms <- .normalizeUniprotIds(as.character(nms))
+      normalized.accessions <- .normalizeUniprotIds(as.character(uniprot.map$accession))
 
-      # msg(sprintf("[exportNetworkToJSON] Mapped %d/%d nodes to UniProt IDs\n",
-      #            sum(!is.na(uniprot.vec)), length(nms)))
+      hit.inx <- match(normalized.nms, normalized.accessions)
+      entrez.vec <- uniprot.map$gene_id[hit.inx]
+
+      msg(sprintf("[exportNetworkToJSON] Mapped %d/%d UniProt nodes to Entrez IDs\n",
+                  sum(!is.na(entrez.vec)), length(nms)))
     } else {
       msg(sprintf("[exportNetworkToJSON] Warning: entrez_uniprot table not available for organism %s\n", org))
     }
   }, error = function(e) {
-    msg(sprintf("[exportNetworkToJSON] Warning: Could not load UniProt mapping: %s\n", e$message))
+    msg(sprintf("[exportNetworkToJSON] Warning: Could not load UniProt→Entrez mapping: %s\n", e$message))
   })
+
+  # Map Entrez IDs to gene symbols for node labels
+  # For nodes without Entrez mapping, use UniProt ID as fallback
+  node.labels <- rep(NA_character_, length(nms))
+  valid.entrez <- !is.na(entrez.vec) & nzchar(entrez.vec)
+  if (any(valid.entrez)) {
+    node.labels[valid.entrez] <- doEntrez2SymbolMapping(entrez.vec[valid.entrez], org, "entrez")
+  }
+  # Use UniProt ID as label for nodes without Entrez mapping
+  node.labels[is.na(node.labels)] <- as.character(nms[is.na(node.labels)])
+
+  # Load localization data using Entrez IDs
+  loc.map <- NULL
+  if (file.exists(loc.path)) {
+    msg(sprintf("[exportNetworkToJSON] Loading localization data from: %s\n", loc.path))
+    loc.data <- qs::qread(loc.path)
+    # Match using Entrez IDs (converted from UniProt)
+    loc.map <- loc.data[match(entrez.vec, as.character(loc.data$EntrezID)), ]
+    msg(sprintf("[exportNetworkToJSON] Mapped %d/%d nodes to localization data\n",
+                sum(!is.na(loc.map$Broad.category)), length(nms)))
+  } else {
+    msg(sprintf("[exportNetworkToJSON] Localization data not found, using single compartment\n"))
+  }
 
   # Get phosphosite mapping if available (for phosphoproteomics data)
   phosphosite.map <- list()
@@ -1121,7 +1172,13 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   # Build gene nodes with compartment information (like localization network)
   gene.nodes <- lapply(seq_along(nms), function(i) {
-    entrez.id <- as.character(nms[i])  # nms are Entrez IDs from the graph
+    # NEW: Since ppi_uniprot.sqlite uses UniProt IDs, nms are now UniProt IDs (not Entrez)
+    uniprot.id <- as.character(nms[i])  # nms are UniProt IDs from the graph
+    entrez.id <- if (!is.na(entrez.vec[i]) && !is.null(entrez.vec[i]) && nzchar(entrez.vec[i])) {
+      as.character(entrez.vec[i])
+    } else {
+      ""  # Empty string if no Entrez mapping
+    }
 
     # Determine compartment from localization data
     if (!is.null(loc.map)) {
@@ -1138,14 +1195,9 @@ PrepareNetwork <- function(net.nm, json.nm) {
     comp.color <- category.colors[[category]]
     if (is.null(comp.color)) comp.color <- "#999999"
 
-    # CRITICAL FIX: Always use Entrez ID as primary node ID for consistency
-    # The PPI network is built with Entrez IDs, so all nodes must use Entrez as ID
-    # UniProt is stored separately in the uniprot field for display/reference
-    uniprot.id <- if (!is.na(uniprot.vec[i]) && !is.null(uniprot.vec[i]) && nzchar(uniprot.vec[i])) {
-      as.character(uniprot.vec[i])
-    } else {
-      ""  # Empty string if no UniProt mapping
-    }
+    # NEW: Use UniProt ID as primary node ID for consistency with ppi_uniprot.sqlite
+    # The PPI network is built with UniProt IDs from ppi_uniprot.sqlite
+    # Entrez is stored separately in the entrez field for lookups/reference
 
     # Check if this node is a query node (from original upload)
     is.query <- if (!is.null(V(g)$is_query)) V(g)$is_query[i] else FALSE
@@ -1162,10 +1214,10 @@ PrepareNetwork <- function(net.nm, json.nm) {
     }
 
     node.data <- list(
-      id = entrez.id,              # ✅ ALWAYS use Entrez ID as primary identifier
+      id = uniprot.id,             # NEW: Use UniProt ID as primary identifier (from ppi_uniprot.sqlite)
       label = node.labels[i],      # Use gene symbol as label
-      uniprot = uniprot.id,        # UniProt stored separately
-      entrez = entrez.id,          # Explicit entrez field for reference
+      uniprot = uniprot.id,        # UniProt ID (same as id for consistency)
+      entrez = entrez.id,          # Entrez stored separately for reference
       size = node.sizes[i],
       true_size = node.sizes[i],
       molType = "gene",
@@ -1254,28 +1306,13 @@ PrepareNetwork <- function(net.nm, json.nm) {
   # Combine gene nodes and compartment nodes
   all.nodes <- c(gene.nodes, comp.nodes)
 
-  # Create Entrez-to-UniProt mapping for edges
-  entrez.to.uniprot <- setNames(
-    sapply(seq_along(nms), function(i) {
-      if (!is.na(uniprot.vec[i]) && !is.null(uniprot.vec[i]) && nzchar(uniprot.vec[i])) {
-        as.character(uniprot.vec[i])
-      } else {
-        as.character(nms[i])  # Fallback to Entrez
-      }
-    }),
-    as.character(nms)
-  )
-
   # Build edge list with IDs and sizes (like localization network)
+  # NEW: Since ppi_uniprot.sqlite uses UniProt IDs, edge.mat already contains UniProt IDs
   edge.mat <- igraph::as_edgelist(g, names = TRUE)
   edges.list <- lapply(seq_len(nrow(edge.mat)), function(i) {
-    # Map Entrez IDs to UniProt IDs for edges
-    from.entrez <- as.character(edge.mat[i, 1])
-    to.entrez <- as.character(edge.mat[i, 2])
-    from.uniprot <- entrez.to.uniprot[from.entrez]
-    to.uniprot <- entrez.to.uniprot[to.entrez]
-    if (is.na(from.uniprot)) from.uniprot <- from.entrez
-    if (is.na(to.uniprot)) to.uniprot <- to.entrez
+    # Edges are already UniProt IDs from the graph (built from ppi_uniprot.sqlite)
+    from.uniprot <- as.character(edge.mat[i, 1])
+    to.uniprot <- as.character(edge.mat[i, 2])
 
     list(
       id = paste0("e", i),
@@ -1320,7 +1357,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
     edges = edges.list,
     compartments = compartment.info,
     nodeTable = node.table,
-    idType = if (!is.null(paramSet$data.idType)) paramSet$data.idType else "entrez",
+    idType = "uniprot",  # NEW: ppi_uniprot.sqlite uses UniProt IDs
     org = if (!is.null(paramSet$org)) paramSet$org else "hsa",
     hasPeptideData = HasPeptideLevelData(),
     metadata = list(

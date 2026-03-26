@@ -9,24 +9,30 @@
 # note, last two par only for STRING database
 QueryPpiSQLite <- function(sqlite.path, table.nm, q.vec, requireExp, min.score){
   require('RSQLite')
-  db.path <- paste(sqlite.path, "ppi.sqlite", sep="");
+  db.path <- paste(sqlite.path, "ppi_uniprot.sqlite", sep="");
   ppi.db <- .connect.sqlite(db.path);
   query <- paste(shQuote(q.vec),collapse=",");
-  
+
   if(grepl("string$", table.nm)){
     if(requireExp){
-      statement <- paste("SELECT * FROM ",table.nm, " WHERE ((id1 IN (", query, ")) OR (id2 IN (", query, ")))  AND combined_score >=", min.score, " AND experimental > 0", sep="");
+      statement <- paste("SELECT * FROM ",table.nm, " WHERE ((uniprot1 IN (", query, ")) OR (uniprot2 IN (", query, ")))  AND combined_score >=", min.score, " AND experimental > 0", sep="");
     }else{
-      statement <- paste("SELECT * FROM ",table.nm, " WHERE ((id1 IN (", query, ")) OR (id2 IN (", query, ")))  AND combined_score >=", min.score, sep="");
+      statement <- paste("SELECT * FROM ",table.nm, " WHERE ((uniprot1 IN (", query, ")) OR (uniprot2 IN (", query, ")))  AND combined_score >=", min.score, sep="");
     }
   }else{
-    statement <- paste("SELECT * FROM ",table.nm, " WHERE ((id1 IN (", query, ")) OR (id2 IN (", query, ")))", sep="");
+    statement <- paste("SELECT * FROM ",table.nm, " WHERE ((uniprot1 IN (", query, ")) OR (uniprot2 IN (", query, ")))", sep="");
   }
   ppi.res <- .query.sqlite(ppi.db, statement);
-  
+
+  # Rename uniprot1/uniprot2 columns to id1/id2 for compatibility with downstream code
+  if("uniprot1" %in% colnames(ppi.res) && "uniprot2" %in% colnames(ppi.res)){
+    colnames(ppi.res)[colnames(ppi.res) == "uniprot1"] <- "id1"
+    colnames(ppi.res)[colnames(ppi.res) == "uniprot2"] <- "id2"
+  }
+
   # remove dupliated edges
   ppi.res <- ppi.res[!duplicated(ppi.res$row_id),]
-  return(ppi.res);  
+  return(ppi.res);
 }
 
 #for signaling pathway as well

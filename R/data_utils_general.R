@@ -53,7 +53,7 @@ Init.Data <-function(onWeb=T, dataPath="data/"){
   }
 
   Set.Config(anal.mode);
-  paramSet$partialToBeSaved <- c("Rload.RData", "Rhistory.R", "JavaHistory.txt", "paramSet.qs", "msgSet.qs", "analSet.qs", "cmdSet.qs");
+  paramSet$partialToBeSaved <- c("Rload.RData", "Rhistory.R", "paramSet.qs", "msgSet.qs", "analSet.qs", "cmdSet.qs");
 
   Sys.setenv("OMP_NUM_THREADS" = 2); # need to control parallel computing for some packages
   paramSet$init.lib <- "kegg";
@@ -470,7 +470,13 @@ doScatterJson <- function(dataName, filenm){
 #'@param cmd Commands 
 #'@export
 RecordRCommand <- function(cmd){
-  cmdSet <- readSet(cmdSet, "cmdSet"); 
+  if(!exists("cmdSet", envir = .GlobalEnv) || is.null(get("cmdSet", envir = .GlobalEnv))){
+    cmdSet <<- list(objName="cmdSet", cmdVec=c())
+  }
+  cmdSet <- readSet(cmdSet, "cmdSet");
+  if(is.null(cmdSet$cmdVec)){
+    cmdSet$cmdVec <- c()
+  }
   cmdSet$cmdVec <- c(cmdSet$cmdVec, cmd);
   saveSet(cmdSet, "cmdSet");
   return(1);

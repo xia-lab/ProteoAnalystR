@@ -2754,9 +2754,8 @@ SummarizeQC <- function(fileName, imgNameBase, threshold = 0.1) {
   summary_df <- summary_df[order(summary_df$Sample), , drop = FALSE]
 
   dataSet$summary_df <- summary_df
-  RegisterData(dataSet)
+  return(RegisterData(dataSet))
 
-  return(1)
 }
 
 

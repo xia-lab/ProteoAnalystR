@@ -92,7 +92,8 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     dataSet <- .readDiannReport(paste0(path, fileName), paste0(path, metafileName), di.opts)
     metaContain <- "false"  # metadata loaded separately
   } else if (is.spectronaut) {
-    dataSet <- .readSpectronaut(paste0(path, fileName))
+    spec.opts <- getOption("pa.spectronaut.opts", list(inputType = "protein"))
+    dataSet <- .readSpectronaut(paste0(path, fileName), spec.opts)
     metaContain <- "false"  # metadata inferred from sample names
   } else {
     dataSet <- .readTabData(paste0(path, fileName));
@@ -1251,6 +1252,17 @@ SetFragpipeOptions <- function(quantType = "protein_maxlfq", removeContaminants 
   return(1L)
 }
 
+SetSpectronautOptions <- function(inputType = "protein") {
+  paramSet <- readSet(paramSet, "paramSet")
+  opts <- list(
+    inputType = if (is.null(inputType) || !nzchar(inputType)) "protein" else tolower(inputType)
+  )
+  options(pa.spectronaut.opts = opts)
+  paramSet$spectronaut <- opts
+  saveSet(paramSet, "paramSet")
+  return(1L)
+}
+
 .readProteomeDiscoverer <- function(filePath) {
   msgSet <- readSet(msgSet, "msgSet");
   # peek header, support .gz
@@ -2323,7 +2335,7 @@ GetAnalysisType <- function(){
 }
 
 # Helper: read Spectronaut report
-.readSpectronaut <- function(data.file) {
+.readSpectronaut <- function(data.file, opts = list(inputType = "protein")) {
   if (!file.exists(data.file)) {
     #msg('[Spectronaut] data file not found: ', data.file)
     return(NULL)
@@ -2421,6 +2433,128 @@ GetAnalysisType <- function(){
     spec_metadata
   }
 
+  read.spectronaut.peptide <- function(raw.dat) {
+    peptide.col <- if ("ModifiedSequence" %in% colnames(raw.dat)) {
+      "ModifiedSequence"
+    } else if ("EG.ModifiedSequence" %in% colnames(raw.dat)) {
+      "EG.ModifiedSequence"
+    } else if ("Sequence" %in% colnames(raw.dat)) {
+      "Sequence"
+    } else if ("Stripped.Sequence" %in% colnames(raw.dat)) {
+      "Stripped.Sequence"
+    } else {
+      NULL
+    }
+
+    protein.col <- protein.id.candidates[protein.id.candidates %in% colnames(raw.dat)][1]
+    if (is.null(peptide.col) || is.na(protein.col) || !nzchar(protein.col)) {
+      return(NULL)
+    }
+
+    run.col <- if ("R.FileName" %in% colnames(raw.dat)) {
+      "R.FileName"
+    } else if ("Run" %in% colnames(raw.dat)) {
+      "Run"
+    } else {
+      NULL
+    }
+
+    quantity.col <- c("FG.Quantity", "F.PeakArea", "PeakArea", "EG.Quantity", "Quantity")
+    quantity.col <- quantity.col[quantity.col %in% colnames(raw.dat)][1]
+
+    if (!is.na(run.col) && !is.null(run.col) && !is.na(quantity.col) && !is.null(quantity.col)) {
+      long.df <- data.frame(
+        Peptide = as.character(raw.dat[[peptide.col]]),
+        Protein = get.spectronaut.protein.ids(raw.dat, protein.col),
+        Run = as.character(raw.dat[[run.col]]),
+        Intensity = suppressWarnings(as.numeric(raw.dat[[quantity.col]])),
+        stringsAsFactors = FALSE
+      )
+      long.df <- long.df[!is.na(long.df$Peptide) & nzchar(long.df$Peptide) &
+                           !is.na(long.df$Protein) & nzchar(long.df$Protein) &
+                           !is.na(long.df$Run) & nzchar(long.df$Run) &
+                           is.finite(long.df$Intensity), , drop = FALSE]
+      if (nrow(long.df) == 0) {
+        return(NULL)
+      }
+
+      agg <- stats::aggregate(Intensity ~ Peptide + Run, data = long.df, FUN = median, na.rm = TRUE)
+      if (!requireNamespace("reshape2", quietly = TRUE)) {
+        return(NULL)
+      }
+      wide <- reshape2::dcast(agg, Peptide ~ Run, value.var = "Intensity")
+      intens <- as.matrix(wide[, -1, drop = FALSE])
+      rownames(intens) <- make.unique(as.character(wide$Peptide))
+      storage.mode(intens) <- "numeric"
+
+      prot.map <- unique(long.df[, c("Peptide", "Protein"), drop = FALSE])
+      prot.map <- prot.map[match(rownames(intens), prot.map$Peptide), , drop = FALSE]
+      runs <- colnames(intens)
+      meta.df <- data.frame(Condition = factor(runs), stringsAsFactors = FALSE)
+      rownames(meta.df) <- runs
+      disc.inx <- setNames(rep(TRUE, ncol(meta.df)), colnames(meta.df))
+      cont.inx <- setNames(rep(FALSE, ncol(meta.df)), colnames(meta.df))
+
+      return(list(
+        data = intens,
+        data_orig = intens,
+        type = "peptide",
+        format = "spectronaut-peptide",
+        meta.info = list(meta.info = meta.df, disc.inx = disc.inx, cont.inx = cont.inx),
+        prot.map = prot.map
+      ))
+    }
+
+    annot.cols <- c('PG.ProteinGroups', 'PG.ProteinAccessions', 'PG.features', 'PG.ProteinNames',
+                    'PG.ProteinDescriptions', 'PG.Organisms', 'PG.FastaFiles',
+                    'EG.ModifiedSequence', 'EG.Cscore', 'EG.Qvalue', 'FG.Quantity',
+                    'PG.Quantity', 'PG.NrOfStrippedSequencesIdentified',
+                    'Experiment', 'Run', 'Accession', 'ModifiedSequence', 'Sequence', 'Precursor',
+                    'PrecursorCharge', 'Protein.Group', 'ProteinName')
+    intensity.cols <- grep("^[^P].*\\.[HEW]", colnames(raw.dat), value = TRUE, ignore.case = FALSE)
+    if (length(intensity.cols) == 0) {
+      candidate.cols <- setdiff(colnames(raw.dat), annot.cols)
+      candidate.cols <- grep("^RtoF|^Ratio|^FC_", candidate.cols, value = TRUE, invert = TRUE, ignore.case = TRUE)
+      intensity.cols <- sapply(candidate.cols, function(col) {
+        col.data <- raw.dat[[col]]
+        sample.vals <- head(col.data[!is.na(col.data)], 10)
+        !any(is.na(suppressWarnings(as.numeric(sample.vals))))
+      })
+      intensity.cols <- names(intensity.cols[intensity.cols])
+    }
+    if (length(intensity.cols) == 0) {
+      return(NULL)
+    }
+
+    intens <- as.matrix(raw.dat[, intensity.cols, drop = FALSE])
+    storage.mode(intens) <- "numeric"
+    peptide.ids <- as.character(raw.dat[[peptide.col]])
+    proteins <- get.spectronaut.protein.ids(raw.dat, protein.col)
+    valid.rows <- !is.na(peptide.ids) & nzchar(peptide.ids) & !is.na(proteins) & nzchar(proteins)
+    if (!any(valid.rows)) {
+      return(NULL)
+    }
+    intens <- intens[valid.rows, , drop = FALSE]
+    peptide.ids <- make.unique(peptide.ids[valid.rows])
+    proteins <- proteins[valid.rows]
+    rownames(intens) <- peptide.ids
+    prot.map <- data.frame(Peptide = peptide.ids, Protein = proteins, stringsAsFactors = FALSE)
+    runs <- colnames(intens)
+    meta.df <- data.frame(Condition = factor(runs), stringsAsFactors = FALSE)
+    rownames(meta.df) <- runs
+    disc.inx <- setNames(rep(TRUE, ncol(meta.df)), colnames(meta.df))
+    cont.inx <- setNames(rep(FALSE, ncol(meta.df)), colnames(meta.df))
+
+    list(
+      data = intens,
+      data_orig = intens,
+      type = "peptide",
+      format = "spectronaut-peptide",
+      meta.info = list(meta.info = meta.df, disc.inx = disc.inx, cont.inx = cont.inx),
+      prot.map = prot.map
+    )
+  }
+
   # If no obvious protein column is present, Spectronaut header likely misaligned (e.g., missing a column)
   if (!any(protein.id.candidates %in% colnames(dat))) {
     dat <- tryCatch({
@@ -2487,6 +2621,14 @@ GetAnalysisType <- function(){
   }
 
   #msg('[Spectronaut] Read data table with ', nrow(dat), ' rows, ', ncol(dat), ' columns')
+
+  input.type <- if (!is.null(opts$inputType)) tolower(opts$inputType) else "protein"
+  if (identical(input.type, "peptide")) {
+    peptide.res <- read.spectronaut.peptide(dat)
+    if (!is.null(peptide.res)) {
+      return(peptide.res)
+    }
+  }
 
   # Check if this is a pivot table format (peptides x samples) or long format
   is.pivot.format <- ("Accession" %in% colnames(dat) || "Protein.Group" %in% colnames(dat)) &&

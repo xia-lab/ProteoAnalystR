@@ -32,6 +32,23 @@
   return(uniprot.ids)
 }
 
+.mapUniprotToEntrezForEnrichment <- function(uniprot.ids, paramSet) {
+  org <- paramSet$data.org
+  normalized.ids <- trimws(as.character(uniprot.ids))
+  db.map <- queryGeneDB("entrez_uniprot", org)
+
+  if (is.null(db.map) || !is.data.frame(db.map) || nrow(db.map) == 0 ||
+      !all(c("accession", "gene_id") %in% colnames(db.map))) {
+    warning("[Phospho Enrichment] entrez_uniprot mapping table unavailable for ", org)
+    return(rep(NA_character_, length(normalized.ids)))
+  }
+
+  hit.inx <- match(normalized.ids, as.character(db.map$accession))
+  entrez.ids <- as.character(db.map$gene_id[hit.inx])
+  names(entrez.ids) <- names(uniprot.ids)
+  entrez.ids
+}
+
 #' Check if data type is phosphoproteomics
 #' @return Logical TRUE if phospho data
 .isPhosphoData <- function() {
@@ -51,7 +68,30 @@
   uniprot.ids <- .stripPhosphositeToUniprot(phosphosite.ids)
 
   # Convert UniProt to Entrez using existing mapping
-  entrez.ids <- .doGeneIDMapping(uniprot.ids, "uniprot", paramSet, "vec", keepNA = FALSE)
+  entrez.ids <- .mapUniprotToEntrezForEnrichment(uniprot.ids, paramSet)
+
+  mapped.inx <- !is.na(entrez.ids) & nzchar(as.character(entrez.ids))
+  stripped.inx <- as.character(uniprot.ids) != as.character(phosphosite.ids)
+
+  cat(sprintf("[Phospho Enrichment] Stripped %d/%d phosphosite IDs to UniProt accessions\n",
+              sum(stripped.inx, na.rm = TRUE), length(phosphosite.ids)))
+  cat(sprintf("[Phospho Enrichment] UniProt->Entrez mapped %d/%d phosphosite entries (%.1f%%)\n",
+              sum(mapped.inx), length(entrez.ids), 100 * sum(mapped.inx) / max(1, length(entrez.ids))))
+
+  if (length(uniprot.ids) > 0) {
+    sample.n <- min(5, length(uniprot.ids))
+    sample.map <- paste0(as.character(phosphosite.ids[seq_len(sample.n)]),
+                         " -> ", as.character(uniprot.ids[seq_len(sample.n)]),
+                         " -> ", ifelse(mapped.inx[seq_len(sample.n)], as.character(entrez.ids[seq_len(sample.n)]), "NA"))
+    cat(sprintf("[Phospho Enrichment] Sample phosphosite->UniProt->Entrez: %s\n",
+                paste(sample.map, collapse=", ")))
+  }
+
+  if (any(!mapped.inx)) {
+    failed.sample <- unique(as.character(uniprot.ids[!mapped.inx]))
+    cat(sprintf("[Phospho Enrichment] Failed to map %d unique UniProt IDs. Sample failures: %s\n",
+                length(failed.sample), paste(head(failed.sample, 10), collapse=", ")))
+  }
 
   # Build gene-level representation from existing mappings
   # Create a named vector: phosphosite -> entrez
@@ -59,7 +99,8 @@
   names(phospho.to.entrez) <- phosphosite.ids
 
   # Get unique entrez IDs
-  unique.entrez <- unique(entrez.ids[!is.na(entrez.ids)])
+  unique.entrez <- unique(entrez.ids[mapped.inx])
+  cat(sprintf("[Phospho Enrichment] Collapsed to %d unique Entrez IDs\n", length(unique.entrez)))
 
   # Create reverse mapping: entrez -> list of phosphosites
   entrez.to.phospho <- lapply(unique.entrez, function(eid) {
@@ -70,7 +111,9 @@
   return(list(
     entrez.ids = unique.entrez,
     phospho.to.entrez = phospho.to.entrez,
-    entrez.to.phospho = entrez.to.phospho
+    entrez.to.phospho = entrez.to.phospho,
+    uniprot.ids = uniprot.ids,
+    mapped.inx = mapped.inx
   ))
 }
 
@@ -86,7 +129,7 @@ doEntrez2SymbolMappingPhospho <- function(id.vec, data.org = "NA", data.idType =
     uniprot.ids <- .stripPhosphositeToUniprot(id.vec)
 
     # Convert UniProt to Entrez
-    entrez.ids <- .doGeneIDMapping(uniprot.ids, "uniprot", paramSet, "vec", keepNA = FALSE)
+    entrez.ids <- .mapUniprotToEntrezForEnrichment(uniprot.ids, paramSet)
 
     # Convert Entrez to Symbol
     symbols <- doEntrez2SymbolMapping(entrez.ids, data.org, "entrez")
@@ -113,7 +156,7 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
     uniprot.ids <- .stripPhosphositeToUniprot(id.vec)
 
     # Convert UniProt to Entrez
-    entrez.ids <- .doGeneIDMapping(uniprot.ids, "uniprot", paramSet, "vec", keepNA = FALSE)
+    entrez.ids <- .mapUniprotToEntrezForEnrichment(uniprot.ids, paramSet)
 
     # Get annotation for Entrez IDs
     anot.df <- doEntrezIDAnot(entrez.ids, data.org, "entrez")
@@ -151,6 +194,15 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
   # Get gene symbols for entrez IDs
   sym.vec <- doEntrez2SymbolMapping(entrez.vec, paramSet$data.org, "entrez")
   names(entrez.vec) <- sym.vec
+  cat(sprintf("[Phospho Enrichment] Unique Entrez IDs entering ORA: %d\n", length(entrez.vec)))
+  cat(sprintf("[Phospho Enrichment] Entrez IDs with gene symbols: %d/%d\n",
+              sum(!is.na(sym.vec) & nzchar(as.character(sym.vec))), length(sym.vec)))
+  if (length(entrez.vec) > 0) {
+    cat(sprintf("[Phospho Enrichment] Sample Entrez IDs: %s\n",
+                paste(head(as.character(entrez.vec), 5), collapse=", ")))
+    cat(sprintf("[Phospho Enrichment] Sample gene symbols: %s\n",
+                paste(head(as.character(sym.vec), 5), collapse=", ")))
+  }
 
   # Perform enrichment analysis with entrez IDs
   # Temporarily store phosphosite mapping in paramSet
@@ -234,7 +286,7 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
       universe.uniprots <- .stripPhosphositeToUniprot(universe.phosphosites)
 
       # Convert UniProt to Entrez
-      universe.entrez <- .doGeneIDMapping(universe.uniprots, "uniprot", paramSet, "vec", keepNA = FALSE)
+      universe.entrez <- .mapUniprotToEntrezForEnrichment(universe.uniprots, paramSet)
 
       # Remove NAs and get unique Entrez IDs
       universe.entrez <- unique(universe.entrez[!is.na(universe.entrez)])
@@ -333,11 +385,15 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
       })
 
       # Keep only phosphosites that exist in the user's input list to avoid missing nodes downstream
-      allowed_sites <- analSet$list.features
-      if (!is.null(allowed_sites)) {
-        hits.query.phospho <- lapply(hits.query.phospho, function(sites) {
-          sites[sites %in% allowed_sites]
-        })
+      # NOTE: Only apply this filtering for "genelist" visualization type
+      # For "volcano" type, the phosphosites come directly from differential analysis, not from list.features
+      if (vis.type == "genelist") {
+        allowed_sites <- analSet$list.features
+        if (!is.null(allowed_sites)) {
+          hits.query.phospho <- lapply(hits.query.phospho, function(sites) {
+            sites[sites %in% allowed_sites]
+          })
+        }
       }
 
       # Replace hits.query with phosphosite version
