@@ -1020,7 +1020,7 @@ saveSet <- function(obj=NA, set="", output=1){
         assign(".set.cache", cache, envir = .GlobalEnv)
       }
 
-      qs:::qsave(obj, paste0(set, ".qs"));
+      qs::qsave(obj, paste0(set, ".qs"));
 
       return(output);
 }
@@ -1418,10 +1418,10 @@ makeReadable <- function(str){
                     "go_cc" = "GO:CC",
                     "panth" = "PANTHER Slim",
                     "motif_set" = "Motif",
-                    "onedata" = "Gene expression analysis",
-                    "proteinlist" = "Gene list analysis",
-                    "metadata" = "Gene expression meta-analysis",
-                    "raw" = "Raw RNA-seq data processing",
+                    "onedata" = "Protein expression analysis",
+                    "proteinlist" = "Protein list analysis",
+                    "metadata" = "Protein expression meta-analysis",
+                    "raw" = "Raw data processing",
                  str)
 }
 

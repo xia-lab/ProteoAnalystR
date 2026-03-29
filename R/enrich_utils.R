@@ -321,7 +321,7 @@
 
   # msg("[EnrichAnalysis] Saving enr.mat.qs to: ", getwd())
   # msg("[EnrichAnalysis] res.mat dimensions: ", nrow(res.mat), " x ", ncol(res.mat))
-  qs:::qsave(res.mat, "enr.mat.qs");
+  qs::qsave(res.mat, "enr.mat.qs");
 
   # Verify file was written
   if (file.exists("enr.mat.qs")) {

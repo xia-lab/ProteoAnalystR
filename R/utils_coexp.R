@@ -338,7 +338,7 @@ my.build.cemi.net <- function(dataName,
     if (USE_CALLR && requireNamespace("callr", quietly = TRUE)) {
       msg("Using callr subprocess...");
       # Run cemitool in separate process with stdout/stderr capture
-      result <- callr::r(
+      result <- run_func_via_rsclient(
         func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose) {
           suppressPackageStartupMessages({
             library(CEMiTool)
@@ -348,8 +348,8 @@ my.build.cemi.net <- function(dataName,
           # Disable threading in subprocess too
           WGCNA::disableWGCNAThreads()
 
-          message("[callr subprocess] Starting CEMiTool with ", nrow(expr_mat), " features x ", ncol(expr_mat), " samples")
-          message("[callr subprocess] Parameters: filter=", filter, ", min_ngen=", min_ngen, ", cor_method=", cor_method)
+          message("[rsclient subprocess] Starting CEMiTool with ", nrow(expr_mat), " features x ", ncol(expr_mat), " samples")
+          message("[rsclient subprocess] Parameters: filter=", filter, ", min_ngen=", min_ngen, ", cor_method=", cor_method)
 
           cem <- cemitool(expr              = expr_mat,
                           annot             = annot_df,
@@ -361,7 +361,7 @@ my.build.cemi.net <- function(dataName,
                           plot              = FALSE,
                           plot_diagnostics  = FALSE)
 
-          message("[callr subprocess] CEMiTool completed successfully")
+          message("[rsclient subprocess] CEMiTool completed successfully")
           return(cem)
         },
         args = list(
@@ -373,18 +373,8 @@ my.build.cemi.net <- function(dataName,
           classCol   = classCol,
           verbose    = verbose
         ),
-        package = TRUE,  # Use package environment for better isolation
-        stdout = "|",    # Capture stdout
-        stderr = "|"     # Capture stderr
+        timeout_sec = 180
       )
-
-      # Relay subprocess output to main session
-      if (!is.null(attr(result, "stdout")) && nzchar(attr(result, "stdout"))) {
-        msg("[callr stdout] ", attr(result, "stdout"));
-      }
-      if (!is.null(attr(result, "stderr")) && nzchar(attr(result, "stderr"))) {
-        msg("[callr stderr] ", attr(result, "stderr"));
-      }
 
       cem <- result
     } else {
