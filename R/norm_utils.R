@@ -1586,7 +1586,7 @@ PlotProteinProfile <- function(dataName = "", protein_id = "", imgName = "prot_p
 
 # Build protein dropdown options as "id||label" (label = gene symbol if annotated, else id)
 BuildProteinOptions <- function() {
-  save.image("build.RData");
+  #save.image("build.RData");
   if (!file.exists("int.mat.qs")) {
     #msg("[BuildProteinOptions] int.mat.qs not found")
     return(character(0))
