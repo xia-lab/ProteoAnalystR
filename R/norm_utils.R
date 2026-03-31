@@ -159,27 +159,21 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
     # rownames must match sample names (columns of count matrix)
     cd <- S4Vectors::DataFrame(row.names = colnames(m))
 
-    # DESeq2 quarantined — isolate on Pro
-    if (exists("rsclient_isolated_exec", mode = "function")) {
-      norm_counts <- rsclient_isolated_exec(
-        func_body = function(input_data) {
-          require(DESeq2)
-          cd <- S4Vectors::DataFrame(row.names = colnames(input_data$m))
-          dds <- DESeq2::DESeqDataSetFromMatrix(countData = input_data$m, colData = cd, design = ~ 1)
-          dds <- DESeq2::estimateSizeFactors(dds)
-          DESeq2::counts(dds, normalized = TRUE)
-        },
-        input_data = list(m = m),
-        packages = c("DESeq2", "qs"),
-        timeout = 120,
-        output_type = "qs"
-      )
-      if (is.list(norm_counts) && isFALSE(norm_counts$success)) { AddErrMsg(norm_counts$message); return(0) }
-    } else {
-      dds <- DESeq2::DESeqDataSetFromMatrix(countData = m, colData = cd, design = ~ 1)
-      dds <- DESeq2::estimateSizeFactors(dds)
-      norm_counts <- DESeq2::counts(dds, normalized = TRUE)
-    }
+    # DESeq2 quarantined — isolate in subprocess
+    norm_counts <- rsclient_isolated_exec(
+      func_body = function(input_data) {
+        require(DESeq2)
+        cd <- S4Vectors::DataFrame(row.names = colnames(input_data$m))
+        dds <- DESeq2::DESeqDataSetFromMatrix(countData = input_data$m, colData = cd, design = ~ 1)
+        dds <- DESeq2::estimateSizeFactors(dds)
+        DESeq2::counts(dds, normalized = TRUE)
+      },
+      input_data = list(m = m),
+      packages = c("DESeq2", "qs"),
+      timeout = 120,
+      output_type = "qs"
+    )
+    if (is.list(norm_counts) && isFALSE(norm_counts$success)) { AddErrMsg(norm_counts$message); return(0) }
     data <- log2(norm_counts + 1)
 
     msg <- paste("[MORlog] Applied DESeq2 median-of-ratios size-factor normalization and log2(x+1).", msg)
@@ -774,24 +768,19 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     data <- normalize.quantiles(as.matrix(data), copy=TRUE);
     msg <- paste(msg, "VSN followed by quantile normalization.", collapse=" ");
   }else if(norm.opt %in% c("logcount", "RLE", "TMM")){
-    # calcNormFactors is from edgeR (quarantined) — isolate on Pro; voom is limma (OK in Master)
+    # calcNormFactors is from edgeR (quarantined) — isolate in subprocess; voom is limma (OK in Master)
     edger_method <- switch(norm.opt, logcount = "none", RLE = "RLE", TMM = "TMM")
-    if (exists("rsclient_isolated_exec", mode = "function")) {
-      nf <- rsclient_isolated_exec(
-        func_body = function(input_data) {
-          require(edgeR)
-          edgeR::calcNormFactors(input_data$data, method = input_data$method)
-        },
-        input_data = list(data = data, method = edger_method),
-        packages = c("edgeR", "qs"),
-        timeout = 120,
-        output_type = "qs"
-      )
-      if (is.list(nf) && isFALSE(nf$success)) { AddErrMsg(nf$message); return(0) }
-    } else {
-      suppressMessages(require(edgeR))
-      nf <- edgeR::calcNormFactors(data, method = edger_method)
-    }
+    nf <- rsclient_isolated_exec(
+      func_body = function(input_data) {
+        require(edgeR)
+        edgeR::calcNormFactors(input_data$data, method = input_data$method)
+      },
+      input_data = list(data = data, method = edger_method),
+      packages = c("edgeR", "qs"),
+      timeout = 120,
+      output_type = "qs"
+    )
+    if (is.list(nf) && isFALSE(nf$success)) { AddErrMsg(nf$message); return(0) }
     y <- voom(data, plot=F, lib.size=colSums(data)*nf);
     data <- y$E; # copy per million
     if (norm.opt == "logcount") {
@@ -867,49 +856,36 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     data <- data*10000000;
     msg <- c(msg, paste("Performed total sum normalization."));
   }else if(scaleNorm=="upperquartile" || norm.opt == "upperquartile"){
-    if (exists("rsclient_isolated_exec", mode = "function")) {
-      nf <- rsclient_isolated_exec(
-        func_body = function(input_data) {
-          require(edgeR)
-          edgeR::calcNormFactors(input_data$data, method = "upperquartile")
-        },
-        input_data = list(data = data),
-        packages = c("edgeR", "qs"),
-        timeout = 120,
-        output_type = "qs"
-      )
-      if (is.list(nf) && isFALSE(nf$success)) { AddErrMsg(nf$message); return(0) }
-    } else {
-      suppressMessages(require(edgeR))
-      nf <- edgeR::calcNormFactors(data, method = "upperquartile")
-    }
+    nf <- rsclient_isolated_exec(
+      func_body = function(input_data) {
+        require(edgeR)
+        edgeR::calcNormFactors(input_data$data, method = "upperquartile")
+      },
+      input_data = list(data = data),
+      packages = c("edgeR", "qs"),
+      timeout = 120,
+      output_type = "qs"
+    )
+    if (is.list(nf) && isFALSE(nf$success)) { AddErrMsg(nf$message); return(0) }
     y <- voom(data, plot=F, lib.size=colSums(data)*nf);
     data <- y$E; # copy per million
     msg <- c(msg, paste("Performed upper quartile normalization"));
   }else if(scaleNorm=="CSS"){
-    # metagenomeSeq quarantined — isolate on Pro
-    if (exists("rsclient_isolated_exec", mode = "function")) {
-      data <- rsclient_isolated_exec(
-        func_body = function(input_data) {
-          require(metagenomeSeq)
-          data1 <- as(input_data$data, "matrix")
-          dataMR <- metagenomeSeq::newMRexperiment(data1)
-          dataMR <- metagenomeSeq::cumNorm(dataMR, p = metagenomeSeq::cumNormStat(dataMR))
-          metagenomeSeq::MRcounts(dataMR, norm = TRUE)
-        },
-        input_data = list(data = data),
-        packages = c("metagenomeSeq", "qs"),
-        timeout = 120,
-        output_type = "qs"
-      )
-      if (is.list(data) && isFALSE(data$success)) { AddErrMsg(data$message); return(0) }
-    } else {
-      suppressMessages(require(metagenomeSeq))
-      data1 <- as(data, "matrix")
-      dataMR <- metagenomeSeq::newMRexperiment(data1)
-      data <- metagenomeSeq::cumNorm(dataMR, p = metagenomeSeq::cumNormStat(dataMR))
-      data <- metagenomeSeq::MRcounts(data, norm = TRUE)
-    }
+    # metagenomeSeq quarantined — isolate in subprocess
+    data <- rsclient_isolated_exec(
+      func_body = function(input_data) {
+        require(metagenomeSeq)
+        data1 <- as(input_data$data, "matrix")
+        dataMR <- metagenomeSeq::newMRexperiment(data1)
+        dataMR <- metagenomeSeq::cumNorm(dataMR, p = metagenomeSeq::cumNormStat(dataMR))
+        metagenomeSeq::MRcounts(dataMR, norm = TRUE)
+      },
+      input_data = list(data = data),
+      packages = c("metagenomeSeq", "qs"),
+      timeout = 120,
+      output_type = "qs"
+    )
+    if (is.list(data) && isFALSE(data$success)) { AddErrMsg(data$message); return(0) }
     msg <- c(msg, paste("Performed cumulative sum scaling normalization"));
   }else{
     scalenm<-"N/A";

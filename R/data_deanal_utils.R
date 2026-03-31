@@ -441,10 +441,6 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   ## 1 · Input checks & dependencies                                    ##
   ## ------------------------------------------------------------------ ##
   require(limma)
-  # edgeR loaded in subprocess on Pro; only load in Master on Public
-  if (!exists("rsclient_isolated_exec", mode = "function")) {
-    require(edgeR)
-  }
 
   if (is.null(dataSet$design) || is.null(dataSet$contrast.matrix)) {
     stop("design and/or contrast.matrix missing in dataSet. Run prepareEdgeRContrast() first.")
@@ -531,78 +527,51 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
         edger.design <- design
     }
 
-    # edgeR pipeline — isolate on Pro
-    if (exists("rsclient_isolated_exec", mode = "function")) {
-      result.list <- tryCatch({
-        .res. <- rsclient_isolated_exec(
-          func_body = function(input_data) {
-            require(edgeR)
-            cnt.mat <- input_data$cnt.mat
-            grp.fac <- input_data$grp.fac
-            design <- input_data$design
-            contrast.matrix <- input_data$contrast.matrix
-            contrast.names <- input_data$contrast.names
+    # edgeR pipeline — isolate in subprocess
+    result.list <- tryCatch({
+      .res. <- rsclient_isolated_exec(
+        func_body = function(input_data) {
+          require(edgeR)
+          cnt.mat <- input_data$cnt.mat
+          grp.fac <- input_data$grp.fac
+          design <- input_data$design
+          contrast.matrix <- input_data$contrast.matrix
+          contrast.names <- input_data$contrast.names
 
-            y <- edgeR::DGEList(counts = cnt.mat, group = grp.fac)
-            y <- edgeR::calcNormFactors(y)
-            y <- edgeR::estimateGLMCommonDisp(y, design, verbose = FALSE)
-            y <- edgeR::estimateGLMTrendedDisp(y, design)
-            y <- edgeR::estimateGLMTagwiseDisp(y, design)
-            fit <- edgeR::glmFit(y, design)
+          y <- edgeR::DGEList(counts = cnt.mat, group = grp.fac)
+          y <- edgeR::calcNormFactors(y)
+          y <- edgeR::estimateGLMCommonDisp(y, design, verbose = FALSE)
+          y <- edgeR::estimateGLMTrendedDisp(y, design)
+          y <- edgeR::estimateGLMTagwiseDisp(y, design)
+          fit <- edgeR::glmFit(y, design)
 
-            res <- vector("list", length(contrast.names))
-            names(res) <- contrast.names
-            for (nm in contrast.names) {
-              lrt <- edgeR::glmLRT(fit, contrast = contrast.matrix[, nm])
-              tbl <- edgeR::topTags(lrt, n = Inf)$table
-              colnames(tbl)[colnames(tbl) == "FDR"]    <- "adj.P.Val"
-              colnames(tbl)[colnames(tbl) == "PValue"] <- "P.Value"
-              if ("P.Value" %in% colnames(tbl)) tbl <- tbl[order(tbl$P.Value), ]
-              res[[nm]] <- tbl
-            }
-            res
-          },
-          input_data = list(
-            cnt.mat = cnt.mat, grp.fac = grp.fac, design = edger.design,
-            contrast.matrix = contrast.matrix, contrast.names = contrast.names
-          ),
-          packages = c("edgeR", "qs"),
-          timeout = 300,
-          output_type = "qs"
-        )
-        if (is.list(.res.) && isFALSE(.res.$success)) stop(.res.$message)
-        .res.
-      }, error = function(e) {
-        msgSet$current.msg <- paste("EdgeR analysis failed:", e$message)
-        saveSet(msgSet, "msgSet")
-        return(NULL)
-      })
-    } else {
-      result.list <- tryCatch({
-        y <- edgeR::DGEList(counts = cnt.mat, group = grp.fac)
-        y <- edgeR::calcNormFactors(y)
-        y <- edgeR::estimateGLMCommonDisp(y, edger.design, verbose = FALSE)
-        y <- edgeR::estimateGLMTrendedDisp(y, edger.design)
-        y <- edgeR::estimateGLMTagwiseDisp(y, edger.design)
-        fit <- edgeR::glmFit(y, edger.design)
-
-        res <- vector("list", length(contrast.names))
-        names(res) <- contrast.names
-        for (nm in contrast.names) {
-          lrt <- edgeR::glmLRT(fit, contrast = contrast.matrix[, nm])
-          tbl <- edgeR::topTags(lrt, n = Inf)$table
-          colnames(tbl)[colnames(tbl) == "FDR"]    <- "adj.P.Val"
-          colnames(tbl)[colnames(tbl) == "PValue"] <- "P.Value"
-          if ("P.Value" %in% colnames(tbl)) tbl <- tbl[order(tbl$P.Value), ]
-          res[[nm]] <- tbl
-        }
-        res
-      }, error = function(e) {
-        msgSet$current.msg <- paste("EdgeR analysis failed:", e$message)
-        saveSet(msgSet, "msgSet")
-        return(NULL)
-      })
-    }
+          res <- vector("list", length(contrast.names))
+          names(res) <- contrast.names
+          for (nm in contrast.names) {
+            lrt <- edgeR::glmLRT(fit, contrast = contrast.matrix[, nm])
+            tbl <- edgeR::topTags(lrt, n = Inf)$table
+            colnames(tbl)[colnames(tbl) == "FDR"]    <- "adj.P.Val"
+            colnames(tbl)[colnames(tbl) == "PValue"] <- "P.Value"
+            if ("P.Value" %in% colnames(tbl)) tbl <- tbl[order(tbl$P.Value), ]
+            res[[nm]] <- tbl
+          }
+          res
+        },
+        input_data = list(
+          cnt.mat = cnt.mat, grp.fac = grp.fac, design = edger.design,
+          contrast.matrix = contrast.matrix, contrast.names = contrast.names
+        ),
+        packages = c("edgeR", "qs"),
+        timeout = 300,
+        output_type = "qs"
+      )
+      if (is.list(.res.) && isFALSE(.res.$success)) stop(.res.$message)
+      .res.
+    }, error = function(e) {
+      msgSet$current.msg <- paste("EdgeR analysis failed:", e$message)
+      saveSet(msgSet, "msgSet")
+      return(NULL)
+    })
     if (is.null(result.list)) return(0)
 
     dataSet$comp.res.list <- result.list
@@ -622,10 +591,6 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
   if (!requireNamespace("DEqMS", quietly = TRUE)) {
     stop("DEqMS requires the 'DEqMS' package. Install with: BiocManager::install('DEqMS')")
-  }
-  # DEqMS is loaded in subprocess on Pro; only load in Master on Public
-  if (!exists("rsclient_isolated_exec", mode = "function")) {
-    require(DEqMS)
   }
 
   if (is.null(dataSet$design) || is.null(dataSet$contrast.matrix)) {
@@ -858,24 +823,20 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   ## ------------------------------------------------------------------ ##
   fit2$count <- psm.count
 
-  # spectraCounteBayes is the only DEqMS call — isolate on Pro
+  # spectraCounteBayes is the only DEqMS call — isolate in subprocess
   fit2 <- tryCatch({
-    if (exists("rsclient_isolated_exec", mode = "function")) {
-      .res. <- rsclient_isolated_exec(
-        func_body = function(input_data) {
-          require(DEqMS)
-          DEqMS::spectraCounteBayes(input_data$fit2)
-        },
-        input_data = list(fit2 = fit2),
-        packages = c("DEqMS", "limma", "qs"),
-        timeout = 120,
-        output_type = "qs"
-      )
-      if (is.list(.res.) && isFALSE(.res.$success)) stop(.res.$message)
-      .res.
-    } else {
-      DEqMS::spectraCounteBayes(fit2)
-    }
+    .res. <- rsclient_isolated_exec(
+      func_body = function(input_data) {
+        require(DEqMS)
+        DEqMS::spectraCounteBayes(input_data$fit2)
+      },
+      input_data = list(fit2 = fit2),
+      packages = c("DEqMS", "limma", "qs"),
+      timeout = 120,
+      output_type = "qs"
+    )
+    if (is.list(.res.) && isFALSE(.res.$success)) stop(.res.$message)
+    .res.
   }, error = function(e) {
     msg <- paste0("[DEqMS] spectraCounteBayes failed: ", e$message,
                   ". This often happens when PSM counts lack sufficient variation. Falling back to standard limma.")

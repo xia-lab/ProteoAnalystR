@@ -628,7 +628,7 @@ PerformSetOperation_DataEnr <- function(nms, operation, refNm){
   return(com.symbols);
 }
 
-# in public web, this is done by microservice
+# can also be done by microservice
 # =============================================================================
 # RSclient subprocess execution (Rserve fork) — available on all deployments
 # =============================================================================
@@ -1049,29 +1049,12 @@ saveSet <- function(obj=NA, set="", output=1){
 
       # Large objects (dataSet, analSet, imgSet) are disk-only to save ~68 MB/session.
       # Small objects (paramSet, msgSet, cmdSet) still update globals since they're tiny.
-      if (exists("rsclient_isolated_exec", mode = "function")) {
-        if (set == "paramSet") {
-          paramSet <<- obj;
-        } else if (set == "msgSet") {
-          msgSet <<- obj;
-        } else if (set == "cmdSet") {
-          cmdSet <<- obj;
-        }
-      } else {
-        # Public: update all globals
-        if(set == "dataSet"){
-          dataSet <<- obj;
-        }else if(set == "analSet"){
-          analSet <<- obj;
-        }else if(set == "imgSet"){
-          imgSet <<- obj;
-        }else if(set == "paramSet"){
-          paramSet <<- obj;
-        }else if(set == "msgSet"){
-          msgSet <<- obj;
-        }else if(set == "cmdSet"){
-          cmdSet <<- obj;
-        }
+      if (set == "paramSet") {
+        paramSet <<- obj;
+      } else if (set == "msgSet") {
+        msgSet <<- obj;
+      } else if (set == "cmdSet") {
+        cmdSet <<- obj;
       }
 
       # Store in in-memory cache (optional, controlled by global parameter)
