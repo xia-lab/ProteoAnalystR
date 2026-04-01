@@ -1392,11 +1392,104 @@ MapPhosphositeUniprotToSymbol <- function() {
 
   msg("[.readDIANNPhospho] After filtering: ", nrow(dat), " precursors")
 
+  # Support matrix-like phosphosite tables derived from DIA-NN, where rows are already
+  # phosphosites and sample intensities are stored directly in columns.
+  sample_cols <- colnames(dat)[grepl("^(CTL|DRUG|CON|TRT|KO|WT|[A-Za-z]+[0-9]+)$", colnames(dat))]
+  if (!"Modified.Sequence" %in% colnames(dat) && "Index" %in% colnames(dat) && length(sample_cols) >= 2) {
+    msg("[.readDIANNPhospho] Detected matrix-style phosphosite table; using direct site-level reader")
+
+    int.mat <- as.matrix(dat[, sample_cols, drop = FALSE])
+    suppressWarnings(storage.mode(int.mat) <- "numeric")
+    rownames(int.mat) <- as.character(dat$Index)
+    int.mat[int.mat == 0] <- NA
+
+    site_parts <- strcapture(
+      "^(.+)_([STY])(\\d+)$",
+      as.character(dat$Index),
+      proto = list(protein_id = character(), residue = character(), position = integer())
+    )
+
+    gene_col <- if ("Gene" %in% colnames(dat)) "Gene" else if ("Mapped Genes" %in% colnames(dat)) "Mapped Genes" else NULL
+    prot_col <- if ("ProteinID" %in% colnames(dat)) "ProteinID" else if ("Protein" %in% colnames(dat)) "Protein" else NULL
+    loc_col <- if ("Probability" %in% colnames(dat)) "Probability" else if ("Best Localization" %in% colnames(dat)) "Best Localization" else NULL
+
+    feature_info <- data.frame(
+      id = as.character(dat$Index),
+      Proteins = if (!is.null(prot_col)) as.character(dat[[prot_col]]) else site_parts$protein_id,
+      "Amino acid" = ifelse(is.na(site_parts$residue), NA, site_parts$residue),
+      Position = ifelse(is.na(site_parts$position), NA, site_parts$position),
+      "Gene names" = if (!is.null(gene_col)) as.character(dat[[gene_col]]) else NA,
+      "Localization prob" = if (!is.null(loc_col)) suppressWarnings(as.numeric(dat[[loc_col]])) else NA,
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+    rownames(feature_info) <- feature_info$id
+
+    data_orig_df <- cbind(data.frame(SiteID = rownames(int.mat), stringsAsFactors = FALSE), as.data.frame(int.mat, check.names = FALSE))
+
+    return(list(
+      data = int.mat,
+      data_orig = data_orig_df,
+      type = "phospho",
+      format = "diann",
+      meta.info = NULL,
+      feature.info = feature_info
+    ))
+  }
+
   # --- 2. Extract Phosphosites from Modified.Sequence ---
   # Modified.Sequence example: "PEPT(Phospho (STY))IDE" or "PEPTIDE(UniMod:21)"
   # We need to parse this to get: Protein_Residue_Position format
 
   if (!"Modified.Sequence" %in% colnames(dat)) {
+    sample_cols <- colnames(dat)[grepl("^[A-Za-z]+[0-9]+$", colnames(dat))]
+    if ("Index" %in% colnames(dat) && length(sample_cols) >= 2) {
+      msg("[.readDIANNPhospho] Detected matrix-style phosphosite table; using direct site-level reader")
+
+      int.mat <- as.matrix(dat[, sample_cols, drop = FALSE])
+      suppressWarnings(storage.mode(int.mat) <- "numeric")
+      rownames(int.mat) <- as.character(dat$Index)
+      int.mat[int.mat == 0] <- NA
+
+      site_parts <- strcapture(
+        "^(.+)_([STY])(\\d+)$",
+        as.character(dat$Index),
+        proto = list(protein_id = character(), residue = character(), position = integer())
+      )
+
+      gene_col <- if ("Gene" %in% colnames(dat)) "Gene" else if ("Mapped Genes" %in% colnames(dat)) "Mapped Genes" else NULL
+      prot_col <- if ("ProteinID" %in% colnames(dat)) "ProteinID" else if ("Protein" %in% colnames(dat)) "Protein" else NULL
+      loc_col <- if ("Probability" %in% colnames(dat)) "Probability" else if ("Best Localization" %in% colnames(dat)) "Best Localization" else NULL
+
+      feature_info <- data.frame(
+        id = as.character(dat$Index),
+        Proteins = if (!is.null(prot_col)) as.character(dat[[prot_col]]) else site_parts$protein_id,
+        "Amino acid" = site_parts$residue,
+        Position = site_parts$position,
+        "Gene names" = if (!is.null(gene_col)) as.character(dat[[gene_col]]) else NA,
+        "Localization prob" = if (!is.null(loc_col)) suppressWarnings(as.numeric(dat[[loc_col]])) else NA,
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      )
+      rownames(feature_info) <- feature_info$id
+
+      data_orig_df <- cbind(
+        data.frame(SiteID = rownames(int.mat), stringsAsFactors = FALSE),
+        as.data.frame(int.mat, check.names = FALSE)
+      )
+
+      msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites × ", ncol(int.mat), " samples")
+
+      return(list(
+        data = int.mat,
+        data_orig = data_orig_df,
+        type = "phospho",
+        format = "diann",
+        meta.info = NULL,
+        feature.info = feature_info
+      ))
+    }
+
     msg("[.readDIANNPhospho] Error: Missing Modified.Sequence column.")
     return(NULL)
   }

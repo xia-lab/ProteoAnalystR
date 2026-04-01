@@ -322,11 +322,19 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
 
       p_all <- list()
       
+      sample_ids <- colnames(data.norm)
       for(lv in levels(out.fac)){
-        inx <- out.fac == lv;
+        inx <- out.fac == lv
         expr_vals <- as.numeric(data.norm[gene.row.id, inx])
         cls_vals <- in.fac[inx]
-        df.orig <- data.frame(facA = lv, value = expr_vals, name = cls_vals, stringsAsFactors = FALSE)
+        sample_vals <- sample_ids[inx]
+        df.orig <- data.frame(
+          facA = lv,
+          value = expr_vals,
+          sample = sample_vals,
+          group = cls_vals,
+          stringsAsFactors = FALSE
+        )
         p_all[[lv]] <- df.orig
       }
       # FIX: Suppress Quartz popup on macOS
@@ -335,14 +343,14 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
       alldata <- do.call(rbind, p_all)
       alldata$facA <- factor(as.character(alldata$facA), levels=levels(out.fac))
       plot.geom <- if (use.violin) {
-        geom_violin(trim = FALSE, aes(color = name), show.legend = FALSE)
+        geom_violin(aes(x = group, color = group), trim = FALSE, show.legend = FALSE)
       } else {
-        geom_boxplot(aes(color = name), outlier.shape = NA, show.legend = FALSE)
+        geom_boxplot(aes(x = group, color = group), outlier.shape = NA, show.legend = FALSE)
       }
 
-      p.time <- ggplot2::ggplot(alldata, aes(x=name, y=value, fill=name)) +
+      p.time <- ggplot2::ggplot(alldata, aes(x=group, y=value, fill=group, label=sample)) +
         plot.geom +
-        geom_jitter(height = 0, width = 0.05, show.legend = FALSE) +
+        geom_jitter(aes(x = group, color = group), height = 0, width = 0.05, show.legend = FALSE) +
         facet_wrap(~facA, nrow = row.num) +
         theme(axis.title.x = element_blank(), legend.position = "none", axis.text.x = element_text(angle=90, hjust=1),
               plot.title = element_text(size = 11, hjust=0.5, face = "bold"), panel.grid.minor = element_blank(), panel.grid.major = element_blank()) +

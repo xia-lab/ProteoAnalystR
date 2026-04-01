@@ -178,6 +178,18 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
     dataSet <- .perform_williams_trend(dataSet, robustTrend);
   }
 
+  # If a DE helper failed, it may return 0 after storing the real message in msgSet.
+  # Do not call RegisterData() on a scalar, or the original error will be masked.
+  if (!is.list(dataSet)) {
+    return(dataSet)
+  }
+
+  # If a DE helper failed, it may return 0 after storing the real message in msgSet.
+  # Do not call RegisterData() on a scalar, or the original error will be masked.
+  if (!is.list(dataSet)) {
+    return(dataSet)
+  }
+
   # Perform peptide-level DE analysis if peptide data exists
   if (file.exists("peptide_level_data.qs")) {
     PerformPeptideLevelDEAnal(dataName)
