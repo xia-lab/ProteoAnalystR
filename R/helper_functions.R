@@ -341,6 +341,9 @@ GetExpressResultGeneIDLinks <- function(dataName=""){
 
 
 GetExpressResultColNames<-function(){
+  if (!file.exists("express.de.res.qs")) {
+    return(NULL)
+  }
   resT <- qs::qread("express.de.res.qs");
   colnames(resT);
 }
@@ -359,6 +362,17 @@ GetExpressGeneIDType<-function(dataName=""){
 }
 
 GetExpressResultMatrix <- function(dataName = "", inxt) {
+  tryCatch({
+    .GetExpressResultMatrixInner(dataName, inxt)
+  }, error = function(e) {
+    msgSet <- readSet(msgSet, "msgSet")
+    msgSet$current.msg <- paste("Failed to retrieve DE results:", e$message)
+    saveSet(msgSet, "msgSet")
+    return(matrix(numeric(0), nrow = 0, ncol = 0))
+  })
+}
+
+.GetExpressResultMatrixInner <- function(dataName = "", inxt) {
     dataSet  <- readDataset(dataName);
     paramSet <- readSet(paramSet, "paramSet");
     inxt     <- as.numeric(inxt)

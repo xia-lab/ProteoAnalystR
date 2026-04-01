@@ -365,49 +365,51 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
 
 
 ComputeEncasing <- function(filenm, type, names.vec, level=0.95, omics="NA"){
-  paramSet <- readSet(paramSet, "paramSet");
-  mdata.all <- paramSet$mdata.all;
-  level <- as.numeric(level)
-  names = strsplit(names.vec, "; ")[[1]]
-  pos.xyz <-qs::qread("score_pos_xyz.qs");
+  tryCatch({
+    level <- as.numeric(level)
+    names <- strsplit(names.vec, "; ")[[1]]
 
-  inx = rownames(pos.xyz) %in% names;
-  coords = as.matrix(pos.xyz[inx,c(1:3)])
-  mesh = list()
-  pack_mesh3d <- function(obj) {
-    if (inherits(obj, "mesh3d")) {
-      out <- list()
-      if (!is.null(obj$type)) out$type <- obj$type
-      if (!is.null(obj$colors)) out$colors <- obj$colors
-      if (!is.null(obj$vertices)) out$vertices <- obj$vertices
-      if (!is.null(obj$vb)) out$vb <- obj$vb
-      return(out)
+    if (!file.exists("score_pos_xyz.qs")) {
+      sink(filenm); cat("{}"); sink()
+      return(filenm)
     }
-    if (is.list(obj)) {
-      return(lapply(obj, pack_mesh3d))
+
+    pos.xyz <- qs::qread("score_pos_xyz.qs")
+
+    inx <- rownames(pos.xyz) %in% names
+    coords <- as.matrix(pos.xyz[inx, c(1:3)])
+
+    if (nrow(coords) < 4) {
+      sink(filenm); cat(RJSONIO::toJSON(list())); sink()
+      return(filenm)
     }
-    obj
-  }
-  if(type == "alpha"){
-    require(alphashape3d)
-    require(rgl)
-    sh=ashape3d(coords, 1.0, pert = FALSE, eps = 1e-09);
-    mesh[[1]] = as.mesh3d(sh, triangles=T);
-  }else if(type == "ellipse"){
-    require(rgl);
-    pos=cov(coords, y = NULL, use = "everything");
-    mesh[[1]] = ellipse3d(x=as.matrix(pos), level=level);
-  }else{
-    require(ks);
-    res=kde(coords);
-    r = plot(res, cont=level*100);
-    sc = scene3d();
-    mesh = sc$objects;
-  }
-  # OPTIMIZED: Use jsonlite::write_json instead of RJSONIO + sink/cat
-  mesh_out <- pack_mesh3d(mesh)
-  jsonlite::write_json(mesh_out, filenm, auto_unbox = TRUE, pretty = FALSE);
-  return(filenm);
+
+    # Only rgl::ellipse3d in subprocess
+    mesh <- rsclient_isolated_exec(
+      func_body = function(input_data) {
+        Sys.setenv(RGL_USE_NULL = TRUE)
+        pos <- cov(input_data$coords, y = NULL, use = "everything")
+        center <- colMeans(input_data$coords)
+        t_val <- sqrt(qchisq(input_data$level, 3))
+        mesh <- list()
+        mesh[[1]] <- rgl::ellipse3d(x = as.matrix(pos), centre = center, t = t_val)
+        mesh
+      },
+      input_data = list(coords = coords, level = level),
+      packages = c("rgl", "qs"),
+      timeout = 120,
+      output_type = "qs"
+    )
+
+    # Write JSON in master (subprocess may have different wd)
+    if (!is.list(mesh) || !isFALSE(mesh$success)) {
+      sink(filenm); cat(RJSONIO::toJSON(mesh)); sink()
+    }
+  }, error = function(e) {
+    message("[ComputeEncasing] ", e$message)
+    sink(filenm); cat("{}"); sink()
+  })
+  return(filenm)
 }
 
 unitAutoScale <- function(df){

@@ -321,7 +321,7 @@
 
   # msg("[EnrichAnalysis] Saving enr.mat.qs to: ", getwd())
   # msg("[EnrichAnalysis] res.mat dimensions: ", nrow(res.mat), " x ", ncol(res.mat))
-  qs:::qsave(res.mat, "enr.mat.qs");
+  qs::qsave(res.mat, "enr.mat.qs");
 
   # Verify file was written
   if (file.exists("enr.mat.qs")) {
@@ -452,7 +452,7 @@
 
 GetRidgePlot <- function(dataName, imgNm = "abc", dpi=96, format="png", fun.type = "kegg", ridgeType = "ora", ridgeColor = "teal", gseaRankOpt="", sigLevel = 0.05, pwNum=20, inx = 1){
     dataSet <- readDataset(dataName);
-    if(!exists("compute.ridgeline")){ # public web on same user dir
+    if(!exists("compute.ridgeline")){
         rc.path <- paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_ridgeline.Rc")
         r.path <- paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_ridgeline.R")
         if (file.exists(rc.path)) {
@@ -846,7 +846,7 @@ PerformNetEnrichment <- function(dataName="", file.nm, fun.type, IDs){
 }
 
 PerformRegEnrichAnalysis <- function(dataSet, file.nm, fun.type, ora.vec, netInv){
-    if(!exists("my.reg.enrich")){ # public web on same user dir
+    if(!exists("my.reg.enrich")){
         compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/_utils_regenrich.Rc"));    
     }
     return(my.reg.enrich(dataSet, file.nm, fun.type, ora.vec, netInv));

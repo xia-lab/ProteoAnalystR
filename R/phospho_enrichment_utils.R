@@ -431,7 +431,7 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
 
   # msg("[PhosphoEnrichAnalysis] Saving enr.mat.qs to: ", getwd())
   # msg("[PhosphoEnrichAnalysis] res.mat dimensions: ", nrow(res.mat), " x ", ncol(res.mat))
-  qs:::qsave(res.mat, "enr.mat.qs")
+  qs::qsave(res.mat, "enr.mat.qs")
 
   # Verify file was written
   if (file.exists("enr.mat.qs")) {

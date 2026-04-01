@@ -30,7 +30,8 @@ Set.Config <-function(anal.mode="web"){
 #'License: MIT
 #'@export
 #'
-Init.Data <-function(onWeb=T, dataPath="data/"){
+Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
+  default.dpi <<- default.dpi;
   path = "../../";
   resource.dir <<- "../../";
   adj.vec <<- "";
@@ -430,7 +431,7 @@ ReadDataForMetaInfo<-function(dataName){
 
 doScatterJson <- function(dataName, filenm){
     dataSet <- readDataset(dataName);
-    if(!exists("my.json.scatter")){ # public web on same user dir
+    if(!exists("my.json.scatter")){
         compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_scatter3d.Rc"));    
     }
     return(my.json.scatter(dataSet, filenm));

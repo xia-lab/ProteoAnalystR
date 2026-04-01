@@ -643,5 +643,10 @@ PlotKinaseEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20) 
     ggsave(imgNm, plot = p, width = 10, height = max(6, nrow(results) * 0.3), device = cairo_pdf, bg = "white")
   }
 
+  # Store in imgSet for report/slides inclusion
+  imgSet <- readSet(imgSet, "imgSet")
+  imgSet$kinase_enrichment <- imgNm
+  saveSet(imgSet, "imgSet")
+
   return(imgNm)
 }

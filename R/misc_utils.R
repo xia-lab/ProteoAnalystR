@@ -628,11 +628,64 @@ PerformSetOperation_DataEnr <- function(nms, operation, refNm){
   return(com.symbols);
 }
 
-# in public web, this is done by microservice
+# can also be done by microservice
+# =============================================================================
+# RSclient subprocess execution (Rserve fork) — available on all deployments
+# =============================================================================
+run_func_via_rsclient <- function(func, args = list(), timeout_sec = 60) {
+  conn <- RSclient::RS.connect(host = "localhost", port = 6311)
+  on.exit(try(RSclient::RS.close(conn), silent = TRUE))
+  RSclient::RS.assign(conn, ".exec_wd", getwd())
+  RSclient::RS.assign(conn, ".exec_func", func)
+  RSclient::RS.assign(conn, ".exec_args", args)
+  RSclient::RS.assign(conn, ".exec_timeout", timeout_sec)
+  RSclient::RS.eval(conn, quote({
+    setwd(.exec_wd)
+    setTimeLimit(elapsed = .exec_timeout, transient = TRUE)
+    on.exit(setTimeLimit(elapsed = Inf))
+    do.call(.exec_func, .exec_args)
+  }))
+}
+
+rsclient_isolated_exec <- function(func_body, input_data, packages = character(0),
+                                   timeout = 180, output_type = "qs") {
+  bridge_tmp <- file.path(tempdir(), "rsclient_bridge")
+  if (!dir.exists(bridge_tmp)) dir.create(bridge_tmp, recursive = TRUE)
+  uid <- paste0(sample(letters, 6), collapse = "")
+  input_path <- file.path(bridge_tmp, paste0(uid, "_in.qs"))
+  output_path <- file.path(bridge_tmp, paste0(uid, "_out.qs"))
+  qs::qsave(input_data, input_path, preset = "fast"); Sys.sleep(0.02)
+  on.exit({ for (p in c(input_path, output_path)) if (file.exists(p)) unlink(p) }, add = TRUE)
+  result <- run_func_via_rsclient(
+    func = function(input_path, output_path, func_body, pkgs) {
+      tryCatch({
+        for (pkg in pkgs) suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+        res <- func_body(qs::qread(input_path))
+        qs::qsave(res, output_path, preset = "fast"); Sys.sleep(0.02)
+        list(success = TRUE)
+      }, error = function(e) list(success = FALSE, message = e$message))
+    },
+    args = list(input_path = input_path, output_path = output_path,
+                func_body = func_body, pkgs = packages),
+    timeout_sec = timeout)
+  if (isTRUE(result$success) && file.exists(output_path)) return(qs::qread(output_path))
+  msg <- if (!is.null(result$message)) result$message else "RSclient subprocess failed"
+  message("[rsclient_isolated_exec] ", msg)
+  return(list(success = FALSE, message = msg))
+}
+
+# Closure executor — always forks via RSclient (available on all deployments)
 .perform.computing <- function(){
-  dat.in <- qs::qread("dat.in.qs"); 
-  dat.in$my.res <- dat.in$my.fun();
-  qs::qsave(dat.in, file="dat.in.qs");    
+  run_func_via_rsclient(
+    func = function(wd) {
+      setwd(wd)
+      dat.in <- qs::qread("dat.in.qs")
+      dat.in$my.res <- dat.in$my.fun()
+      qs::qsave(dat.in, file = "dat.in.qs")
+    },
+    args = list(wd = getwd()),
+    timeout_sec = 300
+  )
 }
 
 fast.write <- function(dat, file, row.names=TRUE){
@@ -781,7 +834,7 @@ GetDatNms <- function(){
 AddErrMsg <- function(msg){
   msgSet <- readSet(msgSet, "msgSet");
   msgSet$current.msg <- c(msgSet$current.msg, msg);
-  print(msg);
+  message("[ERROR] ", msg);
   saveSet(msgSet, "msgSet");
 }
 
@@ -994,18 +1047,13 @@ saveSet <- function(obj=NA, set="", output=1){
         set <- obj$objName;
       }
 
-      # Update global variables AND in-memory cache
-      if(set == "dataSet"){
-        dataSet <<- obj;
-      }else if(set == "analSet"){
-        analSet <<- obj;
-      }else if(set == "imgSet"){
-        imgSet <<- obj;
-      }else if(set == "paramSet"){
+      # Large objects (dataSet, analSet, imgSet) are disk-only to save ~68 MB/session.
+      # Small objects (paramSet, msgSet, cmdSet) still update globals since they're tiny.
+      if (set == "paramSet") {
         paramSet <<- obj;
-      }else if(set == "msgSet"){
+      } else if (set == "msgSet") {
         msgSet <<- obj;
-      }else if(set == "cmdSet"){
+      } else if (set == "cmdSet") {
         cmdSet <<- obj;
       }
 
@@ -1020,7 +1068,7 @@ saveSet <- function(obj=NA, set="", output=1){
         assign(".set.cache", cache, envir = .GlobalEnv)
       }
 
-      qs:::qsave(obj, paste0(set, ".qs"));
+      qs::qsave(obj, paste0(set, ".qs"));
 
       return(output);
 }
@@ -1418,10 +1466,10 @@ makeReadable <- function(str){
                     "go_cc" = "GO:CC",
                     "panth" = "PANTHER Slim",
                     "motif_set" = "Motif",
-                    "onedata" = "Gene expression analysis",
-                    "proteinlist" = "Gene list analysis",
-                    "metadata" = "Gene expression meta-analysis",
-                    "raw" = "Raw RNA-seq data processing",
+                    "onedata" = "Protein expression analysis",
+                    "proteinlist" = "Protein list analysis",
+                    "metadata" = "Protein expression meta-analysis",
+                    "raw" = "Raw data processing",
                  str)
 }
 

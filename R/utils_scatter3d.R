@@ -39,8 +39,6 @@ my.json.scatter <- function(dataSet, filenm="abc"){
   }
   
   reductionSet <- dataSet;
-  Sys.setenv(RGL_USE_NULL = TRUE);
-  require(rgl);
   require(igraph);
   pca3d<-qs::qread("pca3d.qs");
   pos.xyz <-qs::qread("score_pos_xyz.qs");

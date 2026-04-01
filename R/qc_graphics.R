@@ -1,10 +1,12 @@
 ##################################################
 ## R script for ProteoAnalyst
 ## Description: functions for quality check boxplot
-## Authors: 
+## Authors:
 ## Jeff Xia, jeff.xia@mcgill.ca
 ## Guangyan Zhou, guangyan.zhou@mail.mcgill.ca
 ###################################################
+
+require("Cairo")
 
 PlotDataBox <- function(fileName, boxplotName, dpi, format){
   dataSet <- readDataset(fileName);
@@ -37,11 +39,6 @@ PlotDataMAOverview <- function(fileName, imgNm, dpi, format){
 }
 
 PlotProteinCV <- function(fileName, imgNm, dpi = 72, format = "png") {
-  if (Sys.info()['sysname'] == 'Darwin') {
-    options(bitmapType = 'cairo')
-    options(device = function(...) grDevices::png(..., type = "cairo"))
-  }
-
   dataSet <- readDataset(fileName)
   paramSet <- readSet(paramSet, "paramSet")
 
@@ -69,14 +66,8 @@ PlotProteinCV <- function(fileName, imgNm, dpi = 72, format = "png") {
 }
 
 qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png") {
-  if (Sys.info()['sysname'] == 'Darwin') {
-    options(bitmapType = 'cairo')
-  }
-
   require('ggplot2')
   require('gridExtra')
-
-  options(device = function(...) grDevices::png(..., type = "cairo"))
 
   dpi <- as.numeric(dpi)
   finalFileNm <- paste0(imgNm, "dpi", dpi, ".", format)
@@ -149,11 +140,12 @@ qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png"
       strip.background = element_rect(fill = "#e0e0e0")
     )
 
-  if (format == "png") {
-    ggsave(finalFileNm, plot = p, dpi = dpi, width = 12, height = 7, bg = "white", type = "cairo")
-  } else if (format == "pdf") {
-    ggsave(finalFileNm, plot = p, width = 12, height = 7, device = cairo_pdf, bg = "white")
-  }
+  Cairo(file = finalFileNm, width = 12, height = 7, unit = "in", dpi = dpi, type = format, bg = "white")
+  tryCatch({
+    print(p)
+  }, finally = {
+    dev.off()
+  })
 
   return(finalFileNm)
 }
@@ -619,11 +611,7 @@ qc.overview.patchwork <- function(dat, imgNm, dpi = 96, format = "png", meta = N
     dpi <- 96
   }
 
-  if (format == "png" && capabilities("cairo")) {
-    png(filename = fullPath, width = width_in * dpi, height = height_in * dpi, units = "px", res = dpi, type = "cairo")
-  } else {
-    Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
-  }
+  Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
 
   tryCatch({
     print(overview.plot)
@@ -754,13 +742,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     # --- FIX: Safe Device Handling ---
     if(dpi == 72){ dpi <- 96 }
     
-    # Use native cairo device if available to avoid Quartz crash
-    if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width = 600*dpi/72, height = height*dpi/72, units = "px", res = dpi, type = "cairo")
-    } else {
-      require("Cairo")
-      Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white");
-    }
+    Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white")
 
     tryCatch({
         print(bp);
@@ -837,11 +819,7 @@ qc.nonmissing.per.sample <- function(dat, imgNm, dpi = 96, format = "png",
   width <- ifelse(num_samples < 50, 800, 800 + (num_samples - 50) * 10)
   height <- 600
 
-  if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width = width * dpi / 72, height = height * dpi / 72, units = "px", res = dpi, type = "cairo")
-  } else {
-      Cairo(file = fullPath, width  = width * dpi / 72, height = height * dpi / 72, unit   = "px", dpi    = dpi, type   = format, bg     = "white")
-  }
+  Cairo(file = fullPath, width = width * dpi / 72, height = height * dpi / 72, unit = "px", dpi = dpi, type = format, bg = "white")
 
   tryCatch({
       print(bp)
@@ -983,12 +961,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
     return(layout(ggplotly(p), autosize = FALSE, width = fig_w, height = fig_h))
   } else {
     if (dpi == 72) dpi <- 96
-    if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, units = "px", res = dpi, type = "cairo")
-    } else {
-      require("Cairo")
-      Cairo(file = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, unit = "px", dpi = dpi, type = format, bg = "white")
-    }
+    Cairo(file = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, unit = "px", dpi = dpi, type = format, bg = "white")
     tryCatch({
       print(p)
     }, finally = {
@@ -1281,11 +1254,7 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
   # --- FIX: Safe Device Handling ---
   if (dpi == 72) dpi <- 96
 
-  if (format == "png" && capabilities("cairo")) {
-     png(filename = fullPath, width = width_in * dpi, height = height_in * dpi, units = "px", res = dpi, type = "cairo")
-  } else {
-     Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
-  }
+  Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
 
   tryCatch({
       op <- par(no.readonly = TRUE)
@@ -1896,11 +1865,7 @@ qc.meanstd <- function(dat, imgNm, dpi=96, format="png"){
   # --- FIX: Safe Device Handling ---
   if(dpi == 72){ dpi <- 96 }
   
-  if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width=8, height=6, type="cairo", units="in", res=dpi)
-  } else {
-      Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
-  }
+  Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in")
   
   tryCatch({
       # Call meanSdPlot with plot=FALSE to prevent it from printing to the wrong device
@@ -2066,11 +2031,7 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
     # --- FIX: Safe Device Handling ---
     if(dpi == 72){ dpi <- 96 }
 
-    if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width=width, height=height, type="cairo", units="in", res=dpi)
-    } else {
-      Cairo(file = fullPath, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi)
-    }
+    Cairo(file = fullPath, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi)
     
     tryCatch({
         print(pcafig)
@@ -2334,98 +2295,6 @@ calculate_gini <- function(x) {
   index <- 1:n
   gini <- (2 * sum(index * sorted_x) / sum(sorted_x)) - (n + 1)
   return(gini / n)
-}
-
-
-ComputePERMANOVA <- function(pc1, pc2, cls, numPermutations = 999) {
-  # Combine PC1 and PC2 scores into a matrix
-  pc.mat <- cbind(pc1, pc2)
-  
-  # Calculate PERMANOVA significance
-  res <- .calculateDistSig(pc.mat, cls)
-  
-  # Extract the main results
-  resTab <- res[[1]][1, ]
-  
-  # Format and create the PERMANOVA summary statistics
-  stat.info <- paste("[PERMANOVA] F-value: ", signif(resTab$F, 5),
-                     "; R-squared: ", signif(resTab$R2, 5),
-                     "; p-value (based on ", numPermutations, " permutations): ",
-                     signif(resTab$Pr, 5), sep = "")
-  
-  # Create a named vector for the statistics
-  stat.info.vec <- c(F_value = signif(resTab$F, 5), 
-                     R_squared = signif(resTab$R2, 5), 
-                     p_value = signif(resTab$Pr, 5))
-  names(stat.info.vec) <- c("F-value", "R-squared", "p-value");
-
-  # Extract pairwise PERMANOVA results if available
-  pair.res <- res[[2]]
-  
-  # Return the results as a list
-  list(
-    stat.info = stat.info,
-    stat.info.vec = stat.info.vec,
-    pair.res = pair.res
-  )
-}
-
-# use a PERMANOVA to partition the euclidean distance by groups based on current score plot:
-.calculateDistSig <- function(pc.mat, grp){
-
-    data.dist <- dist(as.matrix(pc.mat), method = 'euclidean');
-    res <- vegan::adonis2(formula = data.dist ~ grp);
-
-    # pairwise for multi-grp
-    if(length(levels(grp)) > 2){
-      pair.res <- .permanova_pairwise(x = data.dist, grp);
-      rownames(pair.res) <- pair.res$pairs;
-      pair.res$pairs <- NULL;
-      pair.res <- signif(pair.res,5);
-      fast.write.csv(pair.res, file="pca_pairwise_permanova.csv");
-    }else{
-      pair.res <- NULL;
-    }
-
-    return(list(res, pair.res));
-}
-
-###adopted from ecole package https://rdrr.io/github/phytomosaic/ecole/
-.permanova_pairwise <- function(x,
-                                 grp,
-                                 permutations = 999,
-                                 method = 'bray',
-                                 padj = 'fdr', ...) {
-  f     <- grp
-  if (!all(table(f) > 1)) warning('factor has singletons! perhaps lump them?')
-  co    <- combn(unique(as.character(f)),2)
-  nco   <- NCOL(co)
-  out   <- data.frame(matrix(NA, nrow=nco, ncol=5))
-  dimnames(out)[[2]] <- c('pairs', 'SumOfSqs', 'F.Model', 'R2', 'pval')
-  if (!inherits(x, 'dist')) {
-    D <- vegan::vegdist(x, method=method)
-  } else {
-    D <- x
-  }
-  #cat('Now performing', nco, 'pairwise comparisons. Percent progress:\n')
-  for(j in 1:nco) {
-    cat(round(j/nco*100,0),'...  ')
-    ij  <- f %in% c(co[1,j],co[2,j])
-    Dij <- as.dist(as.matrix(D)[ij,ij])
-    fij <- data.frame(fij = f[ij])
-    a   <- vegan::adonis2(Dij ~ fij, data=fij, permutations = permutations, ...);
-    out[j,1] <- paste(co[1,j], 'vs', co[2,j])
-    out[j,2] <- a$SumOfSqs[1]
-    out[j,3] <- a$F[1]
-    out[j,4] <- a$R2[1]
-    out[j,5] <- a$`Pr(>F)`[1]
-  }
-  #cat('\n')
-  out$p.adj <- p.adjust(out$pval, method=padj)
-  out$SumOfSqs <-NULL
-  #attr(out, 'p.adjust.method') <- padj
-  #cat('\np-adjust method:', padj, '\n\n');
-  return(out)
 }
 
 qc.pcaplot.json <- function(dataSet, x, imgNm) {

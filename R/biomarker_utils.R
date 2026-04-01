@@ -180,7 +180,7 @@ RankFeatures <- function(x.in, y.in, method, lvNum){
 #'@param clust.num Number of clusters for k-means
 #'@export
 CalculateFeatureRanking <- function(dataName = "", clust.num=5){
-  save.image("feat.RData");
+  #save.image("feat.RData");
   dataSet <- readDataset(dataName);
   paramSet <- readSet(paramSet, "paramSet");
   msgSet <- readSet(msgSet, "msgSet");

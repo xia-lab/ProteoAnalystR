@@ -1,7 +1,7 @@
 
 
 my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", analSet){
-  enr.mat <- qs:::qread("enr.mat.qs");
+  enr.mat <- qs::qread("enr.mat.qs");
 
   hits <-  enr.mat[,"Hits"];
   pvals <- enr.mat[,"Pval"];
