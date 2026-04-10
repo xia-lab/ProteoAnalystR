@@ -619,7 +619,8 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
 # Local fallback for PhosR::phosCollapse (max-abs stat per protein/gene).
 phosphoCollapseLocal <- function(mat, id, stat, by = "max") {
   if (by != "max") {
-    stop("Only by = 'max' is supported for local phospho collapse.")
+    AddErrMsg("Only by = 'max' is supported for local phospho collapse.");
+    return(0);
   }
 
   if (is.null(mat) || nrow(mat) == 0) {
@@ -627,11 +628,13 @@ phosphoCollapseLocal <- function(mat, id, stat, by = "max") {
   }
 
   if (is.null(id) || length(id) != nrow(mat)) {
-    stop("id must be a vector with length equal to nrow(mat).")
+    AddErrMsg("id must be a vector with length equal to nrow(mat).");
+    return(0);
   }
 
   if (is.null(stat) || length(stat) != nrow(mat)) {
-    stop("stat must be a vector with length equal to nrow(mat).")
+    AddErrMsg("stat must be a vector with length equal to nrow(mat).");
+    return(0);
   }
 
   ids <- as.character(id)

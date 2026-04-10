@@ -236,9 +236,6 @@ PerformHeatmapEnrichment <- function(dataName="", file.nm, fun.type, IDs){
 }
 
 .prepareEnrichNet<-function(dataSet, netNm, type, overlapType, analSet){
-    if(!exists("my.enrich.net")){ 
-        compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_enrichnet.Rc"));    
-    }
     return(my.enrich.net(dataSet, netNm, type, overlapType, analSet));
 }
 
@@ -659,6 +656,7 @@ rsclient_isolated_exec <- function(func_body, input_data, packages = character(0
   result <- run_func_via_rsclient(
     func = function(input_path, output_path, func_body, pkgs) {
       tryCatch({
+        Sys.setenv(RGL_USE_NULL = TRUE)
         for (pkg in pkgs) suppressPackageStartupMessages(library(pkg, character.only = TRUE))
         res <- func_body(qs::qread(input_path))
         qs::qsave(res, output_path, preset = "fast"); Sys.sleep(0.02)
@@ -832,6 +830,7 @@ GetDatNms <- function(){
 
 # Adds an error message
 AddErrMsg <- function(msg){
+  current.msg <<- c(current.msg, msg);
   msgSet <- readSet(msgSet, "msgSet");
   msgSet$current.msg <- c(msgSet$current.msg, msg);
   message("[ERROR] ", msg);
@@ -1240,6 +1239,17 @@ getCurrentMsg <- function(){
     return(msgSet$current.msg);
 }
 
+GetErrMsg <- function(){
+    return(current.msg);
+}
+
+ClearErrMsg <- function(){
+    current.msg <<- "";
+    msgSet <- readSet(msgSet, "msgSet");
+    msgSet$current.msg <- "";
+    saveSet(msgSet, "msgSet");
+}
+
 getPrefilterMsg <- function(){
     msgSet <- readSet(msgSet, "msgSet");
     if (is.null(msgSet$match.msg)) {
@@ -1519,19 +1529,7 @@ BuildCEMiNet <- function(dataName,
                          verbose     = TRUE,
                          auto_impute = TRUE) {  # <-- Auto-impute NAs by default
 
-  ## If a compiled helper exists, load it; otherwise fall back to R version
-  if (!exists("my.build.cemi.net", mode = "function")) {
-    cmp_file <- file.path(resource.dir,
-                          "rscripts/ProteoAnalystR/R/utils_coexp.Rc")
-    if (file.exists(cmp_file))
-      compiler::loadcmp(cmp_file)
-    cmp_file2 <- file.path(resource.dir,
-                          "rscripts/ProteoAnalystR/R/utils_coexp_net.Rc")
-    if (file.exists(cmp_file2))
-      compiler::loadcmp(cmp_file2)
-  }
-
-  ## Call the implementation (compiled or pure-R)
+  ## Call the implementation (loaded at session init)
   res <- my.build.cemi.net(
     dataName    = dataName,
     filter      = filter,

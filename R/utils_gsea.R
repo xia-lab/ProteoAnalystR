@@ -738,7 +738,8 @@ PlotGShm <-function(dataName="", cmpdNm="", IDs){
 
   # Check if subset has enough rows for clustering
   if(nrow(subset) < 2) {
-    stop("Error: Not enough features matched for heatmap. Need at least 2 genes.");
+    AddErrMsg("Not enough features matched for heatmap. Need at least 2 genes.");
+    return(0);
   }
 
   # now pearson and euclidean will be the same after scaling

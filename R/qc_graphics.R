@@ -2051,7 +2051,8 @@ GetPcaOutliers <- function(){
 PlotDataNcov5 <- function(fileName, imgName, dpi, format){
   dataSet <- readDataset(fileName)
   if (is.null(dataSet$summary_df)) {
-    stop("summary_df not found in dataSet. Please run SummarizeQC first.")
+    AddErrMsg("summary_df not found in dataSet. Please run SummarizeQC first.");
+    return(0);
   }
 
   ncov5_df <- dataSet$summary_df[, c("Sample", "HighCoverageGeneCount")]
@@ -2125,7 +2126,8 @@ qc.ncov5.plot <- function(ncov5_df,
 PlotDataNsig <- function(fileName, imgName, dpi, format){
   dataSet <- readDataset(fileName)
   if (is.null(dataSet$summary_df)) {
-    stop("summary_df not found in dataSet. Please run SummarizeQC first.")
+    AddErrMsg("summary_df not found in dataSet. Please run SummarizeQC first.");
+    return(0);
   }
 
   nsig_df <- dataSet$summary_df[, c("Sample", "NSig80")]
@@ -2199,7 +2201,8 @@ PlotDataDendrogram <- function(fileName, imgName, threshold, dpi, format){
   dataSet <- readDataset(fileName)
 
   if (is.null(dataSet$summary_df)) {
-    stop("summary_df not found in dataSet. Please run SummarizeQC first.")
+    AddErrMsg("summary_df not found in dataSet. Please run SummarizeQC first.");
+    return(0);
   }
   dendro_df <- dataSet$summary_df[, c("Sample", "Dendrogram_Distance")]
   finite_rows <- is.finite(dendro_df$Dendrogram_Distance)
@@ -2313,7 +2316,8 @@ qc.pcaplot.json <- function(dataSet, x, imgNm) {
 
   # Safety check: ensure at least 2 PCs exist
   if (ncol(pca$x) < 2) {
-    stop("Insufficient principal components for PCA plot (need >= 2, found ", ncol(pca$x), ")")
+    AddErrMsg(paste0("Insufficient principal components for PCA plot (need >= 2, found ", ncol(pca$x), ")"));
+    return(0);
   }
 
   pca.res <- as.data.frame(pca$x)[, 1:2, drop = FALSE]
@@ -2451,9 +2455,10 @@ qc.pcaplot.json <- function(dataSet, x, imgNm) {
 PlotDataGini <- function(fileName, imgName, threshold, dpi, format){
   dataSet <- readDataset(fileName)
   if (is.null(dataSet$summary_df)) {
-    stop("summary_df not found in dataSet. Please run SummarizeQC first.")
+    AddErrMsg("summary_df not found in dataSet. Please run SummarizeQC first.");
+    return(0);
   }
-  
+
   # Select Gini data
   gini_df <- dataSet$summary_df[, c("Sample", "Gini")]
   gini_df$Status <- ifelse(gini_df$Gini > threshold, "Outlier", "Normal")
@@ -3180,7 +3185,8 @@ qc.pcaplot.outliers.json <- function(dataSet, x, imgNm,
   # Safety check: ensure at least 2 PCs exist
   if (ncol(pca$x) < 2) {
     #msg("[PCA outliers] ERROR: Need at least 2 principal components, found ", ncol(pca$x))
-    stop("Insufficient principal components for PCA outlier plot (need >= 2, found ", ncol(pca$x), ")")
+    AddErrMsg(paste0("Insufficient principal components for PCA outlier plot (need >= 2, found ", ncol(pca$x), ")"));
+    return(0);
   }
 
   pca.res <- as.data.frame(pca$x)[, 1:2, drop = FALSE]

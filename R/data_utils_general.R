@@ -431,9 +431,6 @@ ReadDataForMetaInfo<-function(dataName){
 
 doScatterJson <- function(dataName, filenm){
     dataSet <- readDataset(dataName);
-    if(!exists("my.json.scatter")){
-        compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_scatter3d.Rc"));    
-    }
     return(my.json.scatter(dataSet, filenm));
 }
 
@@ -527,7 +524,8 @@ CheckListHasFC <- function(){
 
 replace_extension_with_qs <- function(data_name) {
   if (is.null(data_name) || data_name == "") {
-    stop("Data name must not be null or empty")
+    AddErrMsg("Data name must not be null or empty");
+    return(0);
   }
   
   # Use gsub to replace .csv or .txt with .qs
