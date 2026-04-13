@@ -1,10 +1,12 @@
 ##################################################
 ## R script for ProteoAnalyst
 ## Description: functions for quality check boxplot
-## Authors: 
+## Authors:
 ## Jeff Xia, jeff.xia@mcgill.ca
 ## Guangyan Zhou, guangyan.zhou@mail.mcgill.ca
 ###################################################
+
+require("Cairo")
 
 PlotDataBox <- function(fileName, boxplotName, dpi, format){
   dataSet <- readDataset(fileName);
@@ -37,11 +39,6 @@ PlotDataMAOverview <- function(fileName, imgNm, dpi, format){
 }
 
 PlotProteinCV <- function(fileName, imgNm, dpi = 72, format = "png") {
-  if (Sys.info()['sysname'] == 'Darwin') {
-    options(bitmapType = 'cairo')
-    options(device = function(...) grDevices::png(..., type = "cairo"))
-  }
-
   dataSet <- readDataset(fileName)
   paramSet <- readSet(paramSet, "paramSet")
 
@@ -69,14 +66,8 @@ PlotProteinCV <- function(fileName, imgNm, dpi = 72, format = "png") {
 }
 
 qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png") {
-  if (Sys.info()['sysname'] == 'Darwin') {
-    options(bitmapType = 'cairo')
-  }
-
   require('ggplot2')
   require('gridExtra')
-
-  options(device = function(...) grDevices::png(..., type = "cairo"))
 
   dpi <- as.numeric(dpi)
   finalFileNm <- paste0(imgNm, "dpi", dpi, ".", format)
@@ -619,11 +610,7 @@ qc.overview.patchwork <- function(dat, imgNm, dpi = 96, format = "png", meta = N
     dpi <- 96
   }
 
-  if (format == "png" && capabilities("cairo")) {
-    png(filename = fullPath, width = width_in * dpi, height = height_in * dpi, units = "px", res = dpi, type = "cairo")
-  } else {
-    Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
-  }
+  Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
 
   tryCatch({
     print(overview.plot)
@@ -754,13 +741,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     # --- FIX: Safe Device Handling ---
     if(dpi == 72){ dpi <- 96 }
     
-    # Use native cairo device if available to avoid Quartz crash
-    if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width = 600*dpi/72, height = height*dpi/72, units = "px", res = dpi, type = "cairo")
-    } else {
-      require("Cairo")
-      Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white");
-    }
+    Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white");
 
     tryCatch({
         print(bp);
@@ -837,11 +818,7 @@ qc.nonmissing.per.sample <- function(dat, imgNm, dpi = 96, format = "png",
   width <- ifelse(num_samples < 50, 800, 800 + (num_samples - 50) * 10)
   height <- 600
 
-  if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width = width * dpi / 72, height = height * dpi / 72, units = "px", res = dpi, type = "cairo")
-  } else {
-      Cairo(file = fullPath, width  = width * dpi / 72, height = height * dpi / 72, unit   = "px", dpi    = dpi, type   = format, bg     = "white")
-  }
+  Cairo(file = fullPath, width  = width * dpi / 72, height = height * dpi / 72, unit   = "px", dpi    = dpi, type   = format, bg     = "white")
 
   tryCatch({
       print(bp)
@@ -983,12 +960,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
     return(layout(ggplotly(p), autosize = FALSE, width = fig_w, height = fig_h))
   } else {
     if (dpi == 72) dpi <- 96
-    if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, units = "px", res = dpi, type = "cairo")
-    } else {
-      require("Cairo")
-      Cairo(file = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, unit = "px", dpi = dpi, type = format, bg = "white")
-    }
+    Cairo(file = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, unit = "px", dpi = dpi, type = format, bg = "white")
     tryCatch({
       print(p)
     }, finally = {
@@ -1281,11 +1253,7 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
   # --- FIX: Safe Device Handling ---
   if (dpi == 72) dpi <- 96
 
-  if (format == "png" && capabilities("cairo")) {
-     png(filename = fullPath, width = width_in * dpi, height = height_in * dpi, units = "px", res = dpi, type = "cairo")
-  } else {
-     Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
-  }
+  Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
 
   tryCatch({
       op <- par(no.readonly = TRUE)
@@ -1896,11 +1864,7 @@ qc.meanstd <- function(dat, imgNm, dpi=96, format="png"){
   # --- FIX: Safe Device Handling ---
   if(dpi == 72){ dpi <- 96 }
   
-  if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width=8, height=6, type="cairo", units="in", res=dpi)
-  } else {
-      Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
-  }
+  Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
   
   tryCatch({
       # Call meanSdPlot with plot=FALSE to prevent it from printing to the wrong device
@@ -2066,11 +2030,7 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
     # --- FIX: Safe Device Handling ---
     if(dpi == 72){ dpi <- 96 }
 
-    if (format == "png" && capabilities("cairo")) {
-      png(filename = fullPath, width=width, height=height, type="cairo", units="in", res=dpi)
-    } else {
-      Cairo(file = fullPath, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi)
-    }
+    Cairo(file = fullPath, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi)
     
     tryCatch({
         print(pcafig)
