@@ -100,16 +100,12 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
     data.norm <- dataSet$data.norm;
   }
   if(anal.type %in% c("onedata", "proteinlist")){
-    # Check if DE analysis has been performed
-    if(!is.null(dataSet$comp.res) && nrow(dataSet$comp.res) > 0){
-      ids <- rownames(dataSet$comp.res);
-      inx <- which(ids == gene.id);
-      cmpdNm <- analSet$comp.features.symbols[inx];
-      if (dataType == "peptide" || is.na(cmpdNm) || length(cmpdNm) == 0) {
-        cmpdNm <- gene.id
-      }
-    } else {
-      # DE not performed - use gene.id as label
+    # Look up symbol directly by gene ID (not positional index, which can desync)
+    cmpdNm <- tryCatch(
+      doEntrez2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType),
+      error = function(e) gene.id
+    )
+    if (dataType == "peptide" || is.na(cmpdNm) || length(cmpdNm) == 0) {
       cmpdNm <- gene.id
     }
     if(type== "volcano"){
@@ -493,9 +489,10 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
   data.norm <- dataSet$data.norm[,colnames(dataSet$data.norm) %in% rownames(meta)];
   
   if(anal.type == "onedata"){
-    ids <- rownames(dataSet$comp.res);
-    inx <- which(ids == gene.id);
-    cmpdNm <- analSet$comp.features.symbols[inx];
+    cmpdNm <- tryCatch(
+      doEntrez2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType),
+      error = function(e) gene.id
+    )
 
     # FIX: Suppress Quartz popup on macOS
     Cairo(file = imgName,  width=320*dpi/72, height=380*dpi/72, type=format, dpi=dpi, bg="white");

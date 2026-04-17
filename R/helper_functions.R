@@ -385,89 +385,17 @@ GetExpressResultMatrix <- function(dataName = "", inxt) {
         colnames(res)[1] <- colnames(dataSet$comp.res)[inxt]
     }
 
-    # reorder/significant handling only if we have rows
-    if (!is.null(dataSet$comp.res) && nrow(dataSet$comp.res) > 0) {
-        o <- with(dataSet$comp.res, order(P.Value, -abs(logFC), na.last = TRUE))
-        dataSet$comp.res <- dataSet$comp.res[o, , drop = FALSE]
-        dataSet$comp.res <- dataSet$comp.res[
-            !(rownames(dataSet$comp.res) %in% rownames(dataSet$sig.mat)), ]
-        dataSet$comp.res <- rbind(dataSet$sig.mat, dataSet$comp.res)
-        dataSet$comp.res <- dataSet$comp.res[complete.cases(dataSet$comp.res), ]
-
-        # Keep per-contrast results aligned to the reordered comp.res
-        if (!is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) > 0) {
-            target_order <- rownames(dataSet$comp.res)
-            for (i in seq_along(dataSet$comp.res.list)) {
-                res_i <- dataSet$comp.res.list[[i]]
-                res_i <- res_i[target_order, colnames(res_i), drop = FALSE]
-                dataSet$comp.res.list[[i]] <- res_i
-            }
-        }
-    }
+    ## comp.res is already ordered (sig first, then by p-value) from the DE analysis.
+    ## No re-sorting needed — re-sorting would desync comp.res from comp.features.symbols.
 
     ## --- now extract the column(s) for the return value -------
     if (dataSet$de.method %in% c("limma", "deqms", "edger", "deseq2", "wtt")) {
-      # prefer comp.res.list entry; fall back to comp.res if populated
-      if (!is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) >= inxt &&
-          nrow(dataSet$comp.res.list[[inxt]]) > 0) {
-          #msg("[GetExpressResultMatrix] using comp.res.list[[", inxt, "]] rows=", nrow(dataSet$comp.res.list[[inxt]]))
-          res <- dataSet$comp.res.list[[inxt]]
-          dataSet$comp.res <- res  # keep dataset in sync for downstream gene IDs
-      } else if (!is.null(dataSet$comp.res) && nrow(dataSet$comp.res) > 0) {
-          #msg("[GetExpressResultMatrix] comp.res.list empty; using comp.res rows=", nrow(dataSet$comp.res))
-          res <- dataSet$comp.res
-      }
+      res <- dataSet$comp.res
     } else {
       res <- dataSet$comp.res[ , c(inxt, (inx+1):ncol(dataSet$comp.res)), drop = FALSE]
-      res <- res[order(res$P.Value), ]
       colnames(res)[1] <- colnames(dataSet$comp.res)[inxt]
     }
-    # Hard-align rows to comp.res when dimensions permit to keep IDs synchronized
-    if (!is.null(dataSet$comp.res) && nrow(dataSet$comp.res) > 0) {
-      crn <- rownames(dataSet$comp.res)
-      dim(crn) <- NULL
-      if (nrow(res) == length(crn)) {
-        res <- res[crn, , drop = FALSE]
-        rownames(res) <- crn
-      } else {
-        common <- intersect(crn, rownames(res))
-        res <- res[common, , drop = FALSE]
-        dataSet$comp.res <- dataSet$comp.res[common, , drop = FALSE]
-        if (!is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) >= inxt) {
-          dataSet$comp.res.list[[inxt]] <- dataSet$comp.res.list[[inxt]][common, , drop = FALSE]
-        }
-      }
-    }
-    # Global ordering: rank by P.Value then |logFC| for display consistency
-    if (!is.null(res) && nrow(res) > 0 && "P.Value" %in% colnames(res) && "logFC" %in% colnames(res)) {
-      o <- order(res$P.Value, -abs(res$logFC), na.last = TRUE)
-      res <- res[o, , drop = FALSE]
-      dataSet$comp.res <- res
-      if (!is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) >= inxt) {
-        dataSet$comp.res.list[[inxt]] <- res
-      }
-    }
-    if (is.null(res)) {
-      #msg("[GetExpressResultMatrix][WARN] result object is NULL")
-      return(matrix(numeric(0), nrow = 0, ncol = 0))
-    }
-    if (nrow(res) == 0) {
-      #msg("[GetExpressResultMatrix][WARN] result has 0 rows after processing")
-    }
 
-    # Final alignment: ensure the numeric matrix rows follow the master comp.res order
-    if (!is.null(dataSet$comp.res) && nrow(dataSet$comp.res) > 0) {
-      target_order <- rownames(dataSet$comp.res)
-      res <- res[target_order, colnames(res), drop = FALSE]
-      # Keep dataset/list in sync for downstream ID retrieval
-      dataSet$comp.res <- res
-      if (!is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) >= inxt) {
-        dataSet$comp.res.list[[inxt]] <- res
-      }
-    }
-    #msg("[GetExpressResultMatrix] returning matrix dims=", paste(dim(res), collapse="x"))
-
-    RegisterData(dataSet)
     # Shadow save: both qs (backward compat) and Arrow (zero-copy Java access)
     shadow_save(res, "express.de.res.qs")
     return(head(signif(as.matrix(res), 5),1000))
