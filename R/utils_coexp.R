@@ -418,7 +418,7 @@ my.build.cemi.net <- function(dataName,
     #   msg("Warning: Could not trim CEMiTool object: ", conditionMessage(e))
     # })
 
-    qs::qsave(cem, "cem.qs")
+    ov_qs_save(cem, "cem.qs")
 
     n_samples <- nrow(cem@sample_annotation)
     n_genes <- nrow(expr_mat)
@@ -489,7 +489,7 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
     options(device = old_device, bitmapType = old_bitmapType)
   }, add = TRUE)
 
-  cem <- qs::qread("cem.qs")
+  cem <- ov_qs_read("cem.qs")
   if (!inherits(cem, "CEMiTool"))
     stop("'cem.qs' does not contain a valid CEMiTool object.")
 
@@ -626,7 +626,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
       options(device = old_device, bitmapType = old_bitmapType)
     }, add = TRUE)
 
-    cem <- qs::qread("cem.qs")
+    cem <- ov_qs_read("cem.qs")
     stopifnot(inherits(cem, "CEMiTool"))
 
     sa <- cem@sample_annotation
@@ -802,7 +802,7 @@ PlotCemiScaleFree <- function(imgName = "coexp_scalefree",
     options(device = old_device, bitmapType = old_bitmapType)
   }, add = TRUE)
 
-  cem <- qs::qread("cem.qs")
+  cem <- ov_qs_read("cem.qs")
   stopifnot(inherits(cem, "CEMiTool"))
 
   # Ensure the plot exists (some versions only populate it after calling plot_beta)

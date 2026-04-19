@@ -181,7 +181,7 @@ GetSampleInfo <- function(dataName, clsLbl){
 #for metadata
 GetMetaSummaryData<- function(){
     paramSet <- readSet(paramSet, "paramSet");
-    inmex.meta <- try(qs::qread("inmex_meta.qs"), silent = TRUE);
+    inmex.meta <- try(ov_qs_read("inmex_meta.qs"), silent = TRUE);
     if(inherits(inmex.meta, "try-error")){
       warning("Failed to read inmex_meta.qs");
       return(NULL);
@@ -196,13 +196,13 @@ GetMetaSummaryData<- function(){
 }
 
 GetDatasetNamesString <- function(){
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     paste(unique(inmex.meta$data.lbl), collapse="||");
 }
 
 ##Single matrix
 GetSampleNumber <-function(){
-  data.orig <- qs::qread("data.raw.qs");
+  data.orig <- ov_qs_read("data.raw.qs");
   return(ncol(data.orig));
 }
 
@@ -341,7 +341,7 @@ GetExpressResultGeneIDLinks <- function(dataName=""){
 
 
 GetExpressResultColNames<-function(){
-  resT <- qs::qread("express.de.res.qs");
+  resT <- ov_qs_read("express.de.res.qs");
   colnames(resT);
 }
 

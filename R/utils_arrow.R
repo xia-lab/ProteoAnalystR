@@ -89,7 +89,7 @@
 #' }
 shadow_save <- function(obj, file) {
     # Always save to qs for R compatibility
-    qs::qsave(obj, file)
+    ov_qs_save(obj, file)
 
     # Generate Arrow path from qs path
     arrow_path <- sub("\\.qs$", ".arrow", file)

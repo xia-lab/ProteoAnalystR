@@ -63,7 +63,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
 
   }else{
     if(paramSet$selDataNm == "meta_default"){
-      inmex <- qs:::qread("inmex_meta.qs");
+      inmex <- ov_qs_read("inmex_meta.qs");
       sampleNms <- colnames(inmex$plot_data);
       colnums <- dim(inmex$plot.data)[2]
       inx  <- rep(T, colnums)
@@ -236,7 +236,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
   set.num <- unlist(lapply(current.mset, function(x){length(unique(x))}), use.names=TRUE);
   names(hits.query) <- names(current.mset);
   hit.num<-unlist(lapply(hits.query, function(x){length(x)}), use.names=TRUE);
-  qs::qsave(hits.query, "hits_query.qs");
+  ov_qs_save(hits.query, "hits_query.qs");
   fgseaRes$hits <- hit.num[which(fgseaRes$pathway  %in% names(hit.num))] 
   fgseaRes$total <- set.num[which(fgseaRes$pathway %in% names(set.num))]
   
@@ -336,7 +336,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     res.mat <- res.mat
   }
 
-    qs:::qsave(res.mat, "enr.mat.qs");
+    ov_qs_save(res.mat, "enr.mat.qs");
 
   imgSet <- readSet(imgSet, "imgSet");
   if(mType == "network"){
@@ -430,7 +430,7 @@ my.compute.ranked.vec <- function(data, opt, inx = 1){
   paramSet$gseaRankOpt <- opt
   if(anal.type == "metadata"){
     if(paramSet$selDataNm == "meta_default"){
-      matr <- as.matrix(qs::qread("meta.resTable.qs"));
+      matr <- as.matrix(ov_qs_read("meta.resTable.qs"));
     }else{
       matr <- as.matrix(data$data)
     }
@@ -706,7 +706,7 @@ PlotGShm <-function(dataName="", cmpdNm="", IDs){
 
   }else{
     if(paramSet$selDataNm == "meta_default"){
-      inmex <- qs:::qread("inmex_meta.qs");
+      inmex <- ov_qs_read("inmex_meta.qs");
       dat <- inmex$plot.data
       gene.map <- data.frame(gene_id=names(inmex$gene.symbls), symbol=unname(inmex$gene.symbls));
     }else{
@@ -822,7 +822,7 @@ PlotGShm <-function(dataName="", cmpdNm="", IDs){
 plot.gs.view <-function(fileName, format="png", dpi=96, width=NA, imgName=NA){
   require("ggplot2");
   require("fgsea");
-  current.featureset <- qs::qread("current_featureset.qs");
+  current.featureset <- ov_qs_read("current_featureset.qs");
   analSet <- readSet(analSet, "analSet");
   if(is.na(imgName)){
    imgName <- gsub("\\/", "_",  fileName);

@@ -12,7 +12,7 @@
 ## 4. Data access: mSetObj$dataSet$norm → dataSet$data.norm.transposed
 ## 5. Classes: mSetObj$dataSet$cls → dataSet$cls
 ## 6. Analysis results: mSetObj$analSet → analSet (separate global object)
-## 7. File persistence using qs::qsave() and ProteoAnalyst naming
+## 7. File persistence using ov_qs_save() and ProteoAnalyst naming
 ##############################################
 
 #'Numbers for subset selection
@@ -225,7 +225,7 @@ CalculateFeatureRanking <- function(dataName = "", clust.num=5){
 
   # Fold change - use data before normalization if available
   if(file.exists("data.raw.qs")){
-    data <- qs::qread("data.raw.qs"); # expected samples × features
+    data <- ov_qs_read("data.raw.qs"); # expected samples × features
     sam.order <- if (!is.null(rownames(data))) intersect(rownames(x), rownames(data)) else rownames(x)
     feat.order <- if (!is.null(colnames(data))) intersect(colnames(x), colnames(data)) else colnames(x)
     if (length(sam.order) == 0 || length(feat.order) == 0) {
@@ -553,7 +553,7 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
   );
 
   # Save results
-  qs::qsave(analSet$multiROC, "biomarker_cv_explore.qs");
+  ov_qs_save(analSet$multiROC, "biomarker_cv_explore.qs");
 
   msgSet$current.msg <- paste0("Cross-validation completed. Best model: ", nFeatures[best.model.inx],
                                " features (AUC=", round(auc.vec[best.model.inx], 3), ")");
@@ -2484,7 +2484,7 @@ Perform.UnivROC <- function(dataName = "", feat.nm,
       # print("[R DEBUG ROC] peptide_level_data.qs not found")
       return(0)
     }
-    pep.mat <- qs::qread("peptide_level_data.qs")
+    pep.mat <- ov_qs_read("peptide_level_data.qs")
     if (!(feat.nm %in% rownames(pep.mat))) {
       # print(paste0("[R DEBUG ROC] feat.nm not found in peptide matrix rows"))
       return(0)
@@ -2668,7 +2668,7 @@ PlotRocUnivBoxPlot <- function(dataName = "", feat.nm, version, format="png", dp
     if (!file.exists("peptide_level_data.qs")) {
       return(0)
     }
-    pep.mat <- qs::qread("peptide_level_data.qs")
+    pep.mat <- ov_qs_read("peptide_level_data.qs")
     if (!(feat.nm %in% rownames(pep.mat))) {
       return(0)
     }

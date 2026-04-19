@@ -27,7 +27,7 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
          paramSet$fc.thresh <- 0; 
        }
 
-      data <- qs:::qread("allMeta.mat.qs")    
+      data <- ov_qs_read("allMeta.mat.qs")    
       p.value <- data[, 2]
       data <- cbind(unname(analSet$meta.avgFC[rownames(data)]), data);
       fcthresh <- paramSet$fc.thresh;
@@ -194,7 +194,7 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
   if(paramSet$init.lib == "NA"){
     enr.mat <- "NA"
   }else{
-    enr.mat <- qs:::qread("enr.mat.qs");
+    enr.mat <- ov_qs_read("enr.mat.qs");
     #fast.write(enr.mat, file="enrichment_result.csv", row.names=T);
   }
   sink("enrichment_result.json");
@@ -487,7 +487,7 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
       data.anot <- .get.annotated.data();
       current.universe <- rownames(data.anot); 
     }else if(paramSet$anal.type == "metadata"){
-      inmex <- qs::qread("inmex_meta.qs");
+      inmex <- ov_qs_read("inmex_meta.qs");
       current.universe <- rownames(inmex$data); 
     }else{
       if(!is.null(paramSet$backgroundUniverse)){
@@ -511,7 +511,7 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
                        }
   );
   
-  qs::qsave(hits.query, "hits_query.qs");
+  ov_qs_save(hits.query, "hits_query.qs");
   
   names(hits.query) <- names(current.featureset);
   hit.num<-unlist(lapply(hits.query, function(x){length(unique(x))}), use.names=FALSE);
@@ -576,7 +576,7 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
     res.mat <- res.mat
   }
 
-  qs:::qsave(res.mat, "enr.mat.qs");
+  ov_qs_save(res.mat, "enr.mat.qs");
   msgSet$current.msg <- "Functional enrichment analysis was completed";
   
   # write json

@@ -171,7 +171,7 @@ get.qc.sample.matrix <- function(dataSet, imgNm = NULL) {
   if (!is.null(imgNm) && grepl("norm", imgNm)) {
     data.for.plot <- dataSet$data.norm;
   } else if (file.exists("data.with.missing.qs")) {
-    data.for.plot <- qs::qread("data.with.missing.qs");
+    data.for.plot <- ov_qs_read("data.with.missing.qs");
   } else {
     data.for.plot <- dataSet$data.norm;
   }

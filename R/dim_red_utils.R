@@ -34,7 +34,7 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
 
     mdata.all <- paramSet$mdata.all;
 
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     datanm.vec <- names(mdata.all)[mdata.all==1];
 
     dat.inx <- inmex.meta$data.lbl %in% datanm.vec;
@@ -113,14 +113,14 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
     pos.xyz <- mypos;
     pos.xyz <- unitAutoScale(pos.xyz);
     rownames(pos.xyz) = pca3d$score$name;
-    qs::qsave(pos.xyz, "score_pos_xyz.qs");
+    ov_qs_save(pos.xyz, "score_pos_xyz.qs");
 
     fast.write(coords, file="proteoanalyst_3d_pos.csv");
 
     pca3d$org <- paramSet$data.org
     pca3d$analType <- paramSet$anal.type
     pca3d$naviString <- "Scatter 3D"
-    qs::qsave(pca3d, "pca3d.qs");
+    ov_qs_save(pca3d, "pca3d.qs");
 
     paramSet$jsonNms$pcascore <- fileName
     paramSet$partialToBeSaved <- c(paramSet$partialToBeSaved, c(fileName))
@@ -141,7 +141,7 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
 
   mdata.all <- paramSet$mdata.all;
 
-  inmex.meta <- qs::qread("inmex_meta.qs");
+  inmex.meta <- ov_qs_read("inmex_meta.qs");
   datanm.vec <- names(mdata.all)[mdata.all==1];
   nb <- as.numeric(5000) # set to max 5000 datapoints
   dat.inx <- inmex.meta$data.lbl %in% datanm.vec;
@@ -178,14 +178,14 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   colnames(mypos) <- paste("Dim", 1:3, sep="");
   rownames(mypos) <- analSet$loadEntrez;
   mypos <- unitAutoScale(mypos);
-  qs::qsave(mypos, "loading_pos_xyz.qs");
+  ov_qs_save(mypos, "loading_pos_xyz.qs");
   
   coords <- data.frame(mypos);
   fast.write(coords, file="proteoanalyst_loadings_3d_pos.csv");
   
   paramSet$partialToBeSaved <- c(paramSet$partialToBeSaved, c(fileName))
   paramSet$jsonNms$pcaload <- fileName;
-  qs::qsave(pca3d, "pca3d.qs");
+  ov_qs_save(pca3d, "pca3d.qs");
   # OPTIMIZED: Use jsonlite::write_json instead of rjson + sink/cat
   jsonlite::write_json(pca3d, fileName, auto_unbox = TRUE, pretty = FALSE);
   msgSet$current.msg <- "Annotated data is now ready for 3D visualization!";
@@ -238,10 +238,10 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   rownames(mypos) <- pca3d$score$name;
   rownames(mypos) <- analSet$loadEntrez;
   mypos <- unitAutoScale(mypos);
-  qs::qsave(mypos, "loading_pos_xyz.qs");
+  ov_qs_save(mypos, "loading_pos_xyz.qs");
   
   fast.write(mypos, file="proteoanalyst_3d_load_pos.csv");
-  qs::qsave(pca3d, "pca3d.qs");
+  ov_qs_save(pca3d, "pca3d.qs");
   paramSet$jsonNms$pcaload <- fileName
   paramSet$partialToBeSaved <- c(paramSet$partialToBeSaved, c(fileName))
   # OPTIMIZED: Use jsonlite::write_json instead of rjson + sink/cat
@@ -308,7 +308,7 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   pos.xyz <- as.data.frame(pos.xyz);
   pos.xyz <- unitAutoScale(pos.xyz);
   rownames(pos.xyz) = colnames(dataSet$data.norm);
-  qs::qsave(pos.xyz, "score_pos_xyz.qs");
+  ov_qs_save(pos.xyz, "score_pos_xyz.qs");
   
   facA <- as.character(dataSet$fst.cls);
   if(all.numeric(facA)){
@@ -349,7 +349,7 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   pca3d$org <- paramSet$data.org
   pca3d$analType <- paramSet$anal.type
   pca3d$naviString <- "Scatter 3D"
-  qs::qsave(pca3d, "pca3d.qs");
+  ov_qs_save(pca3d, "pca3d.qs");
   paramSet$jsonNms$pcascore <- fileName
   paramSet$partialToBeSaved <- c(paramSet$partialToBeSaved, c(fileName))
   rownames(mypos) <- colnames(dataSet$data.norm);
@@ -365,11 +365,12 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
 
 
 ComputeEncasing <- function(filenm, type, names.vec, level=0.95, omics="NA"){
+  Sys.setenv(RGL_USE_NULL = TRUE)
   paramSet <- readSet(paramSet, "paramSet");
   mdata.all <- paramSet$mdata.all;
   level <- as.numeric(level)
   names = strsplit(names.vec, "; ")[[1]]
-  pos.xyz <-qs::qread("score_pos_xyz.qs");
+  pos.xyz <-ov_qs_read("score_pos_xyz.qs");
 
   inx = rownames(pos.xyz) %in% names;
   coords = as.matrix(pos.xyz[inx,c(1:3)])

@@ -1041,7 +1041,7 @@ saveSet <- function(obj=NA, set="", output=1){
         assign(".set.cache", cache, envir = .GlobalEnv)
       }
 
-      qs:::qsave(obj, paste0(set, ".qs"));
+      ov_qs_save(obj, paste0(set, ".qs"));
 
       return(output);
 }
@@ -1060,7 +1060,7 @@ readSet <- function(obj = NULL, set = "") {
   file_path <- paste0(set, ".qs")
 
   if (file.exists(file_path)) {
-    obj <- qs::qread(file_path)
+    obj <- ov_qs_read(file_path)
 
     # Update in-memory cache after reading from disk (if enabled)
     if(exists(".use.memory.cache", envir = .GlobalEnv) &&
@@ -1179,7 +1179,7 @@ readDataset <- function(dataName = "", quiet = FALSE) {
 
       } else {                                              # fall back to .qs
         qsfile <- replace_extension_with_qs(dataName)
-        obj <- qs::qread(qsfile)
+        obj <- ov_qs_read(qsfile)
       }
     
 
@@ -1246,17 +1246,17 @@ PrepareSqliteDB <- function(sqlite_Path, onweb = TRUE) {
 
 saveDataQs <-function(data, name, module.nm, dataName){
   if(module.nm == "metadata"){
-    qs::qsave(data, file=paste0(dataName, "_data/", name));
+    ov_qs_save(data, file=paste0(dataName, "_data/", name));
   }else{
-    qs::qsave(data, file=name);
+    ov_qs_save(data, file=name);
   }
 }
 
 readDataQs <-function(name, module.nm, dataName){
   if(module.nm == "metadata"){
-    dat <- qs::qread(file=paste0(dataName, "_data/", name));
+    dat <- ov_qs_read(file=paste0(dataName, "_data/", name));
   }else{
-    dat <- qs::qread(file=name);
+    dat <- ov_qs_read(file=name);
   }
   return(dat);
 }
@@ -1268,7 +1268,7 @@ PrepareReport <- function(objective, abstract, animalDetails, exposureDetails, c
   dataSet$reportSummary$animal <<- animalDetails;
   dataSet$reportSummary$exposure <<- exposureDetails;
   dataSet$reportSummary$chip <<- ecotoxchipDetails;
-  data.orig <- qs::qread("data.raw.qs"); 
+  data.orig <- ov_qs_read("data.raw.qs"); 
   dataSet$reportSummary$read.msg <<- paste("In this analysis, the uploaded data files were combined into a ", nrow(data.orig),
                                           " (wells) by ", ncol(data.orig), " (samples) data matrix.", sep="");
 }

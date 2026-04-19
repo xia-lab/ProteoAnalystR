@@ -109,7 +109,7 @@ GlobalCutOff <- list(
     if(file.exists(path)){
         file.remove(path);
     }
-    qs::qsave(obj, path);
+    ov_qs_save(obj, path);
 }
 
 # read meta-dataset previously processed
@@ -186,7 +186,7 @@ ReadMergedExpressTable <- function(dataName){
                        gene.symbls = symbols,
                        cls.lbl=factor(cls.lbl),
                        data.lbl=data.lbl);
-    qs::qsave(inmex.meta.orig, "inmex.meta.orig.qs");
+    ov_qs_save(inmex.meta.orig, "inmex.meta.orig.qs");
     saveSet(paramSet, "paramSet");
     if(length(levels(as.factor(data.lbl))) == 1){
         return(2);
@@ -205,7 +205,7 @@ SetupMetaStats <- function(BHth=0.05, paramSet, analSet){
   paramSet$BHth <- BHth;
 
   #all common features
-  inmex.meta <- qs::qread("inmex_meta.qs");
+  inmex.meta <- ov_qs_read("inmex_meta.qs");
   gene.ids <- rownames(inmex.meta$data);
   # meta.sig features
   metade.features <- rownames(meta.mat);
@@ -328,7 +328,7 @@ PlotCochranQ <- function(imgNm){
         saveSet(analSet, "analSet");
     }
     mdata.all <- paramSet$mdata.all;
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     sel.inx <- mdata.all==1;
     sel.nms <- names(mdata.all)
     nbstudies <- sum(sel.inx);
@@ -340,7 +340,7 @@ PlotCochranQ <- function(imgNm){
         dataSet <- readDataset(data.nm);
 
         fit.obj.nm <- paste(data.nm, "fit.obj", sep=".");
-        fit2i <- qs::qread(fit.obj.nm);
+        fit2i <- ov_qs_read(fit.obj.nm);
         #fit2i <- dataSet$fit.obj;
 
         n1i=length(which(dataSet$cls==cls.lvls[1]));
@@ -384,11 +384,11 @@ PlotCochranQ <- function(imgNm){
 #' @license MIT License
 #'
 PerformBatchCorrection <- function(){
-    inmex.meta <- qs::qread("inmex_meta.qs")
+    inmex.meta <- ov_qs_read("inmex_meta.qs")
 
     bridge_in <- paste0(tempdir(), "/bridge_", paste0(sample(letters,6,replace=TRUE), collapse=""), "_in.qs")
     bridge_out <- sub("_in.qs", "_out.qs", bridge_in)
-    qs::qsave(list(
+    ov_qs_save(list(
       data = inmex.meta$data,
       data.lbl = inmex.meta$data.lbl,
       cls.lbl = inmex.meta$cls.lbl
@@ -399,7 +399,7 @@ PerformBatchCorrection <- function(){
       func = function(wd, bridge_in, bridge_out) {
         setwd(wd)
         require(sva)
-        input <- qs::qread(bridge_in)
+        input <- ov_qs_read(bridge_in)
         dat <- input$data
         data.lbl <- input$data.lbl
         cls.lbl <- input$cls.lbl
@@ -407,16 +407,16 @@ PerformBatchCorrection <- function(){
         modcombat <- model.matrix(~1, data = pheno)
         result <- ComBat(dat = dat, batch = data.lbl, mod = modcombat,
                          par.prior = TRUE, prior.plots = FALSE)
-        qs::qsave(result, bridge_out, preset = "fast")
+        ov_qs_save(result, bridge_out, preset = "fast")
       },
       args = list(wd = getwd(), bridge_in = bridge_in, bridge_out = bridge_out),
       timeout_sec = 300
     )
 
-    corrected_data <- if (file.exists(bridge_out)) qs::qread(bridge_out) else NULL
+    corrected_data <- if (file.exists(bridge_out)) ov_qs_read(bridge_out) else NULL
 
     inmex.meta$data <- corrected_data
-    qs::qsave(inmex.meta, "inmex_meta.qs")
+    ov_qs_save(inmex.meta, "inmex_meta.qs")
     .finalizeBatchCorrection();
     return(dataSets);
 }
@@ -430,7 +430,7 @@ RestoreMetaData <- function(){
     if(!file.exists("inmex.meta.orig.qs")){
         return(0);
     }
-    inmex.meta.orig <- qs::qread("inmex.meta.orig.qs");
+    inmex.meta.orig <- ov_qs_read("inmex.meta.orig.qs");
     .safe_qsave(inmex.meta.orig, "inmex_meta.qs");
     #msg("[MetaQC] RestoreMetaData: restoring datasets from original matrix");
     .update.datasets.from.meta(inmex.meta.orig);
@@ -494,7 +494,7 @@ RestoreMetaData <- function(){
     if(!exists("dataSets")){
         dataSets <<- list();
     }
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     #msg("[MetaQC] FinalizeBatchCorrection: updating datasets from merged matrix");
     .update.datasets.from.meta(inmex.meta);
     paramSet <- readSet(paramSet, "paramSet");

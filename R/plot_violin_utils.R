@@ -126,7 +126,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
         if (!file.exists("peptide_level_data.qs")) {
           return(0)
         }
-        pep.mat <- qs::qread("peptide_level_data.qs")
+        pep.mat <- ov_qs_read("peptide_level_data.qs")
         pep.row.id <- ResolveFeatureRowId(pep.mat, gene.id)
         if (!(pep.row.id %in% rownames(pep.mat))) {
           msg("[R DEBUG] PlotSelectedGene: feature ID not found in peptide matrix: ", gene.id)
@@ -277,7 +277,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
         if (!file.exists("peptide_level_data.qs")) {
           return(0)
         }
-        pep.mat <- qs::qread("peptide_level_data.qs")
+        pep.mat <- ov_qs_read("peptide_level_data.qs")
         pep.row.id <- ResolveFeatureRowId(pep.mat, gene.id)
         if (!(pep.row.id %in% rownames(pep.mat))) {
           msg("[R DEBUG] PlotSelectedGene: feature ID not found in peptide matrix: ", gene.id)
@@ -355,7 +355,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
 
   }else{ # metadata
     mdata.all <- paramSet$mdata.all;
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     if(inmex.meta$id.type == "entrez"){
       cmpdNm <- inmex.meta$gene.symbls[gene.id];
     }else{
@@ -532,7 +532,7 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
 
   }else{ # metadata
     mdata.all <- paramSet$mdata.all;
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     if(inmex.meta$id.type == "entrez"){
       cmpdNm <- inmex.meta$gene.symbls[gene.id];
     }else{

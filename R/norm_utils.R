@@ -34,14 +34,14 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
   # Read the current normalization input, which is rebuilt from the immutable
   # annotated baseline on every normalization submit.
   if(file.exists("norm.input.anot.qs")){
-    ds <- qs::qread("norm.input.anot.qs");
+    ds <- ov_qs_read("norm.input.anot.qs");
     #msg("[Norm] Using norm.input.anot.qs (current normalization input)")
   } else if(file.exists("orig.data.anot.qs")){
-    ds <- qs::qread("orig.data.anot.qs");
+    ds <- ov_qs_read("orig.data.anot.qs");
     #msg("[Norm] Using orig.data.anot.qs (annotated baseline)")
   } else {
     # Fallback for backward compatibility (older data that doesn't have orig.data.anot.qs)
-    ds <- qs::qread("data.anot.qs");
+    ds <- ov_qs_read("data.anot.qs");
     #msg("[Norm] Fallback: using data.anot.qs")
   }
   #msg("[Norm] Loaded data head rows=", paste(utils::head(rownames(ds), 5), collapse=", "),
@@ -185,7 +185,7 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
 
   # Final safeguard: remap rownames to annotated IDs if available
   if (file.exists("annotation.qs")) {
-    anot.id <- qs::qread("annotation.qs")
+    anot.id <- ov_qs_read("annotation.qs")
     if (!is.null(anot.id)) {
       if (!is.null(names(anot.id))) {
         mapped <- anot.id[rownames(data)]
@@ -220,7 +220,7 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
 
   dataSet$data.norm <- data
   fast.write(sanitizeSmallNumbers(data), file = "data_normalized.csv")
-  qs::qsave(data, file = "data.stat.qs")
+  ov_qs_save(data, file = "data.stat.qs")
 
   msgSet <- readSet(msgSet, "msgSet")
   sample_norm_msg <- msgSet$sample.norm.msg
@@ -247,7 +247,7 @@ ApplyFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts = list
   # Always rebuild from the immutable annotated baseline so repeated
   # normalization submits do not accumulate the previous filter state.
   if (file.exists("orig.data.anot.qs")) {
-    data <- qs::qread("orig.data.anot.qs")
+    data <- ov_qs_read("orig.data.anot.qs")
   } else {
     msgSet$current.msg <- c(msgSet$current.msg, "[Format Filter] No orig.data.anot.qs found, skipping format-specific filtering")
     saveSet(msgSet, "msgSet")
@@ -404,7 +404,7 @@ ApplyFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts = list
     }
   }
 
-  qs::qsave(data, "norm.input.anot.qs")
+  ov_qs_save(data, "norm.input.anot.qs")
   saveSet(msgSet, "msgSet")
 
   return(1L)
@@ -423,9 +423,9 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
     msg <- "[Filter] Using annotated matrix from dataset; skipping remap via annotation.qs."
   } else if(filterUnmapped == "false"){
     # need to update those with annotations
-    data1 <- qs::qread("data.raw.qs");
+    data1 <- ov_qs_read("data.raw.qs");
     colnames(data1) <- colnames(dataSet$data.norm)
-    anot.id <- qs::qread("annotation.qs");
+    anot.id <- ov_qs_read("annotation.qs");
     # Map by names when available to avoid positional mismatches
     if (!is.null(names(anot.id)) && length(intersect(rownames(data1), names(anot.id))) > 0) {
       mapped <- anot.id[rownames(data1)]
@@ -448,34 +448,34 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
       # For proteomics/phospho: prefer the current normalization input,
       # then fall back to the immutable annotated baseline.
       if (file.exists("norm.input.anot.qs")) {
-        raw.data.anot <- qs::qread("norm.input.anot.qs")
+        raw.data.anot <- ov_qs_read("norm.input.anot.qs")
         #msg("[Filter] Loading norm.input.anot.qs for proteomics")
       } else if (file.exists("orig.data.anot.qs")) {
-        raw.data.anot <- qs::qread("orig.data.anot.qs")
+        raw.data.anot <- ov_qs_read("orig.data.anot.qs")
         #msg("[Filter] Loading orig.data.anot.qs for proteomics baseline")
       } else if (file.exists("data.annotated.qs")) {
-        raw.data.anot <- qs::qread("data.annotated.qs")
+        raw.data.anot <- ov_qs_read("data.annotated.qs")
         #msg("[Filter] Loading data.annotated.qs for proteomics (fallback)")
       } else if (file.exists("data.anot.qs")) {
-        raw.data.anot <- qs::qread("data.anot.qs")
+        raw.data.anot <- ov_qs_read("data.anot.qs")
         #msg("[Filter] Loading data.anot.qs for proteomics (fallback)")
       } else if (file.exists("data.missed.qs")) {
         # Fallback to data.missed.qs if it exists (from previous workflow)
-        raw.data.anot <- qs::qread("data.missed.qs")
+        raw.data.anot <- ov_qs_read("data.missed.qs")
         #msg("[Filter] Loading data.missed.qs for proteomics (fallback)")
       } else {
         stop("No annotated data file found for proteomics filtering")
       }
     }else{
      if (file.exists("norm.input.anot.qs")) {
-       raw.data.anot <- qs::qread("norm.input.anot.qs");
+       raw.data.anot <- ov_qs_read("norm.input.anot.qs");
      } else {
-       raw.data.anot <- qs::qread("orig.data.anot.qs");
+       raw.data.anot <- ov_qs_read("orig.data.anot.qs");
      }
     }
     # Ensure annotated IDs applied if annotation vector available
     if (file.exists("annotation.qs")) {
-      anot.id <- qs::qread("annotation.qs")
+      anot.id <- ov_qs_read("annotation.qs")
       if (!is.null(names(anot.id)) && length(intersect(rownames(raw.data.anot), names(anot.id))) > 0) {
         mapped <- anot.id[rownames(raw.data.anot)]
         hit.inx <- !is.na(mapped)
@@ -630,7 +630,7 @@ NormalizeDataMetaMode <-function (nm, opt, colNorm="NA", scaleNorm="NA"){
     }
     dataSet$data.norm <- data;
     dataSet$norm.opt <- opt;
-    qs::qsave(data, file="data.stat.qs");
+    ov_qs_save(data, file="data.stat.qs");
     return(RegisterData(dataSet));
     
   }
@@ -898,7 +898,7 @@ SummarizeProteomicsData <- function(dataName = "",
   }
 
   # Load peptide matrix
-  pep.mat <- qs::qread("data.stat.qs")
+  pep.mat <- ov_qs_read("data.stat.qs")
   msgSet$current.msg <- paste0("Starting peptide summarization using method '", method,
                                "' with top_n=", top_n, ", min_peptides=", min_peptides, ".")
   saveSet(msgSet, "msgSet")
@@ -906,7 +906,7 @@ SummarizeProteomicsData <- function(dataName = "",
   # Load peptide-to-protein map
   pep.map <- NULL
   if (file.exists("peptide_to_protein_map.qs")) {
-    pep.map <- qs::qread("peptide_to_protein_map.qs")
+    pep.map <- ov_qs_read("peptide_to_protein_map.qs")
   } else if (!is.null(dataSet$prot.map)) {
     pep.map <- dataSet$prot.map
   } else if (!is.null(dataSet$pep.map)) {
@@ -953,11 +953,11 @@ SummarizeProteomicsData <- function(dataName = "",
   rownames(prot.mat) <- prot.ids
 
   # Persist protein-level matrix for downstream annotation
-  qs::qsave(prot.mat, "int.mat.qs")
-  qs::qsave(prot.mat, "orig.data.anot.qs")
-  qs::qsave(prot.mat, "norm.input.anot.qs")
-  qs::qsave(prot.mat, "data.missed.qs")
-  qs::qsave(prot.mat, "data.raw.qs")
+  ov_qs_save(prot.mat, "int.mat.qs")
+  ov_qs_save(prot.mat, "orig.data.anot.qs")
+  ov_qs_save(prot.mat, "norm.input.anot.qs")
+  ov_qs_save(prot.mat, "data.missed.qs")
+  ov_qs_save(prot.mat, "data.raw.qs")
 
   # Save peptide-level data for peptide-level DE analysis (shadow save for Arrow)
   shadow_save(pep.mat, "peptide_level_data.qs")
@@ -1030,7 +1030,7 @@ SummarizeProteomicsData <- function(dataName = "",
     saveSet(msgSet, "msgSet");
     return(list(mat = NULL, proc = NULL));
   }
-  msin <- try(qs::qread(msstats.path), silent = TRUE);
+  msin <- try(ov_qs_read(msstats.path), silent = TRUE);
   if (inherits(msin, "try-error") || is.null(msin)) {
     msgSet$current.msg <- c(msgSet$current.msg, "Failed to read msstats_input.qs.");
     saveSet(msgSet, "msgSet");
@@ -1246,7 +1246,7 @@ LoessNorm <- function(x, weights = NULL, span=0.7, iterations = 3){
 # Prepare MORlog: save expression matrix into dat.in.qs
 .prepare.morlog <- function(expr) {
   di <- list(expr = expr)
-  qs::qsave(di, "dat.in.qs")
+  ov_qs_save(di, "dat.in.qs")
   return(1L)
 }
 
@@ -1254,14 +1254,14 @@ LoessNorm <- function(x, weights = NULL, span=0.7, iterations = 3){
 # Apply MORlog back to the active dataSet
 .apply.morlog <- function(dataName) {
   dataSet <- readDataset(dataName)
-  di <- qs::qread("dat.in.qs")
+  di <- ov_qs_read("dat.in.qs")
 
   dataSet$expr <- di$expr
   dataSet$norm <- di$norm
 
   dataSet$data.norm <- dataSet$norm
   fast.write(dataSet$data.norm, file = "data_normalized.csv")
-  qs::qsave(dataSet$data.norm, file = "data.stat.qs")
+  ov_qs_save(dataSet$data.norm, file = "data.stat.qs")
 
   msgSet <- readSet(msgSet, "msgSet")
   sample_norm_msg <- msgSet$sample.norm.msg
@@ -1280,7 +1280,7 @@ LoessNorm <- function(x, weights = NULL, span=0.7, iterations = 3){
 morlog_micro_run <- function(expr_field = "expr", norm_field = "norm") {
   requireNamespace("DESeq2", quietly = TRUE)
 
-  di <- qs::qread("dat.in.qs")
+  di <- ov_qs_read("dat.in.qs")
   m  <- as.matrix(di[[expr_field]])
 
   # basic checks
@@ -1295,7 +1295,7 @@ morlog_micro_run <- function(expr_field = "expr", norm_field = "norm") {
   norm_counts <- DESeq2::counts(dds, normalized = TRUE)
   di[[norm_field]] <- log2(norm_counts + 1)
 
-  qs::qsave(di, "dat.in.qs")
+  ov_qs_save(di, "dat.in.qs")
   return(1L)
 }
 
@@ -1430,14 +1430,14 @@ PlotProteinProfile <- function(dataName = "", protein_id = "", imgName = "prot_p
     #msg("[PlotProteinProfile] abort: data.stat.qs missing")
     return("Peptide matrix (data.stat.qs) not found")
   }
-  peptide_matrix <- qs::qread("data.stat.qs")
-  protein_matrix <- qs::qread("int.mat.qs")
+  peptide_matrix <- ov_qs_read("data.stat.qs")
+  protein_matrix <- ov_qs_read("int.mat.qs")
   #msg("[PlotProteinProfile] peptide_matrix dim: ", paste(dim(peptide_matrix), collapse = "x"),
   #        " protein_matrix dim: ", paste(dim(protein_matrix), collapse = "x"))
   ds <- readDataset(dataName)
   if (file.exists("peptide_to_protein_map.qs")) {
     #msg("[PlotProteinProfile] using peptide_to_protein_map.qs")
-    peptide_to_protein_map <- qs::qread("peptide_to_protein_map.qs")
+    peptide_to_protein_map <- ov_qs_read("peptide_to_protein_map.qs")
   } else if (!is.null(ds$prot.map)) {
     #msg("[PlotProteinProfile] using ds$prot.map")
     peptide_to_protein_map <- ds$prot.map
@@ -1534,12 +1534,12 @@ BuildProteinOptions <- function() {
     #msg("[BuildProteinOptions] int.mat.qs not found")
     return(character(0))
   }
-  ids <- rownames(qs::qread("int.mat.qs"))
+  ids <- rownames(ov_qs_read("int.mat.qs"))
   labels <- ids
   mapped_entrez <- rep(NA_character_, length(ids))
 
   if (file.exists("annotation.qs")) {
-    anot <- qs::qread("annotation.qs")
+    anot <- ov_qs_read("annotation.qs")
     if (!is.null(anot)) {
       if (!is.null(names(anot))) {
         mapped_entrez <- unname(anot[ids])
@@ -1754,7 +1754,7 @@ ApplyMaxQuantFiltering <- function(data, removeContaminants = TRUE, removeDecoys
     return(list(data = data, stats = stats))
   }
 
-  mq_meta <- qs::qread("maxquant_metadata.qs")
+  mq_meta <- ov_qs_read("maxquant_metadata.qs")
 
   # Filter contaminants
   if (removeContaminants && "Potential.contaminant" %in% names(mq_meta)) {
@@ -1859,7 +1859,7 @@ ApplyDiannFiltering <- function(data, qvalueFilter = TRUE, pepFilter = FALSE, pe
     return(list(data = data, stats = stats))
   }
 
-  diann_meta <- qs::qread("diann_metadata.qs")
+  diann_meta <- ov_qs_read("diann_metadata.qs")
 
   # Filter by Q-value
   if (qvalueFilter && ("Q.Value" %in% names(diann_meta) || "PG.Qvalue" %in% names(diann_meta))) {
@@ -1943,7 +1943,7 @@ ApplyFragpipeFiltering <- function(data, removeContaminants = TRUE, minProb = 0.
     return(list(data = data, stats = stats))
   }
 
-  fp_meta <- qs::qread("fragpipe_metadata.qs")
+  fp_meta <- ov_qs_read("fragpipe_metadata.qs")
 
   # Filter contaminants
   if (removeContaminants && "Is.Contaminant" %in% names(fp_meta)) {
@@ -2026,7 +2026,7 @@ ApplySpectronautFiltering <- function(data, removeContaminants = TRUE, qvalueFil
     return(list(data = data, stats = stats))
   }
 
-  spec_meta <- qs::qread("spectronaut_metadata.qs")
+  spec_meta <- ov_qs_read("spectronaut_metadata.qs")
 
   # Filter contaminants (look for common contaminant markers)
   if (removeContaminants && "PG.IsContaminant" %in% names(spec_meta)) {
@@ -2285,9 +2285,9 @@ ApplyPhosphoFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts
 
   # Load current data
   if (file.exists("norm.input.anot.qs")) {
-    data <- qs::qread("norm.input.anot.qs")
+    data <- ov_qs_read("norm.input.anot.qs")
   } else if (file.exists("orig.data.anot.qs")) {
-    data <- qs::qread("orig.data.anot.qs")
+    data <- ov_qs_read("orig.data.anot.qs")
   } else {
     msgSet$current.msg <- c(msgSet$current.msg, "[Phospho Filter] No annotated data found - skipping format-specific filtering")
     saveSet(msgSet, "msgSet")
@@ -2326,7 +2326,7 @@ ApplyPhosphoFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts
   }
 
   # Save filtered data back
-  qs::qsave(result$data, "norm.input.anot.qs")
+  ov_qs_save(result$data, "norm.input.anot.qs")
 
   # Generate summary message
   stats <- result$stats
@@ -2366,7 +2366,7 @@ ApplyMaxQuantPhosphoFiltering <- function(data, removeContaminants = TRUE, remov
     return(list(data = data, stats = stats))
   }
 
-  mq_meta <- qs::qread("maxquant_phospho_metadata.qs")
+  mq_meta <- ov_qs_read("maxquant_phospho_metadata.qs")
 
   # Filter contaminants
   if (removeContaminants && "Potential.contaminant" %in% names(mq_meta)) {
@@ -2423,7 +2423,7 @@ ApplyDiannPhosphoFiltering <- function(data, qvalueFilter = TRUE, minPeptides = 
     return(list(data = data, stats = stats))
   }
 
-  diann_meta <- qs::qread("diann_phospho_metadata.qs")
+  diann_meta <- ov_qs_read("diann_phospho_metadata.qs")
 
   # Filter by Q-value
   if (qvalueFilter && ("Q.Value" %in% names(diann_meta) || "PG.Qvalue" %in% names(diann_meta))) {
@@ -2474,7 +2474,7 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
     return(list(data = data, stats = stats))
   }
 
-  fp_meta <- qs::qread("fragpipe_phospho_metadata.qs")
+  fp_meta <- ov_qs_read("fragpipe_phospho_metadata.qs")
 
   # Filter contaminants
   if (removeContaminants && "Is.Contaminant" %in% names(fp_meta)) {

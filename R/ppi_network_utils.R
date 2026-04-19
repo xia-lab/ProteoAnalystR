@@ -339,7 +339,7 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
   }
 
   loc.path <- paste0(paramSet$lib.path, org, "/localization.qs")
-  loc.data <- if (file.exists(loc.path)) qs::qread(loc.path) else NULL
+  loc.data <- if (file.exists(loc.path)) ov_qs_read(loc.path) else NULL
 
   msg(sprintf("[PPI] Querying %s in %s mode with %d seeds (min.score=%s, order=%s)",
               dbName, ifelse(use_uniprot_sqlite, "UniProt", "Entrez"), length(seeds), min.score, order))
@@ -715,7 +715,7 @@ CreateGraph <- function(dummy = NA) {
 
   if (file.exists(loc.path)) {
     msg(sprintf("[CreateGraph] Loading localization data from: %s\n", loc.path))
-    loc.data <- qs::qread(loc.path)
+    loc.data <- ov_qs_read(loc.path)
     loc.map <- loc.data[match(node.names, as.character(loc.data$EntrezID)), ]
 
     # Add compartment attributes to graph
@@ -1022,7 +1022,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
   if (file.exists(loc.path)) {
     msg(sprintf("[exportNetworkToJSON] Loading localization data from: %s
 ", loc.path))
-    loc.data <- qs::qread(loc.path)
+    loc.data <- ov_qs_read(loc.path)
     loc.map <- loc.data[match(nms, as.character(loc.data$EntrezID)), ]
     msg(sprintf("[exportNetworkToJSON] Mapped %d/%d nodes to localization data
 ",

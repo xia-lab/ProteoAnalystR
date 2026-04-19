@@ -238,7 +238,7 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
       data.anot <- .get.annotated.data()
       current.universe <- rownames(data.anot)
     } else if (paramSet$anal.type == "metadata") {
-      inmex <- qs::qread("inmex_meta.qs")
+      inmex <- ov_qs_read("inmex_meta.qs")
       current.universe <- rownames(inmex$data)
     } else {
       if (!is.null(paramSet$backgroundUniverse)) {
@@ -427,11 +427,11 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
 
   # Persist finalized hits.query for downstream visualizations (ridgeline/network).
   # For phospho data this must be phosphosite IDs, not intermediate gene symbols.
-  qs::qsave(hits.query, "hits_query.qs")
+  ov_qs_save(hits.query, "hits_query.qs")
 
   # msg("[PhosphoEnrichAnalysis] Saving enr.mat.qs to: ", getwd())
   # msg("[PhosphoEnrichAnalysis] res.mat dimensions: ", nrow(res.mat), " x ", ncol(res.mat))
-  qs:::qsave(res.mat, "enr.mat.qs")
+  ov_qs_save(res.mat, "enr.mat.qs")
 
   # Verify file was written
   if (file.exists("enr.mat.qs")) {

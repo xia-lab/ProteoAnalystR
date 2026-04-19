@@ -96,7 +96,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
 
   # Ensure DE uses annotated IDs if available
   if (file.exists("annotation.qs")) {
-    anot.id <- qs::qread("annotation.qs")
+    anot.id <- ov_qs_read("annotation.qs")
     #msg("[DE] Found annotation.qs with ", length(anot.id), " entries")
     if (!is.null(anot.id)) {
       if (!is.null(names(anot.id))) {
@@ -151,7 +151,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
   #msg("[DE] data.norm head IDs=", paste(utils::head(rownames(dataSet$data.norm), 5), collapse=", "),
   #        " cols=", paste(utils::head(colnames(dataSet$data.norm), 5), collapse=", "))
   if (file.exists("data.anot.qs")) {
-    da <- try(qs::qread("data.anot.qs"), silent = TRUE)
+    da <- try(ov_qs_read("data.anot.qs"), silent = TRUE)
     if (!inherits(da, "try-error")) {
       #msg("[DE] data.anot.qs head IDs=", paste(utils::head(rownames(da), 5), collapse=", "))
       if (any(duplicated(rownames(da)))) {
@@ -187,11 +187,11 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
 .run.deseq <- function(dataSet, anal.type, par1, par2, nested.opt) {
 
   # Read annotated data in parent (not available in child)
-  data.anot <- qs::qread("data.anot.qs")
+  data.anot <- ov_qs_read("data.anot.qs")
 
   bridge_in <- paste0(tempdir(), "/bridge_", paste0(sample(letters,6,replace=TRUE), collapse=""), "_in.qs")
   bridge_out <- sub("_in.qs", "_out.qs", bridge_in)
-  qs::qsave(list(
+  ov_qs_save(list(
     data.anot = data.anot,
     rmidx = dataSet$rmidx,
     fst.cls = dataSet$fst.cls,
@@ -206,7 +206,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
     func = function(wd, bridge_in, bridge_out) {
       setwd(wd)
       require(DESeq2)
-      input <- qs::qread(bridge_in)
+      input <- ov_qs_read(bridge_in)
 
       rmidx <- input$rmidx
       fst.cls <- input$fst.cls
@@ -275,7 +275,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
                                     colData = colData, design = design)
       set.seed(123)
       dds <- DESeq(dds, betaPrior = FALSE)
-      qs::qsave(dds, "deseq.res.obj.rds")
+      ov_qs_save(dds, "deseq.res.obj.rds")
 
       results_list <- list()
       if (length(contrast_list) > 0) {
@@ -308,17 +308,17 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
         results_list[[1]] <- topFeatures
       }
 
-      qs::qsave(results_list, bridge_out, preset = "fast")
+      ov_qs_save(results_list, bridge_out, preset = "fast")
     },
     args = list(wd = getwd(), bridge_in = bridge_in, bridge_out = bridge_out),
     timeout_sec = 300
   )
 
-  results_list <- if (file.exists(bridge_out)) qs::qread(bridge_out) else NULL
+  results_list <- if (file.exists(bridge_out)) ov_qs_read(bridge_out) else NULL
 
   dataSet$comp.res.list <- results_list
   dataSet$comp.res <- results_list[[1]]
-  qs::qsave(results_list, file = "dat.comp.res.qs")
+  ov_qs_save(results_list, file = "dat.comp.res.qs")
   return(dataSet)
 }
 
@@ -597,7 +597,7 @@ dataSet$comp.res.list      <- result.list
   # First try to load from file if not in memory
   if (is.null(dataSet$pepcount) && file.exists("pepcount.qs")) {
     #msg("[DEqMS] Loading pepcount from pepcount.qs file")
-    dataSet$pepcount <- qs::qread("pepcount.qs")
+    dataSet$pepcount <- ov_qs_read("pepcount.qs")
     #msg("[DEqMS] DEBUG: Loaded pepcount length=", length(dataSet$pepcount))
     #msg("[DEqMS] DEBUG: Loaded pepcount range: ", min(dataSet$pepcount, na.rm=TRUE), " - ", max(dataSet$pepcount, na.rm=TRUE))
   }
@@ -614,7 +614,7 @@ dataSet$comp.res.list      <- result.list
     # If the data were re-annotated (e.g., UniProt -> Entrez), try to remap
     # pepcount to the annotated IDs so DEqMS sees the correct PSM counts.
     if (na_before > 0 && file.exists("annotation.qs")) {
-      anot.id <- qs::qread("annotation.qs")
+      anot.id <- ov_qs_read("annotation.qs")
       if (!is.null(names(anot.id))) {
         lvl.opt <- if (!is.null(dataSet$lvl.opt)) dataSet$lvl.opt else if (!is.null(paramSet$lvl.opt)) paramSet$lvl.opt else "sum"
         lvl.opt <- tolower(lvl.opt)
@@ -1180,10 +1180,10 @@ MultiCovariateRegression <- function(fileName,
   useMeta <- !is.null(paramSet$performedBatch) && isTRUE(paramSet$performedBatch);
   if(internal){
     if(useMeta){
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     }else{
 
-    inmex.meta <- qs::qread("inmex.meta.orig.qs");
+    inmex.meta <- ov_qs_read("inmex.meta.orig.qs");
 
     }
     feature_table <- inmex.meta$data[, colnames(inmex.meta$data) %in% colnames(dataSet$data.norm)];
@@ -1535,7 +1535,7 @@ parse_contrast_groups <- function(contrast_str) {
 }
 
 .get.interaction.results <- function(dds.path = "deseq.res.obj.rds") {
-  dds <- qs::qread(dds.path)
+  dds <- ov_qs_read(dds.path)
   cat("Available result names:\n")
   
   # Automatically detect the interaction term
@@ -1706,8 +1706,8 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
   }
 
   # Load peptide-level data
-  pep.mat <- qs::qread("peptide_level_data.qs")
-  pep.map <- qs::qread("peptide_to_protein_map.qs")
+  pep.mat <- ov_qs_read("peptide_level_data.qs")
+  pep.map <- ov_qs_read("peptide_to_protein_map.qs")
 
   # Create a temporary dataset for peptide-level analysis
   peptide.dataSet <- dataSet
@@ -1784,7 +1784,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     return(NULL)
   }
 
-  pep.res <- try(qs::qread("peptide_de_results.qs"), silent = TRUE)
+  pep.res <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
   if (inherits(pep.res, "try-error")) {
     msg("[R DEBUG] Error reading peptide_de_results.qs")
     return(NULL)
@@ -1797,7 +1797,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     return(NULL)
   }
 
-  pep.map <- try(qs::qread("peptide_to_protein_map.qs"), silent = TRUE)
+  pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
   if (inherits(pep.map, "try-error")) {
     msg("[R DEBUG] Error reading peptide_to_protein_map.qs")
     return(NULL)
@@ -1962,8 +1962,8 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
     return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
   }
 
-  pep.res <- try(qs::qread("peptide_de_results.qs"), silent = TRUE)
-  pep.map <- try(qs::qread("peptide_to_protein_map.qs"), silent = TRUE)
+  pep.res <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
+  pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
   if (inherits(pep.res, "try-error") || inherits(pep.map, "try-error")) {
     return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
   }

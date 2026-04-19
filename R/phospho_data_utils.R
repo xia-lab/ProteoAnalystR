@@ -252,8 +252,8 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
   paramSet$data.format <- dataSet$format
   paramSet$oneDataAnalType <- "phospho";
 
-  qs::qsave(int.mat, "data.raw.qs")
-  qs::qsave(int.mat, "int.mat.qs");
+  ov_qs_save(int.mat, "data.raw.qs")
+  ov_qs_save(int.mat, "int.mat.qs");
   fast.write(sanitizeSmallNumbers(int.mat), file="data_original.csv")
   
   dataSet$data.norm <- int.mat
@@ -865,9 +865,9 @@ CollapsePhosphoToProtein <- function() {
 
   # Save files (needed for annotation to work)
   msg("[CollapsePhosphoToProtein] Saving protein-level data to disk...")
-  qs::qsave(protein_mat, "data.raw.qs");
-  qs::qsave(protein_mat, "int.mat.qs");
-  qs::qsave(protein_mat, "data.stat.qs");
+  ov_qs_save(protein_mat, "data.raw.qs");
+  ov_qs_save(protein_mat, "int.mat.qs");
+  ov_qs_save(protein_mat, "data.stat.qs");
   fast.write(sanitizeSmallNumbers(protein_mat), file="data_collapsed_protein.csv");
   msg("[CollapsePhosphoToProtein] Saved to data.raw.qs, int.mat.qs, data.stat.qs, data_collapsed_protein.csv")
 

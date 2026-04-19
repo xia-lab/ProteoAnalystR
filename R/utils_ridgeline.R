@@ -24,7 +24,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       stop("[Ridgeline] Required file missing: ", path)
     }
     tryCatch(
-      qs::qread(path),
+      ov_qs_read(path),
       error = function(e) {
         stop("[Ridgeline] Failed to read ", path, " | ", conditionMessage(e))
       }

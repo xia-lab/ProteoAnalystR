@@ -173,7 +173,7 @@ RegisterData <- function(dataSet, output=1){
   saveSet(paramSet, "paramSet");
 
   if(paramSet$on.public.web){
-    qs::qsave(dataSet, file=replace_extension_with_qs(dataName));
+    ov_qs_save(dataSet, file=replace_extension_with_qs(dataName));
     # CRITICAL: Also update in-memory cache to prevent stale reads
     # readDataset checks dataSets first, so we must keep it in sync
     if (exists("dataSets", envir = .GlobalEnv)) {
@@ -183,7 +183,7 @@ RegisterData <- function(dataSet, output=1){
     return(output);
   }else{
     if(paramSet$api.bool){
-        qs::qsave(dataSet, file=replace_extension_with_qs(dataName));
+        ov_qs_save(dataSet, file=replace_extension_with_qs(dataName));
         # Also update in-memory cache for consistency
         if (exists("dataSets", envir = .GlobalEnv)) {
           dataSets[[dataName]] <- dataSet;
@@ -241,7 +241,7 @@ SetListNms <- function(dataSet){
   
   # convert to entrez
   if(anal.type == "metadata"){
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     en.ids <- rownames(inmex.meta$data);
     nm <- "meta_data"
   }else if(anal.type == "onedata"){
@@ -459,11 +459,11 @@ doScatterJson <- function(dataName, filenm){
 
 # some utility functions to save memory for large data object
 .save.annotated.data <- function(my.dat){
-  qs::qsave(my.dat, "data.anot.qs"); 
+  ov_qs_save(my.dat, "data.anot.qs"); 
 }
 
 .get.annotated.data <- function(){
-   return(qs::qread("data.anot.qs"));
+   return(ov_qs_read("data.anot.qs"));
 }
 
 #'Record R Commands

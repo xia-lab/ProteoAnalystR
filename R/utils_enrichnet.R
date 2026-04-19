@@ -1,7 +1,7 @@
 
 
 my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", analSet){
-  enr.mat <- qs:::qread("enr.mat.qs");
+  enr.mat <- ov_qs_read("enr.mat.qs");
 
   hits <-  enr.mat[,"Hits"];
   pvals <- enr.mat[,"Pval"];
@@ -19,8 +19,8 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
   require(igraph);
   require(reshape);
 
-  current.featureset <- qs::qread("current_featureset.qs");
-  hits.query <- qs::qread("hits_query.qs")
+  current.featureset <- ov_qs_read("current_featureset.qs");
+  hits.query <- ov_qs_read("hits_query.qs")
   hits.query <- hits.query[rownames(enr.mat)];
   featuresets <- hits.query;
   n <- nrow(enr.mat);

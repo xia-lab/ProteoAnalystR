@@ -234,7 +234,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     meta.info <- dataSet$meta.info[hit.inx,];
   }
   #msg("[GetSigfeatures] DEBUG: About to save data.stat.qs...")
-  qs::qsave(data, file="data.stat.qs");
+  ov_qs_save(data, file="data.stat.qs");
   #msg("[GetSigfeatures] DEBUG: About to order comp.res by P.Value...")
   o <- with(dataSet$comp.res, order(P.Value, -abs(logFC), na.last = TRUE))
   dataSet$comp.res <- dataSet$comp.res[o, , drop = FALSE]
@@ -291,7 +291,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     fast.write(cbind(EntrezID=anot.id, signif (dataSet$comp.res,5), Symbols = gene.anot$symbol,  Name=gene.anot$name), row.names=F, file=filename);
   } else if (file.exists("annotation.qs")){ # annotation information available
     #msg("[GetSigfeatures] DEBUG: annotation.qs exists - loading...")
-    anot.id <- qs::qread("annotation.qs");
+    anot.id <- ov_qs_read("annotation.qs");
     #msg("[GetSigfeatures] DEBUG: anot.id loaded: class=", class(anot.id), " length=", length(anot.id))
     #msg("[GetSigfeatures] DEBUG: anot.id is.named=", !is.null(names(anot.id)))
     if(!is.null(names(anot.id))) {

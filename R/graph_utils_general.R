@@ -626,7 +626,7 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     return(0)
   }
 
-  loc.data <- qs::qread(loc.path)
+  loc.data <- ov_qs_read(loc.path)
   id.type <- if (!is.null(paramSet$data.idType)) paramSet$data.idType else "entrez"
 
   # Get network nodes and edges

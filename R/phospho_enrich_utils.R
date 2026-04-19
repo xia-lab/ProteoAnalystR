@@ -209,7 +209,7 @@ GetAvailableKinaseDBs <- function() {
   }
   db_file <- candidates[1]
   #msg("[.loadSingleKseaDB] Loading ", basename(db_file))
-  db_obj <- qs::qread(db_file)
+  db_obj <- ov_qs_read(db_file)
 
   # Normalize to list(kinase = substrates)
   if (is.list(db_obj) && !is.data.frame(db_obj)) {
