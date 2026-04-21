@@ -334,22 +334,34 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   msg("[Ridgeline] Created degs.plot with ", nrow(degs.plot), " rows")
   msg("[Ridgeline] degs.plot$entrez (first 5): ", paste(head(degs.plot$entrez, 5), collapse=", "))
 
-  # For protein lists, degs.plot$entrez contains Entrez IDs (from dataSet$prot.mat rownames)
-  # But hits.query contains UniProt IDs, so we need to convert back
+  # For protein lists, sigmat rownames may be Entrez (older pipeline) or
+  # already UniProt (current upstream writes UniProt directly to dataSet$prot.mat).
+  # hits.query always uses UniProt IDs, so degs.plot needs UniProt for the merge
+  # at line ~390 to find any matches.
+  #
+  # Detect the current format and convert only if the IDs look numeric (Entrez).
+  # Skipping this check caused every UniProt-rowname deploy to zero-out
+  # degs.plot (keys don't match an Entrez→UniProt lookup, all NAs, all dropped).
   if(anal.type == "proteinlist" && paramSet$data.idType == "uniprot") {
-    symbol.map <- readSet(symbol.map, "symbol.map")
-    if("uniprot" %in% colnames(symbol.map)) {
-      # Create Entrez -> UniProt mapping
-      entrez.to.uniprot <- setNames(symbol.map$uniprot, as.character(symbol.map$gene_id))
-      # Convert degs.plot$entrez from Entrez to UniProt
-      degs.plot$entrez <- entrez.to.uniprot[as.character(degs.plot$entrez)]
-      # Remove NAs (genes that couldn't be mapped back)
-      degs.plot <- degs.plot[!is.na(degs.plot$entrez), ]
-      msg("[Ridgeline] Converted degs.plot IDs from Entrez to UniProt for matching")
-      msg("[Ridgeline] After conversion - degs.plot has ", nrow(degs.plot), " rows")
-      msg("[Ridgeline] After conversion - degs.plot$entrez (first 5): ", paste(head(degs.plot$entrez, 5), collapse=", "))
+    sample_ids <- as.character(head(degs.plot$entrez, 20))
+    already_uniprot <- any(nzchar(sample_ids) & !grepl("^[0-9]+$", sample_ids))
+    if(already_uniprot) {
+      msg("[Ridgeline] degs.plot IDs already look like UniProt; skipping Entrez→UniProt conversion")
     } else {
-      msg("[Ridgeline] WARNING: symbol.map does not have uniprot column, cannot convert IDs")
+      symbol.map <- readSet(symbol.map, "symbol.map")
+      if("uniprot" %in% colnames(symbol.map)) {
+        # Create Entrez -> UniProt mapping
+        entrez.to.uniprot <- setNames(symbol.map$uniprot, as.character(symbol.map$gene_id))
+        # Convert degs.plot$entrez from Entrez to UniProt
+        degs.plot$entrez <- entrez.to.uniprot[as.character(degs.plot$entrez)]
+        # Remove NAs (genes that couldn't be mapped back)
+        degs.plot <- degs.plot[!is.na(degs.plot$entrez), ]
+        msg("[Ridgeline] Converted degs.plot IDs from Entrez to UniProt for matching")
+        msg("[Ridgeline] After conversion - degs.plot has ", nrow(degs.plot), " rows")
+        msg("[Ridgeline] After conversion - degs.plot$entrez (first 5): ", paste(head(degs.plot$entrez, 5), collapse=", "))
+      } else {
+        msg("[Ridgeline] WARNING: symbol.map does not have uniprot column, cannot convert IDs")
+      }
     }
   }
 
