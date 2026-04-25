@@ -469,6 +469,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 result.list <- list()
 for (nm in colnames(contrast.matrix)) {
   tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
+  if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
   colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
   result.list[[nm]] <- tbl
 }
@@ -732,6 +733,7 @@ dataSet$comp.res.list      <- result.list
     for (i in seq_along(contrast.names)) {
       nm <- contrast.names[i]
       tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
       # Ensure all required columns are present and properly formatted
       if ("P.Value" %in% colnames(tbl)) {
@@ -782,6 +784,7 @@ dataSet$comp.res.list      <- result.list
     for (i in seq_along(contrast.names)) {
       nm <- contrast.names[i]
       tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
       if ("P.Value" %in% colnames(tbl)) {
         tbl$P.Value <- as.numeric(as.character(tbl$P.Value))
@@ -812,6 +815,7 @@ dataSet$comp.res.list      <- result.list
 
     # 1. Get the standard Limma table first (for structure, logFC, AveExpr, etc.)
     tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+    if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
     # 2. CRITICAL FIX: Overwrite t, P.Value and adj.P.Val with DEqMS adjusted values
     # DEqMS stores results in $sca.t and $sca.p matrices
