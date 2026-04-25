@@ -1390,8 +1390,13 @@ MultiCovariateRegression <- function(fileName,
     fit <- contrasts.fit(fit, contrast.matrix);
     fit <- eBayes(fit, trend=robustTrend, robust=robustTrend);
     rest <- topTable(fit, number = Inf);
-    
-    if(contrast != "anova"){    
+    # Strip the "ID" column newer limma topTable prepends when rownames(fit)
+    # is non-null. Otherwise the rename below targets the wrong column and
+    # downstream abs(logfc.mat) blows up with "non-numeric-alike variable(s)
+    # in data frame: ID". Same defensive pattern is in GetLimmaResTable.
+    if (!is.null(rest$ID)) { rownames(rest) <- rest$ID; rest$ID <- NULL; }
+
+    if(contrast != "anova"){
       colnames(rest)[1] <- myargs[[1]];
       grp.nms<-c(ref,contrast)
       
@@ -1443,6 +1448,9 @@ MultiCovariateRegression <- function(fileName,
     # get results
     fit <- eBayes(fit, trend=robustTrend, robust=robustTrend);
     rest <- topTable(fit, number = Inf, coef = analysis.var);
+    # See note above: strip ID column from newer limma topTable so the
+    # rename below targets the real logFC column.
+    if (!is.null(rest$ID)) { rownames(rest) <- rest$ID; rest$ID <- NULL; }
     colnames(rest)[1] <- dataSet$par1 <- analysis.var;
     
     ### get results with no adjustment
