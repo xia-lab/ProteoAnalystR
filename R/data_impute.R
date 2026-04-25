@@ -206,7 +206,7 @@ ImputeMissingVar <- function(dataName="", method="min"){
     saveSet(msgSet, "msgSet");
     return(list(mat = NULL));
   }
-  msin <- try(qs::qread(msstats.path), silent = TRUE);
+  msin <- try(ov_qs_read(msstats.path), silent = TRUE);
   if (inherits(msin, "try-error") || is.null(msin)) {
     msgSet$current.msg <- c(msgSet$current.msg, "Failed to read msstats_input.qs for imputation.");
     saveSet(msgSet, "msgSet");
@@ -331,7 +331,7 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min") {
   }
 
   dataSet$data.norm <- new.mat;
-  qs::qsave(new.mat, "data.raw.qs");
+  ov_qs_save(new.mat, "data.raw.qs");
   fast.write(sanitizeSmallNumbers(new.mat), file="data_imputed.csv");
   msgSet$current.msg <- current.msg;
   saveSet(msgSet, "msgSet");

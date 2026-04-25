@@ -157,13 +157,13 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   if (dataSet$type == "prot") {
     prot.mat <- dataSet$data;
     if (!is.null(prot.mat)) {
-      qs::qsave(prot.mat, "int.mat.qs");
-      qs::qsave(prot.mat, "data.raw.qs");
+      ov_qs_save(prot.mat, "int.mat.qs");
+      ov_qs_save(prot.mat, "data.raw.qs");
       fast.write(sanitizeSmallNumbers(prot.mat), file="data_original.csv");
     }
     # NOTE: pepcount will be saved later after data filtering/alignment
   } else {
-    qs::qsave(dataSet$data, "data.raw.qs");
+    ov_qs_save(dataSet$data, "data.raw.qs");
     fast.write(sanitizeSmallNumbers(dataSet$data), file="data_original.csv");
   }
   
@@ -220,7 +220,7 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     saveSet(msgSet, "msgSet");
     return(0);
   }
-  qs::qsave(int.mat, "int.mat.qs");
+  ov_qs_save(int.mat, "int.mat.qs");
   msg <- paste("a total of ", ncol(int.mat), " samples and ", nrow(int.mat), " features were found");
   # remove NA, null
   # OPTIMIZED: Use rowSums instead of apply for 60-100x speedup
@@ -246,7 +246,7 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   saveSet(paramSet, "paramSet");
 
   # Save original data WITH missing values for QC plots (before imputation)
-  qs::qsave(int.mat, "data.with.missing.qs");
+  ov_qs_save(int.mat, "data.with.missing.qs");
 
   if(sum(na.inx) > 0){
     int.mat[na.inx] <- minVal/2;
@@ -295,7 +295,7 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   # save processed data for download user option
   data.proc <- sanitizeSmallNumbers(data.proc);
   fast.write(sanitizeSmallNumbers(data.proc), file="data_original.csv");
-  qs::qsave(data.proc, "data.raw.qs");
+  ov_qs_save(data.proc, "data.raw.qs");
   dataSet$data.norm  <- data.proc;
   metaInx = which(rownames(dataSet$meta.info) %in% colnames(data.proc))
   
@@ -326,7 +326,7 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
                                       metadata = dataSet$meta.info,
                                       fileName = fileName);
   if (!is.null(msstats.input)) {
-    qs::qsave(msstats.input, "msstats_input.qs");
+    ov_qs_save(msstats.input, "msstats_input.qs");
     fast.write(msstats.input, file = "msstats_input.csv");
     paramSet$dataSet$msstats.input <- "msstats_input.qs";
   }
@@ -350,7 +350,7 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     #msg("[ReadTabExpressData] DEBUG: pepcount range: ", min(pepcount_aligned, na.rm=TRUE), " - ", max(pepcount_aligned, na.rm=TRUE))
     #msg("[ReadTabExpressData] DEBUG: pepcount unique values: ", length(unique(pepcount_aligned)))
     #msg("[ReadTabExpressData] DEBUG: First 10 values: ", paste(head(pepcount_aligned, 10), collapse=", "))
-    qs::qsave(pepcount_aligned, "pepcount.qs");
+    ov_qs_save(pepcount_aligned, "pepcount.qs");
   } else if (is.null(dataSet$pepcount)) {
     #msg("[ReadTabExpressData] INFO: dataSet$pepcount is NULL - no peptide counts available")
   }
@@ -442,7 +442,7 @@ ReadAnnotationTable <- function(fileName) {
     msgSet$current.msg <- "Please make sure the annotation contains exactly 3 columns";
   }
   colnames(anot.data) = c("gene_id", "symbol", "name");
-  qs::qsave(anot.data, "anot_table.qs");
+  ov_qs_save(anot.data, "anot_table.qs");
   saveSet(msgSet, "msgSet");
   return(1);
 }
@@ -592,7 +592,7 @@ ReadCustomLib <- function(fileName) {
   }
   
   # Step 6: Save the gene set list into a .qs file
-  qs::qsave(gene_set_list, "custom_lib.qs")
+  ov_qs_save(gene_set_list, "custom_lib.qs")
   
   # Update paramSet with the custom library file name
   paramSet$custom.lib <- fileName
@@ -1030,7 +1030,7 @@ ReadMetaData <- function(metafilename){
     }
   }
 
-  qs::qsave(mq_metadata, "maxquant_metadata.qs")
+  ov_qs_save(mq_metadata, "maxquant_metadata.qs")
   #msg("[MaxQuant] Saved metadata with ", nrow(mq_metadata), " proteins for later filtering")
 
   # Return the exact list structure your workflow expects
@@ -1825,7 +1825,7 @@ SetSpectronautOptions <- function(inputType = "protein") {
     }
   }
 
-  qs::qsave(fp_metadata, "fragpipe_metadata.qs")
+  ov_qs_save(fp_metadata, "fragpipe_metadata.qs")
   #msg("[FragPipe] Saved metadata with ", nrow(fp_metadata), " proteins for later filtering")
 
   list(
@@ -2164,7 +2164,7 @@ GetAnalysisType <- function(){
     if (!is.null(pepcount)) {
       diann_metadata$Peptide.Count <- pepcount[rownames(intens)]
     }
-    qs::qsave(diann_metadata, "diann_metadata.qs")
+    ov_qs_save(diann_metadata, "diann_metadata.qs")
     #msg("[DIA-NN] Saved metadata with ", nrow(diann_metadata), " proteins for later filtering")
 
     return(list(
@@ -2253,7 +2253,7 @@ GetAnalysisType <- function(){
         cnt <- stats::aggregate(as.numeric(dat[[count_col]]), by = list(Protein = sapply(as.character(dat$Protein.Ids), function(x) strsplit(x, "[;|,]", perl = TRUE)[[1]][1])), FUN = max, na.rm = TRUE)
         diann_meta$Peptide.Count <- cnt$x[match(diann_meta$Protein.IDs, cnt$Protein)]
       }
-      qs::qsave(diann_meta, "diann_metadata.qs")
+      ov_qs_save(diann_meta, "diann_metadata.qs")
 
       return(list(
         data = intens,
@@ -2317,7 +2317,7 @@ GetAnalysisType <- function(){
     cnt <- stats::aggregate(as.numeric(dat[[count_col]]), by = list(Protein = df$Protein), FUN = max, na.rm = TRUE)
     diann_meta$Peptide.Count <- cnt$x[match(diann_meta$Protein.IDs, cnt$Protein)]
   }
-  qs::qsave(diann_meta, "diann_metadata.qs")
+  ov_qs_save(diann_meta, "diann_metadata.qs")
   runs <- colnames(intens)
   meta.df <- data.frame(Condition = factor(rep('Group1', length(runs))), stringsAsFactors = FALSE)
   rownames(meta.df) <- runs
@@ -2681,7 +2681,7 @@ GetAnalysisType <- function(){
 
     if (!is.null(msstats.fmt)) {
       # Save msstats input for later use (normalization, imputation, summarization in ProteoAnalyst pipeline)
-      qs::qsave(msstats.fmt, "msstats_input.qs")
+      ov_qs_save(msstats.fmt, "msstats_input.qs")
       #msg('[Spectronaut] MSstats format saved with ', length(unique(msstats.fmt$ProteinName)), ' proteins')
 
       # Simple aggregation to protein level (median intensity per protein per run)
@@ -2727,7 +2727,7 @@ GetAnalysisType <- function(){
         protein.col <- protein.id.candidates[protein.id.candidates %in% colnames(dat)][1]
         if (!is.na(protein.col) && nzchar(protein.col)) {
           spec_metadata <- build.spectronaut.metadata(dat, protein.col, get.spectronaut.protein.ids(dat, protein.col), rownames(intens), pepcount)
-          qs::qsave(spec_metadata, "spectronaut_metadata.qs")
+          ov_qs_save(spec_metadata, "spectronaut_metadata.qs")
         }
 
         #msg('[Spectronaut] MSstatsConvert successful: ', nrow(intens), ' proteins, ', ncol(intens), ' runs')
@@ -2849,7 +2849,7 @@ GetAnalysisType <- function(){
 
   # Save Spectronaut metadata for later filtering during normalization
   spec_metadata <- build.spectronaut.metadata(dat[valid.rows, , drop = FALSE], protein.col, raw.protein.ids, rownames(intens), pepcount)
-  qs::qsave(spec_metadata, "spectronaut_metadata.qs")
+  ov_qs_save(spec_metadata, "spectronaut_metadata.qs")
   #msg("[Spectronaut] Saved metadata with ", nrow(spec_metadata), " proteins for later filtering")
 
   return(list(

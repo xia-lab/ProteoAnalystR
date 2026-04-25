@@ -300,7 +300,7 @@ RemoveMissingPercent <- function(dataName="", percent=perct){
   paramSet <- readSet(paramSet, "paramSet");
   msgSet <- readSet(msgSet, "msgSet");
   if(paramSet$anal.type=="onedata"){
-  data.annotated <- qs::qread("orig.data.anot.qs")
+  data.annotated <- ov_qs_read("orig.data.anot.qs")
   }else{
   data.annotated <- readDataQs("data.annotated.qs", paramSet$anal.type, dataName);
   }
@@ -807,7 +807,7 @@ CheckMetaIntegrity <- function(){
 #'
 
 PlotMetaPCA <- function(imgNm, dpi, format, interactive=F){
-  inmex.meta <- qs::qread("inmex_meta.qs");
+  inmex.meta <- ov_qs_read("inmex_meta.qs");
   x <- inmex.meta[["data"]];
   dpi <- as.numeric(dpi);
   plotlyNm <- paste0(imgNm, ".rda");
@@ -870,7 +870,7 @@ PlotMetaPCA <- function(imgNm, dpi, format, interactive=F){
 
 PlotMetaDensity<- function(imgNm, dpi=96, format, interactive=F){
   require("ggplot2")
-  inmex.meta <- qs::qread("inmex_meta.qs");
+  inmex.meta <- ov_qs_read("inmex_meta.qs");
   dat <- inmex.meta$data;
   imgNm <- paste(imgNm, "dpi", dpi, ".", format, sep="");
   dpi <- as.numeric(dpi);

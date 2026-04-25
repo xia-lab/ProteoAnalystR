@@ -107,7 +107,7 @@
       data.anot <- .get.annotated.data();
       current.universe <- rownames(data.anot);
     }else if(paramSet$anal.type == "metadata"){
-      inmex <- qs::qread("inmex_meta.qs");
+      inmex <- ov_qs_read("inmex_meta.qs");
       current.universe <- rownames(inmex$data);
     }else{
       if(!is.null(paramSet$backgroundUniverse)){
@@ -160,7 +160,7 @@
 
   }
 
-  qs::qsave(hits.query, "hits_query.qs");
+  ov_qs_save(hits.query, "hits_query.qs");
 
   names(hits.query) <- names(current.featureset);
   hit.num<-unlist(lapply(hits.query, function(x){length(unique(x))}), use.names=FALSE);
@@ -256,7 +256,9 @@
 
   resTable <- data.frame(Pathway=rownames(res.mat), res.mat);
 
-  qs::qsave(res.mat, "enr.mat.qs");
+  # msg("[EnrichAnalysis] Saving enr.mat.qs to: ", getwd())
+  # msg("[EnrichAnalysis] res.mat dimensions: ", nrow(res.mat), " x ", ncol(res.mat))
+  ov_qs_save(res.mat, "enr.mat.qs");
 
   # Verify file was written
   if (file.exists("enr.mat.qs")) {
@@ -376,7 +378,7 @@
     names(set.ids) = firstup(names(set.ids));
     names(set.ids) = gsub("-", "_", names(set.ids));
   }
-  qs::qsave(current.featureset, "current_featureset.qs");
+  ov_qs_save(current.featureset, "current_featureset.qs");
   res <- list();
   res$current.setlink <- my.lib$link;
   res$current.setids <- set.ids;
@@ -443,7 +445,7 @@ PlotGSViewNew <-function(cmpdNm, format="png", dpi=96, imgName){
 
   
   # Load the custom gene set library
-  my.lib <- qs::qread("custom_lib.qs")
+  my.lib <- ov_qs_read("custom_lib.qs")
 
   # Extract the specific gene set based on the function type (e.g., cell line)
   current.featureset <- my.lib
@@ -465,7 +467,7 @@ PlotGSViewNew <-function(cmpdNm, format="png", dpi=96, imgName){
   }
 
   # Save the processed gene set to a new file
-  qs::qsave(current.featureset, "current_featureset.qs")
+  ov_qs_save(current.featureset, "current_featureset.qs")
   
   # Create the result object to return
   res <- list()

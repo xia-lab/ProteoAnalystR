@@ -625,13 +625,48 @@ PerformSetOperation_DataEnr <- function(nms, operation, refNm){
   return(com.symbols);
 }
 
-# can also be done by microservice
-# =============================================================================
-# RSclient subprocess execution (Rserve fork) — available on all deployments
-# =============================================================================
+#' Execute function in isolated RSclient fork
+#' @param func Function to run in forked Rserve child
+#' @param args List of arguments passed via do.call
+#' @param timeout_sec Hard timeout before child is killed
+#' @return Result of do.call(func, args)
 run_func_via_rsclient <- function(func, args = list(), timeout_sec = 60) {
   conn <- RSclient::RS.connect(host = "localhost", port = 6311)
   on.exit(try(RSclient::RS.close(conn), silent = TRUE))
+  # Inject the qs wrapper helpers into the subprocess R session. Mirrors the
+  # definitions in _script_loader.R / XiaLabPro/R/ov_persistence.R so callers
+  # writing `ov_qs_read(f)` / `ov_qs_save(obj, f)` inside their subprocess func
+  # body work transparently — the subprocess is a fresh R session and does not
+  # inherit master-session helpers otherwise.
+  RSclient::RS.eval(conn, quote({
+    ov_qs_read <- function(file, ...) {
+      if (file.exists(file)) {
+        r <- try(qs2::qs_read(file, ...), silent = TRUE)
+        if (!inherits(r, "try-error")) return(r)
+        return(qs::qread(file, ...))
+      }
+      if (endsWith(tolower(file), ".qs")) {
+        v2 <- paste0(substr(file, 1, nchar(file) - 3L), ".qs2")
+        if (file.exists(v2)) { r <- try(qs2::qs_read(v2, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v2, ...)) }
+      } else if (endsWith(tolower(file), ".qs2")) {
+        v1 <- paste0(substr(file, 1, nchar(file) - 4L), ".qs")
+        if (file.exists(v1)) { r <- try(qs2::qs_read(v1, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v1, ...)) }
+      }
+      stop("ov_qs_read: neither .qs2 nor .qs found for: ", file, call. = FALSE)
+    }
+    ov_qs_save <- function(obj, file, ...) {
+      .args <- list(...)
+      for (.k in c("preset", "nthreads", "check_hash")) .args[[.k]] <- NULL
+      do.call(qs2::qs_save, c(list(object = obj, file = file), .args))
+      invisible(file)
+    }
+    ov_qs_exists <- function(file) {
+      if (file.exists(file)) return(TRUE)
+      if (endsWith(tolower(file), ".qs"))  return(file.exists(paste0(substr(file, 1, nchar(file) - 3L), ".qs2")))
+      if (endsWith(tolower(file), ".qs2")) return(file.exists(paste0(substr(file, 1, nchar(file) - 4L), ".qs")))
+      FALSE
+    }
+  }))
   RSclient::RS.assign(conn, ".exec_wd", getwd())
   RSclient::RS.assign(conn, ".exec_func", func)
   RSclient::RS.assign(conn, ".exec_args", args)
@@ -644,47 +679,13 @@ run_func_via_rsclient <- function(func, args = list(), timeout_sec = 60) {
   }))
 }
 
-rsclient_isolated_exec <- function(func_body, input_data, packages = character(0),
-                                   timeout = 180, output_type = "qs") {
-  bridge_tmp <- file.path(tempdir(), "rsclient_bridge")
-  if (!dir.exists(bridge_tmp)) dir.create(bridge_tmp, recursive = TRUE)
-  uid <- paste0(sample(letters, 6), collapse = "")
-  input_path <- file.path(bridge_tmp, paste0(uid, "_in.qs"))
-  output_path <- file.path(bridge_tmp, paste0(uid, "_out.qs"))
-  qs::qsave(input_data, input_path, preset = "fast"); Sys.sleep(0.02)
-  on.exit({ for (p in c(input_path, output_path)) if (file.exists(p)) unlink(p) }, add = TRUE)
-  result <- run_func_via_rsclient(
-    func = function(input_path, output_path, func_body, pkgs) {
-      tryCatch({
-        Sys.setenv(RGL_USE_NULL = TRUE)
-        for (pkg in pkgs) suppressPackageStartupMessages(library(pkg, character.only = TRUE))
-        res <- func_body(qs::qread(input_path))
-        qs::qsave(res, output_path, preset = "fast"); Sys.sleep(0.02)
-        list(success = TRUE)
-      }, error = function(e) list(success = FALSE, message = e$message))
-    },
-    args = list(input_path = input_path, output_path = output_path,
-                func_body = func_body, pkgs = packages),
-    timeout_sec = timeout)
-  if (isTRUE(result$success) && file.exists(output_path)) return(qs::qread(output_path))
-  msg <- if (!is.null(result$message)) result$message else "RSclient subprocess failed"
-  message("[rsclient_isolated_exec] ", msg)
-  return(list(success = FALSE, message = msg))
-}
-
-# Closure executor — always forks via RSclient (available on all deployments)
-.perform.computing <- function(){
-  run_func_via_rsclient(
-    func = function(wd) {
-      setwd(wd)
-      dat.in <- qs::qread("dat.in.qs")
-      dat.in$my.res <- dat.in$my.fun()
-      qs::qsave(dat.in, file = "dat.in.qs")
-    },
-    args = list(wd = getwd()),
-    timeout_sec = 300
-  )
-}
+#' Execute heavy package function in isolated RSclient fork
+#' @param func_body Function(input_data) to run in child
+#' @param input_data List serialized via qs to child
+#' @param packages Packages to load in child before execution
+#' @param timeout Timeout in seconds
+#' @param output_type "qs" for complex objects, "arrow" for data frames
+#' @return Result from child process
 
 fast.write <- function(dat, file, row.names=TRUE){
     tryCatch(
@@ -1067,7 +1068,7 @@ saveSet <- function(obj=NA, set="", output=1){
         assign(".set.cache", cache, envir = .GlobalEnv)
       }
 
-      qs::qsave(obj, paste0(set, ".qs"));
+      ov_qs_save(obj, paste0(set, ".qs"));
 
       return(output);
 }
@@ -1083,10 +1084,12 @@ readSet <- function(obj = NULL, set = "") {
     }
   }
 
+  # ov_qs_exists + ov_qs_read check BOTH .qs2 and legacy .qs, so existing user
+  # projects persisted as .qs keep working while new writes land in .qs2.
   file_path <- paste0(set, ".qs")
 
-  if (file.exists(file_path)) {
-    obj <- qs::qread(file_path)
+  if (ov_qs_exists(file_path)) {
+    obj <- ov_qs_read(file_path)
 
     # Update in-memory cache after reading from disk (if enabled)
     if(exists(".use.memory.cache", envir = .GlobalEnv) &&
@@ -1205,7 +1208,7 @@ readDataset <- function(dataName = "", quiet = FALSE) {
 
       } else {                                              # fall back to .qs
         qsfile <- replace_extension_with_qs(dataName)
-        obj <- qs::qread(qsfile)
+        obj <- ov_qs_read(qsfile)
       }
     
 
@@ -1283,17 +1286,17 @@ PrepareSqliteDB <- function(sqlite_Path, onweb = TRUE) {
 
 saveDataQs <-function(data, name, module.nm, dataName){
   if(module.nm == "metadata"){
-    qs::qsave(data, file=paste0(dataName, "_data/", name));
+    ov_qs_save(data, file=paste0(dataName, "_data/", name));
   }else{
-    qs::qsave(data, file=name);
+    ov_qs_save(data, file=name);
   }
 }
 
 readDataQs <-function(name, module.nm, dataName){
   if(module.nm == "metadata"){
-    dat <- qs::qread(file=paste0(dataName, "_data/", name));
+    dat <- ov_qs_read(file=paste0(dataName, "_data/", name));
   }else{
-    dat <- qs::qread(file=name);
+    dat <- ov_qs_read(file=name);
   }
   return(dat);
 }
@@ -1305,7 +1308,7 @@ PrepareReport <- function(objective, abstract, animalDetails, exposureDetails, c
   dataSet$reportSummary$animal <<- animalDetails;
   dataSet$reportSummary$exposure <<- exposureDetails;
   dataSet$reportSummary$chip <<- ecotoxchipDetails;
-  data.orig <- qs::qread("data.raw.qs"); 
+  data.orig <- ov_qs_read("data.raw.qs"); 
   dataSet$reportSummary$read.msg <<- paste("In this analysis, the uploaded data files were combined into a ", nrow(data.orig),
                                           " (wells) by ", ncol(data.orig), " (samples) data matrix.", sep="");
 }
