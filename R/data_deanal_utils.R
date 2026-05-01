@@ -96,7 +96,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
 
   # Ensure DE uses annotated IDs if available
   if (file.exists("annotation.qs")) {
-    anot.id <- qs::qread("annotation.qs")
+    anot.id <- ov_qs_read("annotation.qs")
     #msg("[DE] Found annotation.qs with ", length(anot.id), " entries")
     if (!is.null(anot.id)) {
       if (!is.null(names(anot.id))) {
@@ -151,7 +151,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
   #msg("[DE] data.norm head IDs=", paste(utils::head(rownames(dataSet$data.norm), 5), collapse=", "),
   #        " cols=", paste(utils::head(colnames(dataSet$data.norm), 5), collapse=", "))
   if (file.exists("data.anot.qs")) {
-    da <- try(qs::qread("data.anot.qs"), silent = TRUE)
+    da <- try(ov_qs_read("data.anot.qs"), silent = TRUE)
     if (!inherits(da, "try-error")) {
       #msg("[DE] data.anot.qs head IDs=", paste(utils::head(rownames(da), 5), collapse=", "))
       if (any(duplicated(rownames(da)))) {
@@ -161,10 +161,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
   }
   if (dataSet$de.method == "deseq2") {
     dataSet <- prepareContrast(dataSet, anal.type, par1, par2, nested.opt);
-    if (identical(dataSet, 0)) return(0);
-    .prepare.deseq(dataSet, anal.type, par1, par2 , nested.opt);
-    .perform.computing();
-    dataSet <- .save.deseq.res(dataSet);
+    dataSet <- .run.deseq(dataSet, anal.type, par1, par2, nested.opt);
   }else if (dataSet$de.method == "limma"){
     dataSet <- prepareContrast(dataSet, anal.type, par1, par2, nested.opt);
     if (identical(dataSet, 0)) return(0);
@@ -207,140 +204,142 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
   return(RegisterData(dataSet));
 }
 
-.prepare.deseq <- function(dataSet, anal.type, par1, par2, nested.opt) {
+.run.deseq <- function(dataSet, anal.type, par1, par2, nested.opt) {
 
-  my.fun <- function() {
-    require(DESeq2)
+  # Read annotated data in parent (not available in child)
+  data.anot <- ov_qs_read("data.anot.qs")
 
-    # Helper: prefix numeric-looking group labels
-    formatLevel <- function(x) {
-      if (grepl("^[0-9]", x)) paste0(dataSet$analysisVar, "_", x) else x
-    }
+  bridge_in <- paste0(tempdir(), "/bridge_", paste0(sample(letters,6,replace=TRUE), collapse=""), "_in.qs")
+  bridge_out <- sub("_in.qs", "_out.qs", bridge_in)
+  ov_qs_save(list(
+    data.anot = data.anot,
+    rmidx = dataSet$rmidx,
+    fst.cls = dataSet$fst.cls,
+    analysisVar = dataSet$analysisVar,
+    block = dataSet$block,
+    anal.type = anal.type,
+    par1 = par1
+  ), bridge_in, preset = "fast")
+  on.exit(unlink(c(bridge_in, bridge_out)), add = TRUE)
 
-    # Helper: parse contrast string "A vs. B"
-    parse_contrast_groups <- function(cstr) {
-      comps <- strsplit(cstr, " vs\\.?\\s*")[[1]]
-      if (length(comps) != 2) stop(paste("Invalid contrast format:", cstr))
-      return(comps)
-    }
+  run_func_via_rsclient(
+    func = function(wd, bridge_in, bridge_out) {
+      setwd(wd)
+      require(DESeq2)
+      input <- ov_qs_read(bridge_in)
 
-    # Extract count data
-    data.anot <- .get.annotated.data();
-    if (length(dataSet$rmidx) > 0) {
-      data.anot <- data.anot[, -dataSet$rmidx]
-    } 
+      rmidx <- input$rmidx
+      fst.cls <- input$fst.cls
+      analysisVar <- input$analysisVar
+      block <- input$block
+      anal.type <- input$anal.type
+      par1 <- input$par1
+      data.anot <- input$data.anot
 
-    # Format class labels
-    if (any(grepl("(^[0-9]+).*", dataSet$fst.cls))) {
-      fst.cls <- paste0(dataSet$analysisVar, "_", dataSet$fst.cls)
-    } else {
-      fst.cls <- dataSet$fst.cls
-    }
-    fst.cls <- as.character(fst.cls)                   # <<< NEW
-
-    all_conditions <- unique(fst.cls)
-    contrast_list <- list()
-
-    # ---- Single-factor designs ----
-    colData <- data.frame(condition = factor(fst.cls,     # <<< REPLACED
-                                             levels = all_conditions))
-
-    if (!is.null(dataSet$block)) {
-      colData$block <- factor(dataSet$block)
-      design <- ~ block + condition
-    } else {
-      design <- ~ condition
-    }
-
-    if (anal.type == "default") {
-      # OPTIMIZED: Calculate length once for loop bounds
-      n_conditions <- length(all_conditions)
-      for (i in 1:(n_conditions - 1))
-        for (j in (i + 1):n_conditions) {
-          contrast_name <- paste0(all_conditions[i], " vs ", all_conditions[j])
-          contrast_list[[contrast_name]] <-
-            c("condition",
-              all_conditions[j],   # NUMERATOR = second term
-              all_conditions[i])   # DENOMINATOR = first term
-        }
-
-    } else if (anal.type == "reference") {
-      ref <- formatLevel(par1)
-      if (!(ref %in% all_conditions))
-        stop("Reference level not found: ", ref)
-
-      for (cond in setdiff(all_conditions, ref)) {
-        contrast_name <- paste0(ref, " vs ", cond)
-        contrast_list[[contrast_name]] <-
-          c("condition", cond, ref)   # numerator = second term
+      formatLevel <- function(x) {
+        if (grepl("^[0-9]", x)) paste0(analysisVar, "_", x) else x
+      }
+      parse_contrast_groups <- function(cstr) {
+        comps <- strsplit(cstr, " vs\\.?\\s*")[[1]]
+        if (length(comps) != 2) stop(paste("Invalid contrast format:", cstr))
+        return(comps)
       }
 
-    } else if (anal.type == "custom") {
-      comps <- parse_contrast_groups(par1)
-      comps <- vapply(comps, formatLevel, "")
-      if (!all(comps %in% all_conditions))
-        stop("Invalid custom contrast: ", par1)
+      if (length(rmidx) > 0) {
+        data.anot <- data.anot[, -rmidx]
+      }
 
-      contrast_name <- paste0(comps[1], " vs ", comps[2])
-      contrast_list[[contrast_name]] <-
-        c("condition", comps[2], comps[1]) # numerator = second term
-    }
+      if (any(grepl("(^[0-9]+).*", fst.cls))) {
+        fst.cls <- paste0(analysisVar, "_", fst.cls)
+      }
+      fst.cls <- as.character(fst.cls)
 
-    # ---- Run DESeq2 ----
-    count_mat <- data.anot
-    if (any(!is.finite(count_mat))) {
-      count_mat[!is.finite(count_mat)] <- 0
-    }
-    dds <- DESeqDataSetFromMatrix(countData = round(count_mat),
-                                  colData   = colData,
-                                  design    = design)
-    # ensure DESeq2 operations use a fixed seed for reproducible DE gene lists
-    set.seed(123)
-    dds <- DESeq(dds, betaPrior = FALSE)
-    qs::qsave(dds, "deseq.res.obj.rds")
+      all_conditions <- unique(fst.cls)
+      contrast_list <- list()
 
-    # ---- Extract contrast results ----
-    results_list <- list()
-    if (length(contrast_list) > 0) {
-      for (contrast_name in names(contrast_list)) {
-        res <- results(dds,
-                       contrast            = contrast_list[[contrast_name]],
-                       independentFiltering = FALSE,
-                       cooksCutoff          = Inf)
+      colData <- data.frame(condition = factor(fst.cls, levels = all_conditions))
 
+      if (!is.null(block)) {
+        colData$block <- factor(block)
+        design <- ~ block + condition
+      } else {
+        design <- ~ condition
+      }
+
+      if (anal.type == "default") {
+        n_conditions <- length(all_conditions)
+        for (i in 1:(n_conditions - 1))
+          for (j in (i + 1):n_conditions) {
+            contrast_name <- paste0(all_conditions[i], " vs ", all_conditions[j])
+            contrast_list[[contrast_name]] <-
+              c("condition", all_conditions[j], all_conditions[i])
+          }
+      } else if (anal.type == "reference") {
+        ref <- formatLevel(par1)
+        if (!(ref %in% all_conditions)) stop("Reference level not found: ", ref)
+        for (cond in setdiff(all_conditions, ref)) {
+          contrast_name <- paste0(ref, " vs ", cond)
+          contrast_list[[contrast_name]] <- c("condition", cond, ref)
+        }
+      } else if (anal.type == "custom") {
+        comps <- parse_contrast_groups(par1)
+        comps <- vapply(comps, formatLevel, "")
+        if (!all(comps %in% all_conditions)) stop("Invalid custom contrast: ", par1)
+        contrast_name <- paste0(comps[1], " vs ", comps[2])
+        contrast_list[[contrast_name]] <- c("condition", comps[2], comps[1])
+      }
+
+      count_mat <- data.anot
+      if (any(!is.finite(count_mat))) count_mat[!is.finite(count_mat)] <- 0
+      dds <- DESeqDataSetFromMatrix(countData = round(count_mat),
+                                    colData = colData, design = design)
+      set.seed(123)
+      dds <- DESeq(dds, betaPrior = FALSE)
+      ov_qs_save(dds, "deseq.res.obj.rds")
+
+      results_list <- list()
+      if (length(contrast_list) > 0) {
+        for (contrast_name in names(contrast_list)) {
+          res <- results(dds, contrast = contrast_list[[contrast_name]],
+                         independentFiltering = FALSE, cooksCutoff = Inf)
+          topFeatures <- data.frame(res@listData)
+          rownames(topFeatures) <- rownames(res)
+          colnames(topFeatures) <- sub("padj", "adj.P.Val", colnames(topFeatures))
+          colnames(topFeatures) <- sub("pvalue", "P.Value", colnames(topFeatures))
+          colnames(topFeatures) <- sub("log2FoldChange", "logFC", colnames(topFeatures))
+          topFeatures <- topFeatures[c("logFC","baseMean","lfcSE","stat","P.Value","adj.P.Val")]
+          topFeatures <- topFeatures[order(topFeatures$P.Value), ]
+          results_list[[contrast_name]] <- topFeatures
+        }
+      } else {
+        # Inline .get.interaction.results() — not available in child
+        interaction_name <- grep("factorA.*factorB.*", resultsNames(dds), value = TRUE)
+        if (length(interaction_name) == 0) {
+          stop("No interaction term found in model.")
+        }
+        res <- results(dds, name = interaction_name[1], independentFiltering = FALSE, cooksCutoff = Inf)
         topFeatures <- data.frame(res@listData)
         rownames(topFeatures) <- rownames(res)
-        colnames(topFeatures) <- sub("padj", "adj.P.Val",  colnames(topFeatures))
-        colnames(topFeatures) <- sub("pvalue", "P.Value",  colnames(topFeatures))
-        colnames(topFeatures) <- sub("log2FoldChange","logFC",colnames(topFeatures))
-        topFeatures <- topFeatures[c("logFC","baseMean","lfcSE",
-                                     "stat","P.Value","adj.P.Val")]
+        colnames(topFeatures) <- sub("padj", "adj.P.Val", colnames(topFeatures))
+        colnames(topFeatures) <- sub("pvalue", "P.Value", colnames(topFeatures))
+        colnames(topFeatures) <- sub("log2FoldChange", "logFC", colnames(topFeatures))
+        topFeatures <- topFeatures[c("logFC", "baseMean", "lfcSE", "stat", "P.Value", "adj.P.Val")]
         topFeatures <- topFeatures[order(topFeatures$P.Value), ]
-
-        results_list[[contrast_name]] <- topFeatures
+        results_list[[1]] <- topFeatures
       }
-    } else {
-      results_list[[1]] <- .get.interaction.results()
-    }
 
-    return(results_list)
-  }
+      ov_qs_save(results_list, bridge_out, preset = "fast")
+    },
+    args = list(wd = getwd(), bridge_in = bridge_in, bridge_out = bridge_out),
+    timeout_sec = 300
+  )
 
-  dat.in <- list(data = dataSet, my.fun = my.fun)
-  qs::qsave(dat.in, file = "dat.in.qs")
-  return(1)
-}
+  results_list <- if (file.exists(bridge_out)) ov_qs_read(bridge_out) else NULL
 
-
-
-
-.save.deseq.res <- function(dataSet){
-  dat.in <- qs::qread("dat.in.qs"); 
-  my.res <- dat.in$my.res;
-  dataSet$comp.res.list <- my.res;
-  dataSet$comp.res <- my.res[[1]];
-  qs::qsave(my.res, file="dat.comp.res.qs");
-  return(dataSet);
+  dataSet$comp.res.list <- results_list
+  dataSet$comp.res <- results_list[[1]]
+  ov_qs_save(results_list, file = "dat.comp.res.qs")
+  return(dataSet)
 }
 
 
@@ -499,22 +498,13 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
       return(0)
     }
 
-    result.list <- tryCatch({
-      fit2 <- contrasts.fit(fit, contrast.matrix)
-      fit2 <- eBayes(fit2, trend=robustTrend, robust=robustTrend)
-      res <- list()
-      for (nm in colnames(contrast.matrix)) {
-        tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
-        colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
-        res[[nm]] <- tbl
-      }
-      res
-    }, error = function(e) {
-      msgSet$current.msg <- paste("Differential expression analysis failed:", e$message)
-      saveSet(msgSet, "msgSet")
-      return(NULL)
-    })
-    if (is.null(result.list)) return(0)
+result.list <- list()
+for (nm in colnames(contrast.matrix)) {
+  tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
+  if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
+  colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
+  result.list[[nm]] <- tbl
+}
 
     dataSet$comp.res.list <- result.list
     dataSet$comp.res <- result.list[[1]]
@@ -673,7 +663,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   # First try to load from file if not in memory
   if (is.null(dataSet$pepcount) && file.exists("pepcount.qs")) {
     #msg("[DEqMS] Loading pepcount from pepcount.qs file")
-    dataSet$pepcount <- qs::qread("pepcount.qs")
+    dataSet$pepcount <- ov_qs_read("pepcount.qs")
     #msg("[DEqMS] DEBUG: Loaded pepcount length=", length(dataSet$pepcount))
     #msg("[DEqMS] DEBUG: Loaded pepcount range: ", min(dataSet$pepcount, na.rm=TRUE), " - ", max(dataSet$pepcount, na.rm=TRUE))
   }
@@ -690,7 +680,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     # If the data were re-annotated (e.g., UniProt -> Entrez), try to remap
     # pepcount to the annotated IDs so DEqMS sees the correct PSM counts.
     if (na_before > 0 && file.exists("annotation.qs")) {
-      anot.id <- qs::qread("annotation.qs")
+      anot.id <- ov_qs_read("annotation.qs")
       if (!is.null(names(anot.id))) {
         lvl.opt <- if (!is.null(dataSet$lvl.opt)) dataSet$lvl.opt else if (!is.null(paramSet$lvl.opt)) paramSet$lvl.opt else "sum"
         lvl.opt <- tolower(lvl.opt)
@@ -808,6 +798,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     for (i in seq_along(contrast.names)) {
       nm <- contrast.names[i]
       tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
       # Ensure all required columns are present and properly formatted
       if ("P.Value" %in% colnames(tbl)) {
@@ -870,6 +861,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     for (i in seq_along(contrast.names)) {
       nm <- contrast.names[i]
       tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
       if ("P.Value" %in% colnames(tbl)) {
         tbl$P.Value <- as.numeric(as.character(tbl$P.Value))
@@ -900,6 +892,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
     # 1. Get the standard Limma table first (for structure, logFC, AveExpr, etc.)
     tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+    if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
     # 2. CRITICAL FIX: Overwrite t, P.Value and adj.P.Val with DEqMS adjusted values
     # DEqMS stores results in $sca.t and $sca.p matrices
@@ -1268,10 +1261,10 @@ MultiCovariateRegression <- function(fileName,
   useMeta <- !is.null(paramSet$performedBatch) && isTRUE(paramSet$performedBatch);
   if(internal){
     if(useMeta){
-    inmex.meta <- qs::qread("inmex_meta.qs");
+    inmex.meta <- ov_qs_read("inmex_meta.qs");
     }else{
 
-    inmex.meta <- qs::qread("inmex.meta.orig.qs");
+    inmex.meta <- ov_qs_read("inmex.meta.orig.qs");
 
     }
     feature_table <- inmex.meta$data[, colnames(inmex.meta$data) %in% colnames(dataSet$data.norm)];
@@ -1478,8 +1471,13 @@ MultiCovariateRegression <- function(fileName,
     fit <- contrasts.fit(fit, contrast.matrix);
     fit <- eBayes(fit, trend=robustTrend, robust=robustTrend);
     rest <- topTable(fit, number = Inf);
-    
-    if(contrast != "anova"){    
+    # Strip the "ID" column newer limma topTable prepends when rownames(fit)
+    # is non-null. Otherwise the rename below targets the wrong column and
+    # downstream abs(logfc.mat) blows up with "non-numeric-alike variable(s)
+    # in data frame: ID". Same defensive pattern is in GetLimmaResTable.
+    if (!is.null(rest$ID)) { rownames(rest) <- rest$ID; rest$ID <- NULL; }
+
+    if(contrast != "anova"){
       colnames(rest)[1] <- myargs[[1]];
       grp.nms<-c(ref,contrast)
       
@@ -1531,6 +1529,9 @@ MultiCovariateRegression <- function(fileName,
     # get results
     fit <- eBayes(fit, trend=robustTrend, robust=robustTrend);
     rest <- topTable(fit, number = Inf, coef = analysis.var);
+    # See note above: strip ID column from newer limma topTable so the
+    # rename below targets the real logFC column.
+    if (!is.null(rest$ID)) { rownames(rest) <- rest$ID; rest$ID <- NULL; }
     colnames(rest)[1] <- dataSet$par1 <- analysis.var;
     
     ### get results with no adjustment
@@ -1623,7 +1624,7 @@ parse_contrast_groups <- function(contrast_str) {
 }
 
 .get.interaction.results <- function(dds.path = "deseq.res.obj.rds") {
-  dds <- qs::qread(dds.path)
+  dds <- ov_qs_read(dds.path)
   cat("Available result names:\n")
   
   # Automatically detect the interaction term
@@ -1794,8 +1795,8 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
   }
 
   # Load peptide-level data
-  pep.mat <- qs::qread("peptide_level_data.qs")
-  pep.map <- qs::qread("peptide_to_protein_map.qs")
+  pep.mat <- ov_qs_read("peptide_level_data.qs")
+  pep.map <- ov_qs_read("peptide_to_protein_map.qs")
 
   # Create a temporary dataset for peptide-level analysis
   peptide.dataSet <- dataSet
@@ -1872,7 +1873,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     return(NULL)
   }
 
-  pep.res <- try(qs::qread("peptide_de_results.qs"), silent = TRUE)
+  pep.res <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
   if (inherits(pep.res, "try-error")) {
     msg("[R DEBUG] Error reading peptide_de_results.qs")
     return(NULL)
@@ -1885,7 +1886,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     return(NULL)
   }
 
-  pep.map <- try(qs::qread("peptide_to_protein_map.qs"), silent = TRUE)
+  pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
   if (inherits(pep.map, "try-error")) {
     msg("[R DEBUG] Error reading peptide_to_protein_map.qs")
     return(NULL)
@@ -2050,8 +2051,8 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
     return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
   }
 
-  pep.res <- try(qs::qread("peptide_de_results.qs"), silent = TRUE)
-  pep.map <- try(qs::qread("peptide_to_protein_map.qs"), silent = TRUE)
+  pep.res <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
+  pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
   if (inherits(pep.res, "try-error") || inherits(pep.map, "try-error")) {
     return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
   }

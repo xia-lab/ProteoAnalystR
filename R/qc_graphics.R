@@ -172,7 +172,7 @@ get.qc.sample.matrix <- function(dataSet, imgNm = NULL) {
   if (!is.null(imgNm) && grepl("norm", imgNm)) {
     data.for.plot <- dataSet$data.norm;
   } else if (file.exists("data.with.missing.qs")) {
-    data.for.plot <- qs::qread("data.with.missing.qs");
+    data.for.plot <- ov_qs_read("data.with.missing.qs");
   } else {
     data.for.plot <- dataSet$data.norm;
   }
@@ -742,7 +742,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     # --- FIX: Safe Device Handling ---
     if(dpi == 72){ dpi <- 96 }
     
-    Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white")
+    Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white");
 
     tryCatch({
         print(bp);
@@ -819,7 +819,7 @@ qc.nonmissing.per.sample <- function(dat, imgNm, dpi = 96, format = "png",
   width <- ifelse(num_samples < 50, 800, 800 + (num_samples - 50) * 10)
   height <- 600
 
-  Cairo(file = fullPath, width = width * dpi / 72, height = height * dpi / 72, unit = "px", dpi = dpi, type = format, bg = "white")
+  Cairo(file = fullPath, width  = width * dpi / 72, height = height * dpi / 72, unit   = "px", dpi    = dpi, type   = format, bg     = "white")
 
   tryCatch({
       print(bp)
@@ -1865,7 +1865,7 @@ qc.meanstd <- function(dat, imgNm, dpi=96, format="png"){
   # --- FIX: Safe Device Handling ---
   if(dpi == 72){ dpi <- 96 }
   
-  Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in")
+  Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
   
   tryCatch({
       # Call meanSdPlot with plot=FALSE to prevent it from printing to the wrong device

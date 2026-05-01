@@ -197,13 +197,13 @@ ResetMetaTab <- function(dataName=""){
   if(dataName != "NA"){
     dataSet <- readDataset(dataName);
      if(dataSet$type=="prot"){
-       data.anot <- try(qs::qread("data.missed.qs"), silent = TRUE);
+       data.anot <- try(ov_qs_read("data.missed.qs"), silent = TRUE);
        if(inherits(data.anot, "try-error")){
          warning("Failed to read data.missed.qs");
          return(0);
        }
     }else{
-       data.anot <- try(qs::qread("orig.data.anot.qs"), silent = TRUE);
+       data.anot <- try(ov_qs_read("orig.data.anot.qs"), silent = TRUE);
        if(inherits(data.anot, "try-error")){
          warning("Failed to read orig.data.anot.qs");
          return(0);
@@ -325,13 +325,13 @@ DeleteSample <- function(dataName="",samplNm){
     dataSet$data.norm <- dataSet$data.norm[,colnames(dataSet$data.norm)!=samplNm];
     dataSet$meta.info <- dataSet$meta.info[rownames(dataSet$meta.info)!=samplNm,,drop=F];
     
-    inmex.meta <- try(qs::qread("inmex_meta.qs"), silent = TRUE);
+    inmex.meta <- try(ov_qs_read("inmex_meta.qs"), silent = TRUE);
     if(inherits(inmex.meta, "try-error")){
       warning("Failed to read inmex_meta.qs");
       return(0);
     }
     inmex.meta$data <- inmex.meta$data[,colnames(inmex.meta$data) !=samplNm]
-    qs::qsave(inmex.meta, "inmex_meta.qs");
+    ov_qs_save(inmex.meta, "inmex_meta.qs");
     saveSet(paramSet, "paramSet");
     RegisterData(dataSet);
   }

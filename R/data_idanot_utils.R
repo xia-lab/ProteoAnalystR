@@ -51,15 +51,15 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
   dataSet$annotated <- F;
   # Use legacy-friendly matrix produced at ingestion
   if(dataType=="prot"){
-    data.proc <- qs::qread("int.mat.qs");
+    data.proc <- ov_qs_read("int.mat.qs");
   }else{
-    data.proc <- qs::qread("data.raw.qs");
+    data.proc <- ov_qs_read("data.raw.qs");
   }
   #msg("[Annot] Loaded data matrix: ", nrow(data.proc), " features x ", ncol(data.proc), " samples")
   data.anot <- data.proc;
   # print(head(data.anot));
   # Save intensity matrix for downstream steps (ensures presence even after MSstats)
-  qs::qsave(data.proc, "int.mat.qs");
+  ov_qs_save(data.proc, "int.mat.qs");
   
   if (org != 'NA' & idType != 'NA'){
     feature.vec <- rownames(data.proc);
@@ -106,7 +106,7 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
     saveDataQs(symbol.map, "symbol.map.qs", paramSet$anal.type, dataName);
     #cat(sprintf("[PerformDataAnnot] DEBUG: Saved symbol.map.qs to: %s\n", getwd()))
     
-    qs::qsave(anot.id, "annotation.qs");
+    ov_qs_save(anot.id, "annotation.qs");
     
     hit.inx <- !is.na(anot.id);
     #msg("[Annot] Mapping hits: ", sum(hit.inx), "/", length(anot.id), " (", round(sum(hit.inx)/length(anot.id)*100, 2), "%); first mapped IDs: ", paste(utils::head(anot.id[hit.inx], 5), collapse=", "))
@@ -161,8 +161,8 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
   # this need to be updated to gether with data from now on
   dataSet$data.norm <- data.anot;
   
-  qs::qsave(data.anot, file="orig.data.anot.qs"); # immutable baseline after annotation
-  qs::qsave(data.anot, file="norm.input.anot.qs"); # current normalization input, reset on re-annotation
+  ov_qs_save(data.anot, file="orig.data.anot.qs"); # immutable baseline after annotation
+  ov_qs_save(data.anot, file="norm.input.anot.qs"); # current normalization input, reset on re-annotation
   col.sum <- colSums(dataSet$data.norm);
   totalCount <-  sum(col.sum);
   avgCount <- totalCount / ncol(dataSet$data.norm);
@@ -202,7 +202,7 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
   #  RemoveMissingPercent(dataSet$name, 0.5)
   ##  ImputeMissingVar(dataSet$name, method="min")
   #}else{
-    qs::qsave(data.anot, file="data.missed.qs");
+    ov_qs_save(data.anot, file="data.missed.qs");
   #}
   data.anot <- sanitizeSmallNumbers(data.anot);
   fast.write(sanitizeSmallNumbers(data.anot), file="data_annotated.csv");
@@ -723,7 +723,7 @@ queryGeneDB <- function(db.nm, org){
   }
   paramSet <- readSet(paramSet, "paramSet");    
   if(db.nm == "custom" || org == "custom"){
-    db.map <- qs::qread("anot_table.qs");
+    db.map <- ov_qs_read("anot_table.qs");
   }else{
     require('RSQLite');
     

@@ -20,7 +20,7 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
   }
 
   cem <- tryCatch({
-    qs::qread("cem.qs")
+    ov_qs_read("cem.qs")
   }, error = function(e) {
     stop(paste("Failed to read cem.qs:", conditionMessage(e)));
   })
@@ -165,7 +165,7 @@ V(g)$colorw <- V(g)$color                             # same for dark bg
   xy <- layoutFun(g)
   V(g)$posx <- xy[, 1]
   V(g)$posy <- xy[, 2]
-  analSet <- qs::qread("analSet.qs");
+  analSet <- ov_qs_read("analSet.qs");
   analSet$overall.graph <- g;
   analSet$overall.graph.orig <- g;
 
