@@ -530,8 +530,8 @@ replace_extension_with_qs <- function(data_name) {
     stop("Data name must not be null or empty")
   }
   
-  # Use gsub to replace .csv or .txt with .qs
-  result <- gsub("\\.csv$|\\.txt$", ".qs", data_name)
+  # Use gsub to replace supported tabular upload extensions with .qs
+  result <- gsub("\\.(csv|txt|tsv)$", ".qs", data_name, ignore.case = TRUE)
   return(result)
 }
 

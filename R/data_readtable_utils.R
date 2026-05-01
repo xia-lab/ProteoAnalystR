@@ -1877,9 +1877,59 @@ GetAnalysisType <- function(){
     #msg('[DIA-NN] data file not found: ', data.file)
     return(NULL)
   }
-  dat <- tryCatch(read.delim(data.file, check.names = FALSE, stringsAsFactors = FALSE, comment.char = ""), error = function(e) NULL)
+  normalize.cached.diann <- function(obj) {
+    if (!is.list(obj)) {
+      return(NULL)
+    }
+    mat <- NULL
+    if (!is.null(obj$data) && (is.matrix(obj$data) || is.data.frame(obj$data))) {
+      mat <- as.matrix(obj$data)
+    } else if (!is.null(obj$data.norm) && (is.matrix(obj$data.norm) || is.data.frame(obj$data.norm))) {
+      mat <- as.matrix(obj$data.norm)
+    }
+    if (is.null(mat)) {
+      return(NULL)
+    }
+    storage.mode(mat) <- "numeric"
+
+    meta.info <- obj$meta.info
+    if (is.data.frame(meta.info)) {
+      meta.df <- meta.info
+      disc.inx <- if (!is.null(obj$disc.inx)) obj$disc.inx else GetDiscreteInx(meta.df)
+      cont.inx <- if (!is.null(obj$cont.inx)) obj$cont.inx else (!disc.inx & GetNumbericalInx(meta.df))
+      meta.info <- list(meta.info = meta.df, disc.inx = disc.inx, cont.inx = cont.inx)
+    }
+    if (is.null(meta.info) || is.null(meta.info$meta.info)) {
+      meta.info <- .synthesizeMetaFromRuns(colnames(mat))
+    }
+
+    list(
+      data = mat,
+      data_orig = mat,
+      type = if (!is.null(obj$type)) obj$type else "peptide",
+      format = if (!is.null(obj$format)) obj$format else "diann-pr_matrix",
+      idType = if (!is.null(obj$idType)) obj$idType else "uniprot",
+      organism = if (!is.null(obj$organism)) obj$organism else "human",
+      meta.info = meta.info,
+      prot.map = obj$prot.map,
+      pepcount = obj$pepcount
+    )
+  }
+
+  dat <- tryCatch(
+    suppressWarnings(read.delim(data.file, check.names = FALSE, stringsAsFactors = FALSE, comment.char = "")),
+    error = function(e) NULL
+  )
   if (is.null(dat)) {
-    #msg('[DIA-NN][ERROR] unable to read data file')
+    cached <- tryCatch(normalize.cached.diann(qs::qread(data.file)), error = function(e) NULL)
+    if (!is.null(cached)) {
+      return(cached)
+    }
+    msgSet <- readSet(msgSet, "msgSet")
+    if (!is.null(msgSet)) {
+      msgSet$current.msg <- "Unable to read DIA-NN data file. Expected a tab-delimited DIA-NN report/pr_matrix table."
+      saveSet(msgSet, "msgSet")
+    }
     return(NULL)
   }
 
@@ -1916,6 +1966,136 @@ GetAnalysisType <- function(){
 
   # Check if this is matrix format (has Protein.Ids column + multiple intensity columns)
   cols <- colnames(dat)
+
+  # Detect precursor/peptide matrix format (pr_matrix): has Precursor.Id column
+  is.pr.matrix.format <- any(c("Precursor.Id", "Precursor.ID", "PrecursorId", "Precursor_Id") %in% cols)
+
+  if (is.pr.matrix.format || file.type == "pr_matrix") {
+    #msg('[DIA-NN] Detected precursor matrix format (pr_matrix)')
+
+    precursor.col <- intersect(c("Precursor.Id", "Precursor.ID", "PrecursorId", "Precursor_Id"), cols)[1]
+    if (is.na(precursor.col)) {
+      msg('[DIA-NN][ERROR] Precursor.Id column not found in pr_matrix format')
+      return(NULL)
+    }
+
+    # Annotation columns to exclude from intensity matrix
+    annot.cols.pr <- c("Protein.Group", "Protein.Groups", "Protein.Ids", "Protein.Names",
+                       "Genes", "Gene.Names", "Gene", "First.Protein.Description", "Description",
+                       "Proteotypic", "Stripped.Sequence", "Modified.Sequence", "Modified.Sequence.Unique",
+                       "Precursor.Charge", "Precursor.Id", "Precursor.ID", "PrecursorId", "Precursor_Id",
+                       "Q.Value", "PEP", "Global.Q.Value", "Protein.Q.Value", "PG.Q.Value",
+                       "Run", "File.Name", "Condition", "BioReplicate", "Experiment", "Mass",
+                       "Decoy", "Decoy.Evidence")
+    annot.cols.pr.present <- intersect(annot.cols.pr, cols)
+
+    candidate.cols <- setdiff(cols, annot.cols.pr.present)
+    intensity.cols <- sapply(candidate.cols, function(col) {
+      col.data <- dat[[col]]
+      has.path <- grepl("[/\\\\]", col)
+      sample.vals <- head(col.data[!is.na(col.data)], 10)
+      if (length(sample.vals) == 0) return(FALSE)
+      is.numeric.col <- !any(is.na(suppressWarnings(as.numeric(sample.vals))))
+      return(has.path || is.numeric.col)
+    })
+    intensity.cols <- names(intensity.cols)[intensity.cols]
+
+    if (length(intensity.cols) == 0) {
+      msg('[DIA-NN][ERROR] No intensity columns found in pr_matrix format')
+      return(NULL)
+    }
+
+    intens <- as.matrix(dat[, intensity.cols, drop = FALSE])
+    storage.mode(intens) <- "numeric"
+
+    # Use Precursor.Id as row identifiers (peptide-level)
+    precursor.ids <- as.character(dat[[precursor.col]])
+    if (any(is.na(precursor.ids) | precursor.ids == "")) {
+      valid.rows <- !is.na(precursor.ids) & precursor.ids != ""
+      intens <- intens[valid.rows, , drop = FALSE]
+      dat <- dat[valid.rows, , drop = FALSE]
+      precursor.ids <- precursor.ids[valid.rows]
+    }
+
+    # Make unique if duplicated
+    if (any(duplicated(precursor.ids))) {
+      precursor.ids <- make.unique(precursor.ids)
+    }
+    rownames(intens) <- precursor.ids
+
+    # Remove all-NA rows
+    all.na.rows <- apply(intens, 1, function(x) all(is.na(x)))
+    if (any(all.na.rows)) {
+      intens <- intens[!all.na.rows, , drop = FALSE]
+      dat <- dat[!all.na.rows, , drop = FALSE]
+      precursor.ids <- rownames(intens)
+    }
+
+    # Build peptide-to-protein map
+    prot.map <- NULL
+    if ("Protein.Ids" %in% cols) {
+      clean.prots <- vapply(strsplit(as.character(dat$Protein.Ids), "[;|,]"), function(x) {
+        x <- x[nchar(trimws(x)) > 0]
+        if (length(x) == 0) return(NA_character_)
+        trimws(x[1])
+      }, character(1))
+      prot.map <- data.frame(
+        Peptide = rownames(intens),
+        Protein = clean.prots,
+        stringsAsFactors = FALSE
+      )
+    }
+
+    # Metadata
+    runs <- colnames(intens)
+    if (has.external.meta) {
+      run.col.cands <- c("Run", "Filename", "Raw.file", "File.Name", "Sample.Name", "Sample",
+                         "sample", "Name", "#Name", "experiment", "Experiment")
+      run.col <- run.col.cands[run.col.cands %in% colnames(meta)]
+      run.col <- if (length(run.col) == 0) colnames(meta)[1] else run.col[1]
+      meta.runs <- as.character(meta[[run.col]])
+      run.map <- sapply(runs, function(r) {
+        idx <- which(meta.runs == r); if (length(idx) > 0) return(idx[1])
+        r.base <- basename(r); idx <- which(meta.runs == r.base); if (length(idx) > 0) return(idx[1])
+        r.noext <- gsub("\\.[^.]*$", "", r.base); idx <- which(meta.runs == r.noext); if (length(idx) > 0) return(idx[1])
+        return(NA)
+      })
+      if (all(is.na(run.map))) {
+        msg("[DIA-NN][WARN] pr_matrix: could not match data columns to metadata rows; using default metadata")
+        has.external.meta <- FALSE
+      } else {
+        meta.df <- meta[run.map[!is.na(run.map)], , drop = FALSE]
+        meta.df[[run.col]] <- NULL
+        rownames(meta.df) <- runs[!is.na(run.map)]
+        if (any(is.na(run.map))) intens <- intens[, !is.na(run.map), drop = FALSE]
+      }
+    }
+    if (!has.external.meta) {
+      meta.df <- data.frame(Condition = factor(rep('Group1', length(colnames(intens)))), stringsAsFactors = FALSE)
+      rownames(meta.df) <- colnames(intens)
+    }
+    disc.inx <- sapply(meta.df, function(col) is.character(col) || is.factor(col) || (is.numeric(col) && length(unique(col)) <= 10))
+    cont.inx <- !disc.inx
+    names(disc.inx) <- colnames(meta.df)
+    names(cont.inx) <- colnames(meta.df)
+    for (i in which(disc.inx)) if (!is.factor(meta.df[[i]])) meta.df[[i]] <- factor(meta.df[[i]])
+
+    # Save DIA-NN metadata
+    diann_meta <- data.frame(Protein.IDs = rownames(intens), stringsAsFactors = FALSE)
+    qs::qsave(diann_meta, "diann_metadata.qs")
+
+    return(list(
+      data = intens,
+      data_orig = intens,
+      type = 'peptide',
+      format = 'diann-pr_matrix',
+      idType = 'uniprot',
+      organism = 'human',
+      meta.info = list(meta.info = meta.df, disc.inx = disc.inx, cont.inx = cont.inx),
+      prot.map = prot.map
+    ))
+  }
+
   is.matrix.format <- "Protein.Ids" %in% cols &&
                       ("Protein.Names" %in% cols || "features" %in% cols) &&
                       ncol(dat) > 3  # More than just annotation columns
