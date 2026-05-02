@@ -370,14 +370,15 @@ ComputeEncasing <- function(filenm, type, names.vec, level=0.95, omics="NA"){
   mdata.all <- paramSet$mdata.all;
   level <- as.numeric(level)
   names = strsplit(names.vec, "; ")[[1]]
-  pos.xyz <-ov_qs_read("score_pos_xyz.qs");
+  tryCatch({
+    pos.xyz <-ov_qs_read("score_pos_xyz.qs");
 
     if (!file.exists("score_pos_xyz.qs")) {
       sink(filenm); cat("{}"); sink()
       return(filenm)
     }
 
-    pos.xyz <- qs::qread("score_pos_xyz.qs")
+    pos.xyz <- ov_qs_read("score_pos_xyz.qs")
 
     inx <- rownames(pos.xyz) %in% names
     coords <- as.matrix(pos.xyz[inx, c(1:3)])

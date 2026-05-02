@@ -1921,7 +1921,7 @@ GetAnalysisType <- function(){
     error = function(e) NULL
   )
   if (is.null(dat)) {
-    cached <- tryCatch(normalize.cached.diann(qs::qread(data.file)), error = function(e) NULL)
+    cached <- tryCatch(normalize.cached.diann(ov_qs_read(data.file)), error = function(e) NULL)
     if (!is.null(cached)) {
       return(cached)
     }
@@ -2082,7 +2082,7 @@ GetAnalysisType <- function(){
 
     # Save DIA-NN metadata
     diann_meta <- data.frame(Protein.IDs = rownames(intens), stringsAsFactors = FALSE)
-    qs::qsave(diann_meta, "diann_metadata.qs")
+    ov_qs_save(diann_meta, "diann_metadata.qs")
 
     return(list(
       data = intens,

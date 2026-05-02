@@ -498,13 +498,23 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
       return(0)
     }
 
-result.list <- list()
-for (nm in colnames(contrast.matrix)) {
-  tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
-  if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
-  colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
-  result.list[[nm]] <- tbl
-}
+    fit2 <- tryCatch({
+      f2 <- contrasts.fit(fit, contrast.matrix)
+      eBayes(f2, trend = robustTrend, robust = robustTrend)
+    }, error = function(e) {
+      msgSet$current.msg <- paste("Contrast fitting failed:", e$message)
+      saveSet(msgSet, "msgSet")
+      return(NULL)
+    })
+    if (is.null(fit2)) return(0)
+
+    result.list <- list()
+    for (nm in colnames(contrast.matrix)) {
+      tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
+      colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
+      result.list[[nm]] <- tbl
+    }
 
     dataSet$comp.res.list <- result.list
     dataSet$comp.res <- result.list[[1]]
