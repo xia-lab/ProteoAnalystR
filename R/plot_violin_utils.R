@@ -162,8 +162,7 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
 
   make_label <- function(type, id) {
     id <- as.character(id)
-    id <- ifelse(nchar(id) > 64, paste0(substr(id, 1, 61), "..."), id)
-    paste(type, id, sep = ": ")
+    ifelse(nchar(id) > 64, paste0(substr(id, 1, 61), "..."), id)
   }
 
   protein.label <- make_label("Protein", protein.row.id)
