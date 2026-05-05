@@ -499,22 +499,23 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
       return(0)
     }
 
-    result.list <- tryCatch({
-      fit2 <- contrasts.fit(fit, contrast.matrix)
-      fit2 <- eBayes(fit2, trend=robustTrend, robust=robustTrend)
-      res <- list()
-      for (nm in colnames(contrast.matrix)) {
-        tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
-        colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
-        res[[nm]] <- tbl
-      }
-      res
+    fit2 <- tryCatch({
+      f2 <- contrasts.fit(fit, contrast.matrix)
+      eBayes(f2, trend = robustTrend, robust = robustTrend)
     }, error = function(e) {
-      msgSet$current.msg <- paste("Differential expression analysis failed:", e$message)
+      msgSet$current.msg <- paste("Contrast fitting failed:", e$message)
       saveSet(msgSet, "msgSet")
       return(NULL)
     })
-    if (is.null(result.list)) return(0)
+    if (is.null(fit2)) return(0)
+
+    result.list <- list()
+    for (nm in colnames(contrast.matrix)) {
+      tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
+      colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
+      result.list[[nm]] <- tbl
+    }
 
     dataSet$comp.res.list <- result.list
     dataSet$comp.res <- result.list[[1]]
@@ -810,6 +811,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     for (i in seq_along(contrast.names)) {
       nm <- contrast.names[i]
       tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
       # Ensure all required columns are present and properly formatted
       if ("P.Value" %in% colnames(tbl)) {
@@ -872,6 +874,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     for (i in seq_along(contrast.names)) {
       nm <- contrast.names[i]
       tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
       if ("P.Value" %in% colnames(tbl)) {
         tbl$P.Value <- as.numeric(as.character(tbl$P.Value))
@@ -902,6 +905,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
     # 1. Get the standard Limma table first (for structure, logFC, AveExpr, etc.)
     tbl <- topTable(fit2, coef = i, number = Inf, adjust.method = "BH", sort.by = "none")
+    if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
 
     # 2. CRITICAL FIX: Overwrite t, P.Value and adj.P.Val with DEqMS adjusted values
     # DEqMS stores results in $sca.t and $sca.p matrices
@@ -1484,8 +1488,13 @@ MultiCovariateRegression <- function(fileName,
     fit <- contrasts.fit(fit, contrast.matrix);
     fit <- eBayes(fit, trend=robustTrend, robust=robustTrend);
     rest <- topTable(fit, number = Inf);
-    
-    if(contrast != "anova"){    
+    # Strip the "ID" column newer limma topTable prepends when rownames(fit)
+    # is non-null. Otherwise the rename below targets the wrong column and
+    # downstream abs(logfc.mat) blows up with "non-numeric-alike variable(s)
+    # in data frame: ID". Same defensive pattern is in GetLimmaResTable.
+    if (!is.null(rest$ID)) { rownames(rest) <- rest$ID; rest$ID <- NULL; }
+
+    if(contrast != "anova"){
       colnames(rest)[1] <- myargs[[1]];
       grp.nms<-c(ref,contrast)
       
@@ -1537,6 +1546,9 @@ MultiCovariateRegression <- function(fileName,
     # get results
     fit <- eBayes(fit, trend=robustTrend, robust=robustTrend);
     rest <- topTable(fit, number = Inf, coef = analysis.var);
+    # See note above: strip ID column from newer limma topTable so the
+    # rename below targets the real logFC column.
+    if (!is.null(rest$ID)) { rownames(rest) <- rest$ID; rest$ID <- NULL; }
     colnames(rest)[1] <- dataSet$par1 <- analysis.var;
     
     ### get results with no adjustment

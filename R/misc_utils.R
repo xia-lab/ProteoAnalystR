@@ -1042,6 +1042,67 @@ sanitizeSmallNumbers <- function(mat, tol=1e-10) {
   return(make.unique(query));
 }
 
+if (!exists("ov_qs_save", mode = "function")) {
+  ov_qs_save <- function(obj, file, ...) {
+    .args <- list(...)
+    for (.k in c("preset", "nthreads", "check_hash")) {
+      .args[[.k]] <- NULL
+    }
+    if (requireNamespace("qs2", quietly = TRUE)) {
+      do.call(qs2::qs_save, c(list(object = obj, file = file), .args))
+    } else {
+      do.call(qs::qsave, c(list(x = obj, file = file), .args))
+    }
+    invisible(file)
+  }
+}
+
+if (!exists("ov_qs_read", mode = "function")) {
+  ov_qs_read <- function(file, ...) {
+    read_one <- function(path) {
+      if (requireNamespace("qs2", quietly = TRUE)) {
+        res <- try(qs2::qs_read(path, ...), silent = TRUE)
+        if (!inherits(res, "try-error")) {
+          return(res)
+        }
+      }
+      qs::qread(path, ...)
+    }
+    if (file.exists(file)) {
+      return(read_one(file))
+    }
+    lower.file <- tolower(file)
+    if (endsWith(lower.file, ".qs")) {
+      alt <- paste0(substr(file, 1, nchar(file) - 3L), ".qs2")
+      if (file.exists(alt)) {
+        return(read_one(alt))
+      }
+    } else if (endsWith(lower.file, ".qs2")) {
+      alt <- paste0(substr(file, 1, nchar(file) - 4L), ".qs")
+      if (file.exists(alt)) {
+        return(read_one(alt))
+      }
+    }
+    stop("ov_qs_read: neither .qs2 nor .qs found for: ", file, call. = FALSE)
+  }
+}
+
+if (!exists("ov_qs_exists", mode = "function")) {
+  ov_qs_exists <- function(file) {
+    if (file.exists(file)) {
+      return(TRUE)
+    }
+    lower.file <- tolower(file)
+    if (endsWith(lower.file, ".qs")) {
+      return(file.exists(paste0(substr(file, 1, nchar(file) - 3L), ".qs2")))
+    }
+    if (endsWith(lower.file, ".qs2")) {
+      return(file.exists(paste0(substr(file, 1, nchar(file) - 4L), ".qs")))
+    }
+    FALSE
+  }
+}
+
 saveSet <- function(obj=NA, set="", output=1){
      if(set == ""){
         set <- obj$objName;

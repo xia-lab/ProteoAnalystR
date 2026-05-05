@@ -68,6 +68,175 @@ GetGroupPalette <- function(groups, paletteOpt = "default") {
   cols
 }
 
+PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id = "", format = "png", dpi = 96, paletteOpt = "default", plotType = "boxplot", maxPeptides = 35) {
+  require(ggplot2)
+  require(Cairo)
+
+  if (is.null(protein.id) || !nzchar(protein.id)) {
+    msg("[PlotProteinPeptideOverview] empty protein id")
+    return(0)
+  }
+
+  plotType <- tolower(as.character(plotType)[1])
+  if (!(plotType %in% c("violin", "boxplot"))) {
+    plotType <- "boxplot"
+  }
+  use.violin <- plotType == "violin"
+
+  dataSet <- readDataset(dataName)
+  if (is.null(dataSet) || is.null(dataSet$data.norm)) {
+    msg("[PlotProteinPeptideOverview] dataset or protein matrix is missing")
+    return(0)
+  }
+
+  data.norm <- dataSet$data.norm
+  if (length(dataSet$rmidx) > 0) {
+    data.norm <- data.norm[, -dataSet$rmidx, drop = FALSE]
+  }
+
+  protein.row.id <- ResolveFeatureRowId(data.norm, protein.id)
+  if (!(protein.row.id %in% rownames(data.norm))) {
+    msg("[PlotProteinPeptideOverview] protein not found in protein matrix: ", protein.id)
+    return(0)
+  }
+
+  peptide.file <- if (file.exists("peptide_level_data.qs")) {
+    "peptide_level_data.qs"
+  } else if (file.exists("data.stat.qs")) {
+    "data.stat.qs"
+  } else {
+    ""
+  }
+  if (!nzchar(peptide.file) || !file.exists("peptide_to_protein_map.qs")) {
+    msg("[PlotProteinPeptideOverview] peptide matrix or peptide-to-protein map is missing")
+    return(0)
+  }
+
+  pep.mat <- ov_qs_read(peptide.file)
+  pep.map <- ov_qs_read("peptide_to_protein_map.qs")
+  if (is.null(pep.mat) || is.null(pep.map) || nrow(pep.map) == 0) {
+    msg("[PlotProteinPeptideOverview] peptide inputs are empty")
+    return(0)
+  }
+
+  pep.col <- if ("Peptide" %in% colnames(pep.map)) "Peptide" else colnames(pep.map)[1]
+  prot.col <- if ("Protein" %in% colnames(pep.map)) "Protein" else colnames(pep.map)[2]
+  prot.norm <- NormalizeFeatureId(protein.id)
+  map.prot.norm <- vapply(pep.map[[prot.col]], NormalizeFeatureId, character(1))
+  map.prot.raw <- trimws(as.character(pep.map[[prot.col]]))
+  peps <- unique(as.character(pep.map[[pep.col]][map.prot.raw == protein.id | map.prot.norm == prot.norm]))
+  peps <- peps[!is.na(peps) & nzchar(peps)]
+  peps <- peps[peps %in% rownames(pep.mat)]
+  if (length(peps) == 0) {
+    msg("[PlotProteinPeptideOverview] no mapped peptides found for protein: ", protein.id)
+  }
+
+  peptide.count <- length(peps)
+  if (peptide.count > maxPeptides) {
+    peps <- peps[seq_len(maxPeptides)]
+  }
+
+  common.samples <- intersect(colnames(data.norm), colnames(pep.mat))
+  if (length(common.samples) == 0) {
+    common.samples <- colnames(data.norm)
+  }
+  protein.samples <- intersect(common.samples, colnames(data.norm))
+  peptide.samples <- intersect(common.samples, colnames(pep.mat))
+
+  meta <- dataSet$meta.info
+  if (!is.null(meta) && nrow(meta) > 0) {
+    group.col <- dataSet$analysisVar
+    if (is.numeric(group.col) && length(group.col) > 0 && group.col[1] >= 1 && group.col[1] <= ncol(meta)) {
+      group.col <- colnames(meta)[group.col[1]]
+    }
+    if (is.null(group.col) || !(group.col %in% colnames(meta))) {
+      group.col <- colnames(meta)[1]
+    }
+    meta <- meta[rownames(meta) %in% common.samples, , drop = FALSE]
+    sample.groups <- as.character(meta[match(common.samples, rownames(meta)), group.col])
+  } else {
+    sample.groups <- rep("All samples", length(common.samples))
+  }
+  sample.groups[is.na(sample.groups) | !nzchar(sample.groups)] <- "Unknown"
+  group.map <- setNames(sample.groups, common.samples)
+
+  make_label <- function(type, id) {
+    id <- as.character(id)
+    ifelse(nchar(id) > 64, paste0(substr(id, 1, 61), "..."), id)
+  }
+
+  protein.label <- make_label("Protein", protein.row.id)
+  plot.df <- data.frame(
+    Type = "Protein",
+    Feature = protein.label,
+    Sample = protein.samples,
+    Group = group.map[protein.samples],
+    Value = as.numeric(data.norm[protein.row.id, protein.samples]),
+    stringsAsFactors = FALSE
+  )
+
+  if (length(peps) > 0) {
+    pep.df <- do.call(rbind, lapply(peps, function(pep.id) {
+      data.frame(
+        Type = "Peptide",
+        Feature = make_label("Peptide", pep.id),
+        Sample = peptide.samples,
+        Group = group.map[peptide.samples],
+        Value = as.numeric(pep.mat[pep.id, peptide.samples]),
+        stringsAsFactors = FALSE
+      )
+    }))
+    plot.df <- rbind(plot.df, pep.df)
+  }
+
+  plot.df <- plot.df[!is.na(plot.df$Value) & !is.na(plot.df$Group), , drop = FALSE]
+  if (nrow(plot.df) == 0) {
+    msg("[PlotProteinPeptideOverview] no plottable values for protein: ", protein.id)
+    return(0)
+  }
+
+  feature.levels <- unique(plot.df$Feature)
+  plot.df$Feature <- factor(plot.df$Feature, levels = feature.levels)
+  plot.df$Group <- factor(plot.df$Group)
+  col <- GetGroupPalette(plot.df$Group, paletteOpt)
+
+  plot.geom <- if (use.violin) {
+    geom_violin(trim = FALSE, aes(color = Group), show.legend = TRUE)
+  } else {
+    geom_boxplot(aes(color = Group), outlier.shape = NA, show.legend = TRUE)
+  }
+
+  myplot <- ggplot(plot.df, aes(x = Group, y = Value, fill = Group)) +
+    plot.geom +
+    geom_jitter(width = 0.05, height = 0, show.legend = FALSE) +
+    stat_summary(fun = mean, colour = "yellow", geom = "point",
+                 shape = 18, size = 3, show.legend = FALSE) +
+    facet_grid(. ~ Feature, scales = "free_x", space = "free_x") +
+    scale_fill_manual(values = col) +
+    scale_color_manual(values = col) +
+    theme_bw(base_size = 10) +
+    theme(
+      axis.title.x = element_blank(),
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_line(colour = "black"),
+      strip.text.x = element_text(size = 8),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      panel.grid = element_blank(),
+      panel.grid.minor = element_blank(),
+      plot.title = element_blank()
+    ) +
+    ylab("Expression")
+
+  imgName <- paste(imageName, "dpi", dpi, ".", format, sep = "")
+  plot.width <- min(18, max(8.5, 2.0 + 1.15 * length(feature.levels)))
+  Cairo(file = imgName, width = plot.width, height = 5.2, unit = "in",
+        dpi = dpi, bg = "white", type = format)
+  invisible(print(myplot))
+  invisible(dev.off())
+  return(0)
+}
+
 PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolcano", format="png", dpi=96, fc = T, plotType = "violin", dataType = "default", paletteOpt = "default"){
 
   require(see)
