@@ -190,18 +190,19 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
     return(dataSet)
   }
 
-  # If a DE helper failed, it may return 0 after storing the real message in msgSet.
-  # Do not call RegisterData() on a scalar, or the original error will be masked.
-  if (!is.list(dataSet)) {
-    return(dataSet)
+  # Initialize active.comp.nm so peptide DE uses the same contrast as proteins
+  if (!is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) > 0) {
+    dataSet$active.comp.nm <- names(dataSet$comp.res.list)[1]
   }
 
-  # Perform peptide-level DE analysis if peptide data exists
+  dataSet <- RegisterData(dataSet)
+
+  # Perform peptide-level DE analysis after saving protein-level dataset
   if (file.exists("peptide_level_data.qs")) {
     PerformPeptideLevelDEAnal(dataName)
   }
 
-  return(RegisterData(dataSet));
+  return(dataSet);
 }
 
 .run.deseq <- function(dataSet, anal.type, par1, par2, nested.opt) {
@@ -1775,10 +1776,55 @@ prepareEdgeRContrast <- function(dataSet,
 #' @description Checks if peptide-level data and results are available
 #' @export
 HasPeptideLevelData <- function() {
-  pep_data_exists <- file.exists("peptide_level_data.qs")
-  pep_de_exists <- file.exists("peptide_de_results.qs")
-  result <- pep_data_exists && pep_de_exists
-  return(result)
+  return(file.exists("peptide_level_data.qs"))
+}
+
+# Thin limma wrapper for peptide matrices — bypasses strict df.residual==0 guard
+# and guarantees positional alignment of data columns to design rows.
+.perform_limma_peptide <- function(dataSet) {
+  require(limma)
+  design          <- dataSet$design
+  contrast.matrix <- dataSet$contrast.matrix
+  data.norm       <- dataSet$data.norm
+
+  if (is.null(design) || is.null(contrast.matrix)) return(0)
+  if (!is.fullrank(design)) return(0)
+
+  # Guarantee positional alignment so lmFit group assignments match protein-level
+  design.rn <- rownames(design)
+  data.cn   <- colnames(data.norm)
+  if (!is.null(design.rn) && !is.null(data.cn) && !identical(design.rn, data.cn)) {
+    shared    <- intersect(design.rn, data.cn)
+    if (length(shared) == 0) return(0)
+    data.norm <- data.norm[, shared, drop = FALSE]
+    design    <- design[shared, , drop = FALSE]
+  }
+
+  fit <- tryCatch(lmFit(data.norm, design), error = function(e) NULL)
+  if (is.null(fit)) return(0)
+
+  fit2 <- tryCatch({
+    f2 <- contrasts.fit(fit, contrast.matrix)
+    eBayes(f2, trend = FALSE, robust = FALSE)
+  }, error = function(e) NULL)
+  if (is.null(fit2)) return(0)
+
+  result.list <- setNames(
+    lapply(colnames(contrast.matrix), function(nm) {
+      tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
+      if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL }
+      colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
+      tbl
+    }),
+    colnames(contrast.matrix)
+  )
+
+  dataSet$data.norm       <- data.norm
+  dataSet$design          <- design
+  dataSet$comp.res.list   <- result.list
+  dataSet$comp.res        <- result.list[[1]]
+  dataSet$sig.mat         <- NULL
+  dataSet
 }
 
 #' Perform peptide-level differential analysis
@@ -1790,29 +1836,23 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
   paramSet <- readSet(paramSet, "paramSet")
   msgSet <- readSet(msgSet, "msgSet")
 
-  # Check if peptide-level data exists
   if (!file.exists("peptide_level_data.qs")) {
     msgSet$current.msg <- "Peptide-level DE analysis skipped: peptide_level_data.qs not found."
     saveSet(msgSet, "msgSet")
     return(0)
   }
-
-  # Check if peptide-to-protein map exists
   if (!file.exists("peptide_to_protein_map.qs")) {
     msgSet$current.msg <- "Peptide-level DE analysis skipped: peptide_to_protein_map.qs not found."
     saveSet(msgSet, "msgSet")
     return(0)
   }
 
-  # Load peptide-level data
   pep.mat <- ov_qs_read("peptide_level_data.qs")
   pep.map <- ov_qs_read("peptide_to_protein_map.qs")
 
-  # Create a temporary dataset for peptide-level analysis
   peptide.dataSet <- dataSet
   peptide.dataSet$data.norm <- pep.mat
 
-  # Perform DE analysis based on the method used for protein-level
   if (dataSet$de.method == "limma") {
     peptide.dataSet <- .perform_limma_edger(peptide.dataSet, robustTrend = FALSE)
   } else if (dataSet$de.method == "deqms") {
@@ -1825,7 +1865,12 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
     return(0)
   }
 
-  # Save peptide-level DE results (shadow save for Arrow zero-copy access)
+  if (!is.list(peptide.dataSet)) {
+    msgSet$current.msg <- "Peptide-level DE analysis failed."
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+
   shadow_save(peptide.dataSet$comp.res, "peptide_de_results.qs")
   shadow_save(peptide.dataSet$sig.mat, "peptide_sig_mat.qs")
 
@@ -1877,18 +1922,24 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   prot.res <- dataSet$comp.res
   msg("[R DEBUG] Loaded protein DE results from dataSet with ", nrow(prot.res), " rows")
 
-  # Load peptide-level DE results
-  if (!file.exists("peptide_de_results.qs")) {
-    msg("[R DEBUG] peptide_de_results.qs does not exist")
-    return(NULL)
+  # Load peptide-level DE results (optional — show NA when absent)
+  pep.res <- NULL
+  if (file.exists("peptide_de_results.qs")) {
+    pep.all <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
+    if (!inherits(pep.all, "try-error")) {
+      if (is.list(pep.all) && !is.data.frame(pep.all)) {
+        active.nm <- dataSet$active.comp.nm
+        pep.res <- if (!is.null(active.nm) && active.nm %in% names(pep.all)) pep.all[[active.nm]] else pep.all[[1]]
+      } else {
+        pep.res <- pep.all
+      }
+      msg("[R DEBUG] Loaded peptide_de_results.qs with ", nrow(pep.res), " rows")
+    } else {
+      msg("[R DEBUG] Error reading peptide_de_results.qs")
+    }
+  } else {
+    msg("[R DEBUG] peptide_de_results.qs does not exist — will show NA for peptide stats")
   }
-
-  pep.res <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
-  if (inherits(pep.res, "try-error")) {
-    msg("[R DEBUG] Error reading peptide_de_results.qs")
-    return(NULL)
-  }
-  msg("[R DEBUG] Loaded peptide_de_results.qs with ", nrow(pep.res), " rows")
 
   # Load peptide-to-protein map
   if (!file.exists("peptide_to_protein_map.qs")) {
@@ -1975,39 +2026,24 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     msg("[R DEBUG] Protein ", matched.protein.id, " not found in DE results")
   }
 
-  # Extract peptide DE stats
-  # OPTIMIZED: Use list to collect peptide stats, then combine once
-  pep.stats.list <- vector("list", length(peptides))
-  pep.count <- 0
-
-  for (pep in peptides) {
-    if (pep %in% rownames(pep.res)) {
-      pep.count <- pep.count + 1
-      pep.stats.list[[pep.count]] <- data.frame(
-        type = "Peptide",
-        id = pep,
-        name = pep,
-        logFC = pep.res[pep, "logFC"],
-        pValue = pep.res[pep, "P.Value"],
-        stringsAsFactors = FALSE
-      )
-    }
-  }
-
-  # Combine all peptide stats at once
-  if (pep.count > 0) {
-    pep.stats <- do.call(rbind, pep.stats.list[1:pep.count])
+  # Extract peptide DE stats — include all peptides; use NA when pep.res is absent
+  if (!is.null(pep.res) && length(peptides) > 0) {
+    idx <- match(peptides, rownames(pep.res))
+    pep.fc  <- ifelse(is.na(idx), NA_real_, pep.res[idx, "logFC"])
+    pep.pv  <- ifelse(is.na(idx), NA_real_, pep.res[idx, "P.Value"])
   } else {
-    pep.stats <- data.frame(
-      type = character(0),
-      id = character(0),
-      name = character(0),
-      logFC = numeric(0),
-      pValue = numeric(0),
-      stringsAsFactors = FALSE
-    )
+    pep.fc <- rep(NA_real_, length(peptides))
+    pep.pv <- rep(NA_real_, length(peptides))
   }
-  msg("[R DEBUG] Found DE stats for ", nrow(pep.stats), " peptides")
+  pep.stats <- data.frame(
+    type   = rep("Peptide", length(peptides)),
+    id     = peptides,
+    name   = peptides,
+    logFC  = pep.fc,
+    pValue = pep.pv,
+    stringsAsFactors = FALSE
+  )
+  msg("[R DEBUG] Found DE stats for ", sum(!is.na(pep.stats$logFC)), " peptides")
 
   # Create combined data frame with protein first, then peptides
   result <- data.frame(
@@ -2061,10 +2097,18 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
     return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
   }
 
-  pep.res <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
+  pep.all <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
   pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
-  if (inherits(pep.res, "try-error") || inherits(pep.map, "try-error")) {
+  if (inherits(pep.all, "try-error") || inherits(pep.map, "try-error")) {
     return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
+  }
+
+  # Handle list (new) vs. legacy data.frame format
+  if (is.list(pep.all) && !is.data.frame(pep.all)) {
+    active.nm <- dataSet$active.comp.nm
+    pep.res <- if (!is.null(active.nm) && active.nm %in% names(pep.all)) pep.all[[active.nm]] else pep.all[[1]]
+  } else {
+    pep.res <- pep.all
   }
 
   pep.map$Protein <- as.character(pep.map$Protein)

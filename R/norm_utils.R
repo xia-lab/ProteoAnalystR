@@ -992,8 +992,11 @@ SummarizeProteomicsData <- function(dataName = "",
   ov_qs_save(prot.mat, "data.missed.qs")
   ov_qs_save(prot.mat, "data.raw.qs")
 
-  # Save peptide-level data for peptide-level DE analysis (shadow save for Arrow)
-  shadow_save(pep.mat, "peptide_level_data.qs")
+  # Save peptide-level data aligned to prot.mat column order.
+  # pivot_wider inside summarize_peptides may reorder samples; the design will be built
+  # from prot.mat's column order, so pep.mat must match or lmFit assigns wrong groups.
+  pep.mat.save <- pep.mat[, colnames(prot.mat)[colnames(prot.mat) %in% colnames(pep.mat)], drop = FALSE]
+  shadow_save(pep.mat.save, "peptide_level_data.qs")
   msgSet$current.msg <- paste0("Saved peptide-level data: ", nrow(pep.mat), " peptides x ", ncol(pep.mat), " samples.")
 
   dataSet$data.norm <- prot.mat

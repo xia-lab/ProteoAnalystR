@@ -90,6 +90,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   if (dataSet$de.method=="deseq2"){
     hit.inx <- which(colnames(resTable) == "baseMean");
     dataSet$comp.res <- dataSet$comp.res.list[[inx]];
+    dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
     resTable <- dataSet$comp.res;
    } else if (dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt" ){
     #msg("[GetSigfeatures] Processing limma/deqms/wtt method...")
@@ -120,6 +121,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     }
 
     dataSet$comp.res <- dataSet$comp.res.list[[inx]];
+    dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
     resTable <- dataSet$comp.res;
 
     if (is.na(hit.inx) && dataSet$de.method == "wtt") {
@@ -138,6 +140,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   } else {
     hit.inx <- which(colnames(resTable) == "logCPM");
     dataSet$comp.res <- dataSet$comp.res.list[[inx]];
+    dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
     resTable <- dataSet$comp.res;
   }
 
