@@ -74,7 +74,8 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
                        cause.msg, " Please check sample names and/or relax filtering thresholds.")
     msgSet$current.msg <- c(msgSet$current.msg, error.msg)
     saveSet(msgSet, "msgSet")
-    stop(error.msg)
+    AddErrMsg(error.msg);
+    return(0);
   }
 
   .save.annotated.data(data)
@@ -476,7 +477,7 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
         raw.data.anot <- ov_qs_read("data.missed.qs")
         #msg("[Filter] Loading data.missed.qs for proteomics (fallback)")
       } else {
-        stop("No annotated data file found for proteomics filtering")
+        AddErrMsg("No annotated data file found for proteomics filtering"); return(0);
       }
     }else{
      if (file.exists("norm.input.anot.qs")) {
@@ -1359,7 +1360,8 @@ library(tibble)
   # 1. Prepare Data
   # Ensure peptide_matrix has row names as Peptide sequences
   if(is.null(rownames(peptide_matrix))) {
-    stop("Input matrix must have Peptide Sequences as row names.")
+    AddErrMsg("Input matrix must have Peptide Sequences as row names.");
+    return(0);
   }
   
   # Convert to long format for easier manipulation with dplyr
@@ -1390,7 +1392,8 @@ library(tibble)
     filter(Protein %in% prot_counts$Protein)
   
   if(nrow(filtered_data) == 0) {
-    stop("No proteins remained after filtering for minimum peptide count.")
+    AddErrMsg("No proteins remained after filtering for minimum peptide count.");
+    return(0);
   }
   
   # 3. Apply Summarization Method

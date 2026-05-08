@@ -46,13 +46,13 @@ my.build.cemi.net <- function(dataName,
 
     # Validate dataSet was loaded
     if (is.null(dataSet)) {
-      stop("Failed to load dataset: ", dataName)
+      AddErrMsg(paste0("Failed to load dataset: ", dataName)); return(0);
     }
     if (is.null(dataSet$data.norm)) {
-      stop("Dataset '", dataName, "' has no normalized data (data.norm is NULL)")
+      AddErrMsg(paste0("Dataset '", dataName, "' has no normalized data (data.norm is NULL)")); return(0);
     }
     if (is.null(dataSet$meta.info)) {
-      stop("Dataset '", dataName, "' has no metadata (meta.info is NULL)")
+      AddErrMsg(paste0("Dataset '", dataName, "' has no metadata (meta.info is NULL)")); return(0);
     }
 
     expr_mat <- as.data.frame(dataSet$data.norm)    # features × samples
@@ -72,11 +72,11 @@ my.build.cemi.net <- function(dataName,
       classCol <- colnames(meta_df)[1]              # first column by default
     }
     if (!is.character(classCol) || length(classCol) != 1) {
-      stop("classCol must be a single character string")
+      AddErrMsg("classCol must be a single character string"); return(0);
     }
     if (!(classCol %in% colnames(meta_df))) {
-      stop("classCol '", classCol, "' not found in meta.info. Available columns: ",
-           paste(colnames(meta_df), collapse=", "))
+      AddErrMsg(paste0("classCol '", classCol, "' not found in meta.info. Available columns: ",
+           paste(colnames(meta_df), collapse=", "))); return(0);
     }
 
     ## build annotation table (SampleName + all meta)
@@ -87,12 +87,12 @@ my.build.cemi.net <- function(dataName,
 
     # Ensure SampleName column has no NA values
     if (any(is.na(annot_df$SampleName))) {
-      stop("Annotation table has NA values in SampleName column")
+      AddErrMsg("Annotation table has NA values in SampleName column"); return(0);
     }
 
     # Check that expr_mat and annot_df have matching samples
     if (!all(colnames(expr_mat) %in% annot_df$SampleName)) {
-      stop("Expression matrix contains samples not found in metadata")
+      AddErrMsg("Expression matrix contains samples not found in metadata"); return(0);
     }
 
     # Check the class column for NA values - this is critical!
@@ -100,14 +100,14 @@ my.build.cemi.net <- function(dataName,
       class_values <- annot_df[[classCol]]
       if (any(is.na(class_values))) {
         na_samples <- annot_df$SampleName[is.na(class_values)]
-        stop("Class column '", classCol, "' contains NA values for samples: ",
+        AddErrMsg(paste0("Class column '", classCol, "' contains NA values for samples: ",
              paste(na_samples, collapse=", "),
-             ". Please ensure all samples have a valid class assignment.")
+             ". Please ensure all samples have a valid class assignment.")); return(0);
       }
       # Check if class column is character/factor with valid values
       if (length(unique(class_values)) < 2) {
-        stop("Class column '", classCol, "' must have at least 2 different groups, found: ",
-             length(unique(class_values)))
+        AddErrMsg(paste0("Class column '", classCol, "' must have at least 2 different groups, found: ",
+             length(unique(class_values)))); return(0);
       }
       msg("Class column '", classCol, "' has ", length(unique(class_values)),
           " groups: ", paste(unique(class_values), collapse=", "))
@@ -243,10 +243,10 @@ my.build.cemi.net <- function(dataName,
       # For co-expression analysis, we can handle some NAs using pairwise complete observations
       # But if too many remain and auto_impute is disabled, warn or stop
       if (na_pct > 50) {
-        stop("Expression matrix still contains too many NA values (", sprintf("%.2f", na_pct),
+        AddErrMsg(paste0("Expression matrix still contains too many NA values (", sprintf("%.2f", na_pct),
              "%) after filtering. This will prevent proper network construction. ",
              "Please impute or filter missing values before co-expression analysis, ",
-             "or set auto_impute=TRUE to automatically impute remaining NAs.")
+             "or set auto_impute=TRUE to automatically impute remaining NAs.")); return(0);
       } else if (na_pct > 20) {
         msg("WARNING: Moderate percentage of NA values (", sprintf("%.2f", na_pct),
             "%). Co-expression network may be less reliable. ",
@@ -257,8 +257,8 @@ my.build.cemi.net <- function(dataName,
     # Check for infinite or NaN values
     if (any(!is.finite(as.matrix(expr_mat)))) {
       inf_count <- sum(!is.finite(as.matrix(expr_mat)))
-      stop("Expression matrix contains ", inf_count, " infinite or NaN values. ",
-           "Please clean the data before co-expression analysis.")
+      AddErrMsg(paste0("Expression matrix contains ", inf_count, " infinite or NaN values. ",
+           "Please clean the data before co-expression analysis.")); return(0);
     }
 
     # Check for zero-variance genes (all same value) - these cause issues with correlation
@@ -271,9 +271,9 @@ my.build.cemi.net <- function(dataName,
 
     # Final check: ensure we have enough genes
     if (nrow(expr_mat) < min_ngen) {
-      stop("After filtering, only ", nrow(expr_mat), " genes remain, ",
+      AddErrMsg(paste0("After filtering, only ", nrow(expr_mat), " genes remain, ",
            "but min_ngen is set to ", min_ngen, ". ",
-           "Please reduce min_ngen or relax filtering.")
+           "Please reduce min_ngen or relax filtering.")); return(0);
     }
 
 
@@ -321,22 +321,19 @@ my.build.cemi.net <- function(dataName,
 
     # Final dimension check
     if (nrow(expr_mat) < min_ngen) {
-      stop("After all filtering, only ", nrow(expr_mat), " genes remain, ",
+      AddErrMsg(paste0("After all filtering, only ", nrow(expr_mat), " genes remain, ",
            "but min_ngen is set to ", min_ngen, ". ",
-           "Cannot proceed with co-expression analysis.")
+           "Cannot proceed with co-expression analysis.")); return(0);
     }
 
     # FIX: Suppress Quartz popup on macOS - completely disable plotting during cemitool
     # We'll generate plots separately using the other functions
 
-    # Use callr to run CEMiTool in isolated subprocess to reduce memory bandwidth
+    # Use RSclient to run CEMiTool in isolated Rserve fork to reduce memory bandwidth
     # This prevents memory bloat in the main Rserve process
 
-    # Enable callr for memory efficiency
-    USE_CALLR <- TRUE
-
-    if (USE_CALLR && requireNamespace("callr", quietly = TRUE)) {
-      msg("Using callr subprocess...");
+    if (requireNamespace("RSclient", quietly = TRUE)) {
+      msg("Using RSclient subprocess...");
       # Run cemitool in separate process with stdout/stderr capture
       result <- run_func_via_rsclient(
         func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose) {
@@ -378,7 +375,7 @@ my.build.cemi.net <- function(dataName,
 
       cem <- result
     } else {
-      msg("Running in-process (callr disabled or not available)");
+      msg("Running in-process (RSclient not available)");
       cem <- cemitool(expr              = expr_mat,
                       annot             = annot_df,
                       filter            = filter,
@@ -558,16 +555,24 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
   ## choose metadata column sensibly
   if (is.na(metaClass) || metaClass == "NA") metaClass <- 2  # 1 is SampleName
   if (is.numeric(metaClass)) {
-    if (metaClass < 1 || metaClass > ncol(sa))
-      stop("'metaClass' index out of range.")
-    if (metaClass == 1)
-      stop("metaClass 1 is 'SampleName'; choose a metadata column (>=2).")
+    if (metaClass < 1 || metaClass > ncol(sa)) {
+      AddErrMsg("'metaClass' index out of range.");
+      return(0);
+    }
+    if (metaClass == 1) {
+      AddErrMsg("metaClass 1 is 'SampleName'; choose a metadata column (>=2).");
+      return(0);
+    }
     classes <- sa[[metaClass]]
   } else {
-    if (!metaClass %in% colnames(sa))
-      stop("metaClass '", metaClass, "' not found in sample_annotation.")
-    if (metaClass == "SampleName")
-      stop("metaClass 'SampleName' is invalid; choose real metadata.")
+    if (!metaClass %in% colnames(sa)) {
+      AddErrMsg(paste0("metaClass '", metaClass, "' not found in sample_annotation."));
+      return(0);
+    }
+    if (metaClass == "SampleName") {
+      AddErrMsg("metaClass 'SampleName' is invalid; choose real metadata.");
+      return(0);
+    }
     classes <- sa[[metaClass]]
   }
 
@@ -626,14 +631,16 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     # Default: use first metadata column (column 2, since column 1 is SampleName)
     if (is.na(factorName) || is.null(factorName) || factorName == "NA" || factorName == "") {
       if (ncol(sa) < 2) {
-        stop("Sample annotation has no metadata columns (only SampleName)");
+        AddErrMsg("Sample annotation has no metadata columns (only SampleName)");
+        return(0);
       }
       colLabel <- colnames(sa)[2]
       fac <- sa[[2]]
     } else if (is.numeric(factorName)) {
       if (factorName < 2 || factorName > ncol(sa)) {
-        stop("Numeric factorName (", factorName, ") is out of range. Must be between 2 and ", ncol(sa),
-             ". Available columns: ", paste(colnames(sa), collapse=", "));
+        AddErrMsg(paste0("Numeric factorName (", factorName, ") is out of range. Must be between 2 and ", ncol(sa),
+             ". Available columns: ", paste(colnames(sa), collapse=", ")));
+        return(0);
       }
       fac      <- sa[[factorName]]
       colLabel <- colnames(sa)[factorName]
@@ -655,15 +662,17 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
           colLabel <- matched_col[1]
         } else {
           # No match - provide helpful error
-          stop("factorName '", factorName, "' not found in sample annotation (case-insensitive search failed). ",
+          AddErrMsg(paste0("factorName '", factorName, "' not found in sample annotation (case-insensitive search failed). ",
                "Available columns: ", paste(available_cols, collapse=", "), ". ",
-               "Please check that your metadata column name matches exactly.");
+               "Please check that your metadata column name matches exactly."));
+          return(0);
         }
       }
 
       if (colLabel == "SampleName") {
-        stop("factorName cannot be 'SampleName'. Available columns: ",
-               paste(available_cols[available_cols != "SampleName"], collapse=", "));
+        AddErrMsg(paste0("factorName cannot be 'SampleName'. Available columns: ",
+               paste(available_cols[available_cols != "SampleName"], collapse=", ")));
+        return(0);
       }
     }
 
@@ -679,7 +688,8 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     modTbl <- attr(cem, "module")
 
     if (is.null(modTbl) || !is.data.frame(modTbl) || nrow(modTbl) == 0) {
-      stop("Module table is NULL or empty - no modules found in CEMiTool object");
+      AddErrMsg("Module table is NULL or empty - no modules found in CEMiTool object");
+      return(0);
     }
 
 
@@ -690,15 +700,17 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     } else if ("features" %in% colnames(modTbl)) {
       "features"
     } else {
-      stop("Module table has no 'genes' or 'features' column. Available: ",
-           paste(colnames(modTbl), collapse=", "));
+      AddErrMsg(paste0("Module table has no 'genes' or 'features' column. Available: ",
+           paste(colnames(modTbl), collapse=", ")));
+      return(0);
     }
 
 
     g      <- intersect(rownames(expr), modTbl[[feature_col]])
 
     if (length(g) == 0) {
-      stop("No overlapping features between expression matrix and module table");
+      AddErrMsg("No overlapping features between expression matrix and module table");
+      return(0);
     }
 
     colors <- modTbl$modules[match(g, modTbl[[feature_col]])]
@@ -752,7 +764,6 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     labeledHeatmap(Matrix          = corMat,
                    xLabels         = colnames(mm),
                    yLabels         = rownames(corMat),
-                   ySymbols        = rownames(corMat),
                    colorLabels     = FALSE,
                    colors          = colfun(50),
                    textMatrix      = textMat,

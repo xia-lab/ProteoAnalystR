@@ -191,7 +191,7 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
   cat(json.obj);
   sink();
   
-  if(paramSet$init.lib == "NA"){
+  if(paramSet$init.lib == "NA" || !file.exists("enr.mat.qs")){
     enr.mat <- "NA"
   }else{
     enr.mat <- ov_qs_read("enr.mat.qs");
@@ -351,7 +351,6 @@ PerformVolcanoEnrichment<-function(dataName="", file.nm, fun.type, IDs, type, in
   fcthreshu <- suppressWarnings(as.numeric(paramSet$fcthreshu));
   if (length(fcthreshu) == 0 || is.na(fcthreshu)) {
     fcthreshu <- 0
-    cat("[Volcano Enrichment] fcthreshu missing/invalid; defaulting to 0\n")
   }
   print(paste0(fcthreshu, "===fcthresh"));
   anal.type <- paramSet$anal.type;
@@ -368,49 +367,33 @@ PerformVolcanoEnrichment<-function(dataName="", file.nm, fun.type, IDs, type, in
       sigmat <- cbind(unname(analSet$meta.avgFC[rownames(sigmat)]), sigmat);
       inx <- 1;
     }else{
-      sigmat <- analSet$inmex.ind[paramSet$selDataNm][[1]][which(analSet$inmex.ind[paramSet$selDataNm][[1]][,'Pval'] < as.numeric(paramSet$pvalu)),];
+      sigmat <- analSet$inmex.ind[paramSet$selDataNm][[1]][which(analSet$inmex.ind[paramSet$selDataNm][[1]][,'Pval'] < as.numeric(paramSet$pvalu)), , drop=FALSE];
     }
   }
-  
+
+  if(!is.matrix(sigmat)) sigmat <- as.matrix(sigmat);
+
   if(type == "focus"){
     gene.vec <- unlist(strsplit(IDs, "; "));
   }else if(type == "all"){
-    gene.vecup <- rownames(sigmat[which(sigmat[,inx] > fcthreshu),]);
-    gene.vecdown <- rownames(sigmat[which(sigmat[,inx] < -fcthreshu),]);
+    gene.vecup <- rownames(sigmat[which(sigmat[,inx] > fcthreshu), , drop=FALSE]);
+    gene.vecdown <- rownames(sigmat[which(sigmat[,inx] < -fcthreshu), , drop=FALSE]);
     gene.vec <- c(gene.vecup, gene.vecdown);
   }else if(type == "up"){
-    gene.vec <- rownames(sigmat[which(sigmat[,inx] > fcthreshu),]);
+    gene.vec <- rownames(sigmat[which(sigmat[,inx] > fcthreshu), , drop=FALSE]);
   }else{
-    gene.vec <- rownames(sigmat[which(sigmat[,inx] < -fcthreshu),]);
+    gene.vec <- rownames(sigmat[which(sigmat[,inx] < -fcthreshu), , drop=FALSE]);
   }
 
   # Check if phospho data and use appropriate functions
   is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")
 
   if (is_phospho) {
-    # For phospho data, gene.vec contains phosphosite IDs (uniprot+site)
-    # Use phospho-aware enrichment
-    cat(sprintf("[Volcano Enrichment] Phospho data detected - using phosphosite-aware enrichment\n"))
     res <- .performEnrichAnalysisPhospho(dataSet, file.nm, fun.type, gene.vec, "volcano")
   } else {
-    # PROTEOMICS: gene.vec contains UniProt IDs (central ID)
-    # Need to convert to Entrez IDs for enrichment library matching
-    # Step 1: UniProt → Entrez (for matching enrichment libraries)
-    uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
-    hit.inx <- match(gene.vec, uniprot.map[, "accession"])
-    entrez.vec <- uniprot.map[hit.inx, "gene_id"]
-
-    # Step 2: Get symbols for display
-    sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, paramSet$data.idType)
-
-    # For enrichment: use Entrez IDs (values) named by symbols (names)
-    entrez.vec.named <- entrez.vec
-    names(entrez.vec.named) <- sym.vec
-
-    # Remove NAs (unmapped UniProts)
-    entrez.vec.named <- entrez.vec.named[!is.na(entrez.vec.named)]
-
-    res <- .performEnrichAnalysis(dataSet, file.nm, fun.type, entrez.vec.named, "volcano")
+    sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, paramSet$data.idType);
+    names(gene.vec) <- sym.vec;
+    res <- .performEnrichAnalysis(dataSet, file.nm, fun.type, gene.vec, "volcano");
   }
 
   return(res);
@@ -435,17 +418,19 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
       sigmat <- dataSet$sig.mat
     }
   }else{
-    sigmat <- analSet$inmex.ind[paramSet$selDataNm][[1]][which(analSet$inmex.ind[paramSet$selDataNm][[1]][,'Pval'] < as.numeric(paramSet$pvalu)),];
+    sigmat <- analSet$inmex.ind[paramSet$selDataNm][[1]][which(analSet$inmex.ind[paramSet$selDataNm][[1]][,'Pval'] < as.numeric(paramSet$pvalu)), , drop=FALSE];
   }
-  
+
+  if(!is.matrix(sigmat)) sigmat <- as.matrix(sigmat);
+
   one.path.vec <- unlist(strsplit(IDs, "; "));
-  
+
   fcthreshu <- suppressWarnings(as.numeric(paramSet$fcthreshu))
   if (length(fcthreshu) == 0 || is.na(fcthreshu)) {
     fcthreshu <- 0
   }
-  gene.vecup <- rownames(sigmat[which(sigmat[,inx] > fcthreshu),]);
-  gene.vecdown <- rownames(sigmat[which(sigmat[,inx] < -fcthreshu),]);
+  gene.vecup <- rownames(sigmat[which(sigmat[,inx] > fcthreshu), , drop=FALSE]);
+  gene.vecdown <- rownames(sigmat[which(sigmat[,inx] < -fcthreshu), , drop=FALSE]);
   ora.vec <- c(gene.vecup, gene.vecdown);
 
   # PROTEOMICS: ora.vec contains UniProt IDs, need to convert to Entrez for enrichment

@@ -21,12 +21,12 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   require("ggridges");
   safe_qread <- function(path) {
     if (!file.exists(path)) {
-      stop("[Ridgeline] Required file missing: ", path)
+      AddErrMsg(paste0("Required file missing: ", path)); return(0)
     }
     tryCatch(
       ov_qs_read(path),
       error = function(e) {
-        stop("[Ridgeline] Failed to read ", path, " | ", conditionMessage(e))
+        AddErrMsg(paste0("Failed to read ", path)); return(0)
       }
     )
   }
@@ -51,8 +51,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       dataSet <- readDataset(paramSet$selDataNm);
     }
     sigmat <- as.data.frame(dataSet$prot.mat)
-    msg("[Ridgeline] For proteinlist - sigmat has ", nrow(sigmat), " rows")
-    msg("[Ridgeline] sigmat rownames (first 5): ", paste(head(rownames(sigmat), 5), collapse=", "))
 
     sigmat$entrez <- rownames(sigmat);
     universe <- unique(unlist(current.featureset));
@@ -129,11 +127,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     # Check if phospho data and use appropriate functions
     is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")
 
-    msg("[Ridgeline] About to perform enrichment analysis")
-    msg("[Ridgeline] Current working directory: ", getwd())
-    msg("[Ridgeline] Number of genes: ", length(gene.vec))
-    msg("[Ridgeline] Is phospho data: ", is_phospho)
-    msg("[Ridgeline] Fun type: ", fun.type)
 
     # Check if there are any significant genes
     if(length(gene.vec) == 0){
@@ -145,26 +138,20 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
 
     if (is_phospho) {
       # For phospho data, gene.vec contains phosphosite IDs (uniprot+site)
-      msg("[Ridgeline] Calling .performEnrichAnalysisPhospho")
       .performEnrichAnalysisPhospho(dataSet, imgNm, fun.type, gene.vec, "ridgeline")
     } else {
       # Regular data - use standard enrichment
-      msg("[Ridgeline] Calling .performEnrichAnalysis")
       sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, paramSet$data.idType);
       names(gene.vec) <- sym.vec;
       .performEnrichAnalysis(dataSet, imgNm, fun.type, gene.vec, "ridgeline")
     }
 
-    msg("[Ridgeline] Enrichment analysis completed")
-    msg("[Ridgeline] Files in working directory:")
-    msg(paste(list.files(pattern = "*.qs"), collapse = ", "))
 
     # Check if file exists before reading
     if (!file.exists("enr.mat.qs")) {
-      stop("[Ridgeline] ERROR: enr.mat.qs file not found after enrichment analysis. Working directory: ", getwd())
+      AddErrMsg("Enrichment analysis did not produce results. Please try different parameters."); return(0)
     }
 
-    msg("[Ridgeline] Reading enr.mat.qs file")
     res <- safe_qread("enr.mat.qs");
     colnames(res) <- c("size", "expected", "overlap", "pval", "padj");
 
@@ -174,29 +161,22 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     res$pval <- as.numeric(res$pval)
 
     # Load hits.query saved by enrichment analysis (contains UniProt IDs after conversion)
-    msg("[Ridgeline] Loading hits_query.qs file")
     if (!file.exists("hits_query.qs")) {
-      stop("[Ridgeline] ERROR: hits_query.qs file not found. Working directory: ", getwd())
+      AddErrMsg("Enrichment results file not found. Please re-run enrichment analysis."); return(0)
     }
     saved.hits.query <- safe_qread("hits_query.qs");
-    msg("[Ridgeline] Loaded hits.query with ", length(saved.hits.query), " pathways")
   } else {
     # GSEA branch
-    msg("[Ridgeline] GSEA analysis - preparing ranked vector")
 
     rankedVec<- ComputeRankedVec(dataSet, rankOpt, paramSet$selectedFactorInx);
-    msg("[Ridgeline] RankedVec length: ", length(rankedVec))
-    msg("[Ridgeline] Sample rankedVec names: ", paste(head(names(rankedVec), 5), collapse = ", "))
 
     # For proteomics data, names(rankedVec) are UniProt IDs, need to convert to Entrez
     # Universe for proteinlist is Entrez IDs from library, for onedata is UniProt IDs from data
     if(anal.type == "proteinlist"){
       # Universe already contains Entrez IDs from current.featureset
       gene.vec <- universe;
-      msg("[Ridgeline] Proteinlist: Universe already contains Entrez IDs (", length(gene.vec), " genes)")
     } else {
       # Universe contains UniProt IDs, need to convert to Entrez
-      msg("[Ridgeline] Converting universe UniProt IDs to Entrez IDs...")
 
       # Normalize UniProt IDs (remove phosphosite annotations, isoforms)
       normalized.universe <- sub("_[A-Z]_\\d+$", "", universe)  # Remove phosphosites
@@ -206,13 +186,11 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       hit.inx <- match(normalized.universe, uniprot.map[, "accession"])
       entrez.vec <- uniprot.map[hit.inx, "gene_id"]
       gene.vec <- entrez.vec[!is.na(entrez.vec)]
-      msg("[Ridgeline] Converted ", length(gene.vec), " UniProt IDs to Entrez IDs")
     }
 
     # Convert Entrez IDs to symbols for fgsea matching
     sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, "entrez");
     gene.nms <- sym.vec;
-    msg("[Ridgeline] Converted ", length(gene.nms), " Entrez IDs to symbols")
 
     # Create symbol-based gene sets from Entrez-based current.featureset
     current.featureset.symb <- lapply(current.featureset,
@@ -222,7 +200,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     );
 
     # Convert rankedVec names from UniProt to symbols (via Entrez)
-    msg("[Ridgeline] Converting rankedVec names from UniProt to symbols...")
 
     # Normalize UniProt IDs (remove phosphosite annotations, isoforms)
     normalized.names <- sub("_[A-Z]_\\d+$", "", names(rankedVec))  # Remove phosphosites
@@ -235,7 +212,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     names(rankedVec) <- sym.vec
     # Remove NAs
     rankedVec <- rankedVec[!is.na(names(rankedVec))]
-    msg("[Ridgeline] RankedVec after conversion: ", length(rankedVec), " genes with symbols")
 
 
     if(fun.type %in% c("go_bp", "go_mf", "go_cc")){
@@ -276,7 +252,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   if(ridgeType == "ora"){
     # Use saved hits.query (already has UniProt IDs after conversion)
     hits.query <- saved.hits.query[resTable$pathway];
-    msg("[Ridgeline] Using saved hits.query for ORA (", length(hits.query), " pathways)")
   } else {
     # GSEA: compute hits.query from current.featureset (Entrez IDs)
     # Use gene.vec (Entrez) as the universe for matching
@@ -288,7 +263,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     hits.query <- hits.query[resTable$pathway];
 
     # Convert Entrez IDs back to UniProt IDs for consistency
-    msg("[Ridgeline] Converting GSEA hits.query from Entrez to UniProt...")
     uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
 
     hits.query <- lapply(hits.query, function(entrez.list) {
@@ -298,7 +272,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       uniprot.list[!is.na(uniprot.list)]
     })
 
-    msg("[Ridgeline] Converted GSEA hits.query to UniProt IDs (", length(hits.query), " pathways)")
   }
 
   # prepare data for plotting
@@ -331,8 +304,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     colnames(degs.plot)[1] <- "entrez";
   }
 
-  msg("[Ridgeline] Created degs.plot with ", nrow(degs.plot), " rows")
-  msg("[Ridgeline] degs.plot$entrez (first 5): ", paste(head(degs.plot$entrez, 5), collapse=", "))
 
   # For protein lists, sigmat rownames may be Entrez (older pipeline) or
   # already UniProt (current upstream writes UniProt directly to dataSet$prot.mat).
@@ -369,15 +340,10 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   # This ensures gs.plot matches with degs.plot
   gs.plot <- reshape::melt(hits.query);
   colnames(gs.plot) <- c("entrez", "name");
-  msg("[Ridgeline] Created gs.plot from hits.query (", ridgeType, " mode)")
-  msg("[Ridgeline] gs.plot has ", nrow(gs.plot), " rows")
-  msg("[Ridgeline] gs.plot$entrez (first 5): ", paste(head(gs.plot$entrez, 5), collapse=", "))
-  msg("[Ridgeline] gs.plot$name (first 5): ", paste(head(gs.plot$name, 5), collapse=", "))
 
   # For phospho data in ORA mode, gs.plot$entrez contains phosphosite IDs
   # Need to convert to Entrez IDs to match degs.plot
   if (is_phospho && ridgeType == "ora") {
-    msg("[Ridgeline] Converting gs.plot phosphosite IDs to Entrez IDs...")
 
     # Strip phosphosite IDs to UniProt IDs and remove isoforms
     uniprot_ids <- sapply(strsplit(as.character(gs.plot$entrez), "_"), function(x) x[1])
@@ -394,18 +360,13 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     # Remove rows with NA Entrez IDs
     gs.plot <- gs.plot[!is.na(gs.plot$entrez), ]
 
-    msg("[Ridgeline] After conversion - gs.plot has ", nrow(gs.plot), " rows")
-    msg("[Ridgeline] After conversion - gs.plot$entrez (first 5): ", paste(head(gs.plot$entrez, 5), collapse=", "))
   }
 
   df <- merge(res.sig, gs.plot, by = "name", all.x = TRUE, all.y = FALSE);
   df <- merge(df, degs.plot, by = "entrez", all.x = TRUE, all.y = FALSE);
   df <- na.omit(df)
 
-  msg("[Ridgeline] After merges - df has ", nrow(df), " rows and ", ncol(df), " columns")
-  msg("[Ridgeline] df column names: ", paste(colnames(df), collapse=", "))
   if(nrow(df) > 0) {
-    msg("[Ridgeline] df$name has ", length(levels(df$name)), " unique levels")
   }
 
   # Check if we have any data to plot
@@ -452,7 +413,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   # Map IDs to symbols
   # For both ORA and GSEA, df$entrez now contains UniProt IDs (after conversion)
   symb <- doEntrez2SymbolMapping(df$entrez, paramSet$data.org, "uniprot");
-  msg("[Ridgeline] Mapped ", length(symb), " UniProt IDs to symbols (", ridgeType, " mode)")
   df$symbol <- symb;
   
   data.list <- list();
@@ -467,9 +427,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     pval.list[[ nm ]] <- unname(unlist(res[which(res$name == nm), "pval"]));
   }
 
-  msg("[Ridgeline] After loop - data.list length: ", length(data.list))
-  msg("[Ridgeline] After loop - gene.list length: ", length(gene.list))
-  msg("[Ridgeline] After loop - pval.list length: ", length(pval.list))
 
   minFc <- min(df$value);
   maxFc <- max(df$value);
@@ -510,9 +467,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   }
   if(length(fun.ids) ==1) { fun.ids <- matrix(fun.ids) };
 
-  msg("[Ridgeline] Creating enr.res with ", length(fun.anot), " pathways")
-  msg("[Ridgeline] fun.anot is: ", class(fun.anot), " with length ", length(fun.anot))
-  msg("[Ridgeline] fun.ids length: ", length(fun.ids))
 
   enr.res <- list(
     fun.anot = fun.anot,
@@ -527,12 +481,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     enr.res[["ES"]] <- unname(unlist(resTable[,"ES"]));
   }
 
-  msg("[Ridgeline] About to create res.list")
-  msg("[Ridgeline] - data.list is ", class(data.list), " with length ", length(data.list))
-  msg("[Ridgeline] - gene.list is ", class(gene.list), " with length ", length(gene.list))
-  msg("[Ridgeline] - df is ", class(df), " with ", nrow(df), " rows")
-  msg("[Ridgeline] - enr.res is ", class(enr.res), " with ", length(enr.res), " elements")
-  msg("[Ridgeline] - bandwidth: ", ridge_bw)
 
   res.list <- list(data=data.list,
                    proteinlist=gene.list,
@@ -549,8 +497,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
                    dat.opt = paramSet$selDataNm,
                    naviString="ridge");
 
-  msg("[Ridgeline] Created res.list with ", length(res.list), " elements")
-  msg("[Ridgeline] res.list keys: ", paste(names(res.list), collapse=", "))
 
   if(ridgeType == "gsea"){
   csv.nm <- paste0(imgNm, ".csv");
@@ -560,16 +506,12 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   analSet$ridgeline <- res.list;
   saveSet(analSet, "analSet");
 
-  msg("[Ridgeline] Before JSON serialization - res.list structure:")
-  msg("[Ridgeline] - names: ", paste(names(res.list), collapse=", "))
-  msg("[Ridgeline] Writing JSON to: ", jsonNm)
 
   json.obj <- rjson::toJSON(res.list);
   sink(jsonNm);
   cat(json.obj);
   sink();
 
-  msg("[Ridgeline] JSON file written successfully")
   
   #for link sharing
   paramSet$jsonNms$ridge <- jsonNm

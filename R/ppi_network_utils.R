@@ -194,11 +194,12 @@ ComputeSubnetStats <- function(comps){
   }
 
   if (!all(c("id1", "id2") %in% colnames(edges))) {
-    stop(paste(
+    AddErrMsg(paste(
       "PPI query did not return the required edge columns id1/id2.",
       "Available columns:",
       paste(colnames(edges), collapse = ", ")
-    ))
+    ));
+    return(0);
   }
 
   if (!"combined_score" %in% colnames(edges)) {
@@ -888,11 +889,13 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   # Validate graph
   if (is.null(g) || !igraph::is.igraph(g)) {
-    stop("Invalid graph object")
+    AddErrMsg("Invalid graph object");
+    return(0);
   }
 
   if (igraph::vcount(g) == 0) {
-    stop("Graph has no vertices")
+    AddErrMsg("Graph has no vertices");
+    return(0);
   }
 
   # Get node names

@@ -5,15 +5,18 @@ UpdateCompartmentLayout <- function(jsonNm = "proteoanalyst_1.json",
                                     algo = c("backbone", "fr", "kk")) {
   algo <- match.arg(algo)
   if (!file.exists(jsonNm)) {
-    stop("JSON file not found: ", jsonNm)
+    AddErrMsg(paste0("JSON file not found: ", jsonNm));
+    return(0);
   }
   graph <- jsonlite::read_json(jsonNm, simplifyVector = TRUE)
   if (is.null(graph$elements)) {
-    stop("No elements found in JSON.")
+    AddErrMsg("No elements found in JSON.");
+    return(0);
   }
 
   if (!requireNamespace("igraph", quietly = TRUE)) {
-    stop("igraph package is required for compartment layout.")
+    AddErrMsg("igraph package is required for compartment layout.");
+    return(0);
   }
 
   # Build igraph

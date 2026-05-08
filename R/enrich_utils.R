@@ -22,7 +22,6 @@
   ora.nms <- names(ora.vec);
 
   if(is.null(ora.nms)){
-    # msg("[EnrichAnalysis] ora.vec has no names, using values as names")
     ora.nms <- ora.vec;
     names(ora.vec) <- ora.vec;
   }
@@ -59,12 +58,8 @@
     ora.vec <- entrez.vec
     ora.nms <- sym.vec
 
-    # msg("[EnrichAnalysis] Found ", sum(!is.na(uniprot.vec)), " UniProt mappings for Entrez IDs")
-    # msg("[EnrichAnalysis] Final query size: ", length(ora.vec))
   } else {
     # IDs are UniProt, convert to Entrez
-    msg("[EnrichAnalysis] Converting UniProt IDs to Entrez IDs for enrichment matching...")
-    msg("[EnrichAnalysis] Input query size: ", length(ora.vec))
 
     # Normalize UniProt IDs (remove phosphosite annotations, isoforms, etc.)
     # e.g., Q9D1F4_T_247 → Q9D1F4, P12345-1 → P12345
@@ -73,45 +68,15 @@
     normalized.ora.vec <- sub("-\\d+$", "", normalized.ora.vec)         # Remove isoforms
     normalized.ora.vec <- trimws(normalized.ora.vec)
 
-    n_modified <- sum(normalized.ora.vec != ora.vec, na.rm = TRUE)
-    if (!is.na(n_modified) && n_modified > 0) {
-      msg("[EnrichAnalysis] Normalized ", n_modified, " IDs with phosphosite/isoform annotations")
-      modified_idx <- which(normalized.ora.vec != ora.vec & !is.na(normalized.ora.vec) & !is.na(ora.vec))
-      if (length(modified_idx) > 0) {
-        isoform_examples <- ora.vec[modified_idx]
-        normalized_examples <- normalized.ora.vec[modified_idx]
-        msg("[EnrichAnalysis] Sample original IDs: ", paste(head(isoform_examples, 5), collapse = ", "))
-        msg("[EnrichAnalysis] Sample normalized IDs: ", paste(head(normalized_examples, 5), collapse = ", "))
-      }
-    } else {
-      msg("[EnrichAnalysis] No isoform/phosphosite annotations detected")
-    }
-
     # Query UniProt → Entrez mapping
-    msg("[EnrichAnalysis] Querying UniProt→Entrez database for organism: ", paramSet$data.org)
     uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
-    msg("[EnrichAnalysis] Database contains ", nrow(uniprot.map), " UniProt→Entrez mappings")
     hit.inx <- match(normalized.ora.vec, uniprot.map[, "accession"])
     entrez.vec <- uniprot.map[hit.inx, "gene_id"]
 
     # Get symbols for display names
     sym.vec <- doEntrez2SymbolMapping(entrez.vec, paramSet$data.org, "entrez");
 
-    # Count conversions
     na.inx <- is.na(entrez.vec)
-    msg("[EnrichAnalysis] Mapped ", sum(!na.inx), " UniProt IDs to Entrez IDs (",
-        round(100*sum(!na.inx)/length(ora.vec), 1), "%)")
-    msg("[EnrichAnalysis] Failed to map ", sum(na.inx), " UniProt IDs")
-    if (sum(na.inx) > 0) {
-      failed_ids <- ora.vec[na.inx]
-      msg("[EnrichAnalysis] Sample failed IDs: ", paste(head(failed_ids, 10), collapse = ", "))
-      normalized_failed <- normalized.ora.vec[na.inx]
-      msg("[EnrichAnalysis] Normalized failed IDs: ", paste(head(normalized_failed, 10), collapse = ", "))
-    }
-    if (sum(!na.inx) > 0) {
-      msg("[EnrichAnalysis] Sample Entrez IDs: ", paste(head(entrez.vec[!na.inx], 10), collapse = ", "))
-      msg("[EnrichAnalysis] Sample gene symbols: ", paste(head(sym.vec[!na.inx], 10), collapse = ", "))
-    }
 
     # Create UniProt → Entrez mapping dictionary for reverse conversion
     uniprot.to.entrez.map <- entrez.vec
@@ -127,50 +92,38 @@
     original.uniprot.vec <- original.uniprot.vec[!na.inx]
     uniprot.to.entrez.map <- uniprot.to.entrez.map[!na.inx]
 
-    # msg("[EnrichAnalysis] Final query size after removing unmapped: ", length(ora.vec))
   }
 
   # Store mapping in analSet for downstream use (e.g., network analysis)
   analSet <- readSet(analSet, "analSet");
   analSet$uniprot_to_entrez_map <- uniprot.to.entrez.map
   saveSet(analSet, "analSet");
-  # msg("[EnrichAnalysis] Saved UniProt→Entrez mapping to analSet")
   
-  # msg("[EnrichAnalysis] Setting up universe (universe.opt: ", paramSet$universe.opt, ")")
   if(paramSet$universe.opt == "library"){
     current.universe <- unique(unlist(current.featureset));
-    # msg("[EnrichAnalysis] Using library universe")
   }else{
     # cut to the universe to uploaded features
-    # msg("[EnrichAnalysis] Using uploaded data universe (anal.type: ", paramSet$anal.type, ")")
     if(paramSet$anal.type == "onedata"){
       data.anot <- .get.annotated.data();
       current.universe <- rownames(data.anot);
-      # msg("[EnrichAnalysis] Got universe from onedata")
     }else if(paramSet$anal.type == "metadata"){
       inmex <- ov_qs_read("inmex_meta.qs");
       current.universe <- rownames(inmex$data);
-      # msg("[EnrichAnalysis] Got universe from metadata")
     }else{
       if(!is.null(paramSet$backgroundUniverse)){
         current.universe <- paramSet$backgroundUniverse;
-        # msg("[EnrichAnalysis] Got universe from paramSet$backgroundUniverse")
       }else{
         current.universe <- unique(unlist(current.featureset));
-        # msg("[EnrichAnalysis] Got universe from feature set (fallback)")
       }
     }
   }
-  # msg("[EnrichAnalysis] Universe size: ", length(current.universe))
   
   # also make sure pathways only contain features measured in experiment
   #if(!is.null(dataSet$data.anot)){
    if(file.exists("data.anot.qs")){
-    # msg("[EnrichAnalysis] Filtering pathways to universe (data.anot.qs exists)")
     current.featureset <- lapply(current.featureset, function(x){x[x %in% current.universe]})
     inds <- lapply(current.featureset, length) > 0
     current.featureset <- current.featureset[inds]
-    # msg("[EnrichAnalysis] After filtering: ", length(current.featureset), " pathways remain")
   }
 
   # prepare for the result table
@@ -180,10 +133,8 @@
   colnames(res.mat)<-c("Total", "Expected", "Hits", "Pval", "FDR");
 
   q.size<-length(ora.vec);
-  # msg("[EnrichAnalysis] Query size (q.size): ", q.size)
 
   # get the matched query for each pathway
-  # msg("[EnrichAnalysis] Calculating hits for each pathway...")
   hits.query <- lapply(current.featureset,
                        function(x) {
                          ora.nms[ora.vec%in%unlist(x)];
@@ -192,7 +143,6 @@
 
   # PROTEOMICS: Convert hits back to UniProt IDs (reverse mapping)
   if(!is.null(uniprot.to.entrez.map)){
-    # msg("[EnrichAnalysis] Converting hit lists back to UniProt IDs...")
 
     # Create symbol → UniProt mapping
     symbol.to.uniprot.map <- original.uniprot.vec
@@ -208,16 +158,12 @@
       unname(uniprot.list)
     })
 
-    # msg("[EnrichAnalysis] Converted hit lists to UniProt IDs")
   }
 
   ov_qs_save(hits.query, "hits_query.qs");
 
   names(hits.query) <- names(current.featureset);
   hit.num<-unlist(lapply(hits.query, function(x){length(unique(x))}), use.names=FALSE);
-  # msg("[EnrichAnalysis] Total pathways with hits: ", sum(hit.num > 0), " out of ", length(hit.num))
-  # msg("[EnrichAnalysis] Max hits in a pathway: ", max(hit.num))
-  # msg("[EnrichAnalysis] Min hits in a pathway: ", min(hit.num))
   
   gene.vec <- current.universe;
   sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, paramSet$data.idType);
@@ -248,13 +194,10 @@
   res.mat[,5] <- p.adjust(raw.pvals, "fdr");
   
   # now, clean up result, synchronize with hit.query
-  # msg("[EnrichAnalysis] Filtering results - keeping only pathways with hits...")
   res.mat <- res.mat[hit.num>0,,drop = F];
   hits.query <- hits.query[hit.num>0];
-  # msg("[EnrichAnalysis] After filtering: ", nrow(res.mat), " pathways with hits remain")
 
   if(nrow(res.mat)> 1){
-    # msg("[EnrichAnalysis] Sorting results by p-value...")
     # order by p value
     ord.inx<-order(res.mat[,4]);
     res.mat <- signif(res.mat[ord.inx,],3);
@@ -279,30 +222,24 @@
     csv.nm <- paste(file.nm, ".csv", sep="");
     #print(paste(csv.nm, "=====", "enrichAnalysis"));
     write.csv(resTable.all, file=csv.nm, row.names=F);
-    # msg("[EnrichAnalysis] Saved full results to: ", csv.nm)
 
     imp.inx <- res.mat[,4] <= 0.05;
     imp.inx[is.na(imp.inx)] <- F
-    # msg("[EnrichAnalysis] Pathways with p <= 0.05: ", sum(imp.inx))
 
     if(sum(imp.inx) < 10){ # too little left, give the top ones
       topn <- ifelse(nrow(res.mat) > 10, 10, nrow(res.mat));
-      # msg("[EnrichAnalysis] Too few significant results (", sum(imp.inx), "), taking top ", topn, " pathways")
       res.mat <- res.mat[1:topn,];
       hits.query <- hits.query[1:topn];
     }else{
-      # msg("[EnrichAnalysis] Filtering to significant pathways (p <= 0.05)")
       res.mat <- res.mat[imp.inx,];
       hits.query <- hits.query[imp.inx];
       if(sum(imp.inx) > 120){
-        # msg("[EnrichAnalysis] Too many results (", sum(imp.inx), "), limiting to top 120")
         # now, clean up result, synchronize with hit.query
         res.mat <- res.mat[1:120,];
         hits.query <- hits.query[1:120];
       }
     }
   }else{
-    # msg("[EnrichAnalysis] ERROR: Only ", nrow(res.mat), " pathway(s) with hits - cannot proceed!")
     # msgSet$current.msg <- "No overlap between queried features and pathway library!"
     saveSet(msgSet, "msgSet");
     return(0);
@@ -325,9 +262,7 @@
 
   # Verify file was written
   if (file.exists("enr.mat.qs")) {
-    # msg("[EnrichAnalysis] Successfully saved enr.mat.qs (", file.size("enr.mat.qs"), " bytes)")
   } else {
-    warning("[EnrichAnalysis] WARNING: enr.mat.qs was not created!")
   }
 
 
@@ -413,7 +348,8 @@
   }
   
   if (!file.exists(my.path)) {
-    stop("[EnrichLib] Library file not found: ", my.path)
+    AddErrMsg(paste0("[EnrichLib] Library file not found: ", my.path));
+    return(0);
   }
   my.lib <- tryCatch(
     readRDS(my.path),
@@ -452,23 +388,6 @@
 
 GetRidgePlot <- function(dataName, imgNm = "abc", dpi=96, format="png", fun.type = "kegg", ridgeType = "ora", ridgeColor = "teal", gseaRankOpt="", sigLevel = 0.05, pwNum=20, inx = 1){
     dataSet <- readDataset(dataName);
-    if(!exists("compute.ridgeline")){
-        rc.path <- paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_ridgeline.Rc")
-        r.path <- paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_ridgeline.R")
-        if (file.exists(rc.path)) {
-          ok <- tryCatch({
-            compiler::loadcmp(rc.path)
-            TRUE
-          }, error = function(e) {
-            FALSE
-          })
-          if (!ok) {
-            source(r.path, local = .GlobalEnv)
-          }
-        } else {
-          source(r.path, local = .GlobalEnv)
-        }
-    }
     return(compute.ridgeline(dataSet, imgNm, dpi, format, fun.type, ridgeType, ridgeColor,gseaRankOpt, sigLevel, pwNum, inx));
 }
 
@@ -477,68 +396,39 @@ PerformUpsetORA <- function(dataName="", file.nm, fun.type, IDs){
   dataSet <- readDataset(dataName);
   gene.vec <- unlist(strsplit(IDs, "; "));
 
-  msg("[UpsetORA] Starting upset enrichment analysis")
-  msg("[UpsetORA] Input IDs string length: ", nchar(IDs))
-  msg("[UpsetORA] Parsed gene.vec length: ", length(gene.vec))
-  msg("[UpsetORA] Sample input IDs: ", paste(head(gene.vec, 10), collapse = ", "))
-  msg("[UpsetORA] Organism: ", paramSet$data.org)
-  msg("[UpsetORA] ID type: ", paramSet$data.idType)
-  msg("[UpsetORA] Function type: ", fun.type)
 
   # Check if phospho data and use appropriate functions
   is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")
-  msg("[UpsetORA] Is phospho data: ", is_phospho)
 
   if (is_phospho) {
     # For phospho data, gene.vec contains phosphosite IDs (uniprot+site)
-    msg("[UpsetORA] Using phospho enrichment analysis pathway")
     res <- .performEnrichAnalysisPhospho(dataSet, file.nm, fun.type, gene.vec, "upset");
   } else {
     # Regular data - use standard enrichment
-    msg("[UpsetORA] Using standard enrichment analysis pathway")
-    msg("[UpsetORA] Converting IDs to symbols for naming...")
     sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, paramSet$data.idType);
-    msg("[UpsetORA] Symbol conversion: ", sum(!is.na(sym.vec)), " successful, ", sum(is.na(sym.vec)), " failed")
     if (sum(!is.na(sym.vec)) > 0) {
-      msg("[UpsetORA] Sample symbols: ", paste(head(sym.vec[!is.na(sym.vec)], 10), collapse = ", "))
     }
     names(gene.vec) <- sym.vec;
-    msg("[UpsetORA] Calling .performEnrichAnalysis with ", length(gene.vec), " genes")
     res <- .performEnrichAnalysis(dataSet, file.nm, fun.type, gene.vec, "upset");
   }
 
-  msg("[UpsetORA] Enrichment analysis completed, result: ", res)
   return(res);
 }
 
 PerformGSEA<- function(dataName, file.nm, fun.type, netNm, mType, selectedFactorInx=1, mode = "multi",rankOpt=""){
-    if(!exists("my.perform.gsea")){ 
-        compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_gsea.Rc"));    
-    }
     return(my.perform.gsea(dataName, file.nm, fun.type, netNm, mType, selectedFactorInx, mode,rankOpt));
 }
 
 ComputeRankedVec <- function(data, opt, inx = 1){
-   if(!exists("my.compute.ranked.vec")){ 
-
-        compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_gsea.Rc"));    
-        
-    }
    return(my.compute.ranked.vec(data, opt, inx));
 }
 
 PlotGSView <-function(cmpdNm, format="png", dpi=96, width=NA){
-   if(!exists("plot.gs.view")){ 
-        compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_gsea.Rc"));    
-   }
    return(plot.gs.view(cmpdNm, format, dpi, width));
 
 }
 
 PlotGSViewNew <-function(cmpdNm, format="png", dpi=96, imgName){
-   if(!exists("plot.gs.view")){ 
-        compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/utils_gsea.Rc"));    
-   }
    return(plot.gs.view(cmpdNm, format, dpi, NA, imgName));
 
 }
@@ -846,9 +736,6 @@ PerformNetEnrichment <- function(dataName="", file.nm, fun.type, IDs){
 }
 
 PerformRegEnrichAnalysis <- function(dataSet, file.nm, fun.type, ora.vec, netInv){
-    if(!exists("my.reg.enrich")){
-        compiler::loadcmp(paste0(resource.dir, "rscripts/ProteoAnalystR/R/_utils_regenrich.Rc"));    
-    }
     return(my.reg.enrich(dataSet, file.nm, fun.type, ora.vec, netInv));
 }
 
@@ -1085,4 +972,100 @@ regEnrichment <- function(dataName, file.nm, fun.type, IDs, netInv){
 
   regBool <<- "false";
   res <- PerformNetEnrichment(dataName, file.nm, fun.type, IDs);
+}
+
+# ── Server-side PNG: Enrichment Network (igraph) ──
+PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width=NA) {
+  tryCatch({
+    require(igraph); require(reshape)
+    cat("[PlotEnrichNetworkPNG] wd=", getwd(), "\n")
+    cat("[PlotEnrichNetworkPNG] enr.mat.qs exists:", file.exists("enr.mat.qs"), "\n")
+    qs_files <- list.files(pattern = "\\.qs$")
+    cat("[PlotEnrichNetworkPNG] qs files in wd:", paste(qs_files, collapse=", "), "\n")
+    enr.mat <- qs::qread("enr.mat.qs")
+    hits.query <- qs::qread("hits_query.qs")
+    if (is.null(enr.mat) || nrow(enr.mat) == 0) return(0)
+    if ("FDR" %in% colnames(enr.mat)) {
+      ord.inx <- order(enr.mat[, "FDR"])
+      enr.mat <- enr.mat[ord.inx[1:min(20, nrow(enr.mat))], , drop = FALSE]
+    }
+    hits <- as.numeric(enr.mat[, "Hits"]); id <- rownames(enr.mat)
+    names(hits) <- id; hits.query <- hits.query[id]
+    n <- nrow(enr.mat); w <- matrix(0, n, n); colnames(w) <- rownames(w) <- id
+    for (i in 1:n) for (j in i:n) w[i,j] <- overlap_ratio(hits.query[id[i]], hits.query[id[j]], "mixed")
+    w[lower.tri(w)] <- t(w)[lower.tri(w)]
+    wd <- reshape::melt(w); wd <- wd[wd[,1]!=wd[,2] & !is.na(wd[,3]),]
+    g <- graph_from_data_frame(wd[,-3], directed=FALSE)
+    g <- delete_edges(g, E(g)[wd[,3] < 0.3])
+    if (vcount(g) == 0) return(0)
+    cnt2 <- hits[V(g)$name]
+    V(g)$size <- if (all(cnt2==cnt2[1])) rep(12, length(cnt2)) else scales::rescale(log(cnt2+1,10), to=c(8,24))
+    V(g)$color <- "orange"; V(g)$frame.color <- "white"
+    V(g)$label <- V(g)$name; V(g)$label.cex <- 0.6; V(g)$label.color <- "black"
+    E(g)$arrow.mode <- 0; E(g)$color <- "#cccccc"
+    l <- layout_with_graphopt(g)
+    imgPath <- paste0(imgName, ".", format)
+    w.val <- if (is.na(width)) 8 else width/dpi
+    png(imgPath, width=w.val, height=w.val*0.75, units="in", res=dpi)
+    par(mar=c(1,1,2,1)); plot(g, layout=l, main="Enrichment Network (KEGG)"); dev.off()
+    return(1)
+  }, error = function(e) { message("PlotEnrichNetworkPNG error: ", e$message); return(0) })
+}
+
+# ── Server-side PNG: Gene-Pathway Enrichment Heatmap (ProteoAnalyst version) ──
+PlotEnrichHeatmapPNG <- function(dataName, imgName, format="png", dpi=150, width=NA) {
+  tryCatch({
+    enr.mat <- qs::qread("enr.mat.qs")
+    current.geneset <- if (file.exists("current_featureset.qs")) qs::qread("current_featureset.qs") else NULL
+    if (is.null(enr.mat) || nrow(enr.mat) < 2 || is.null(current.geneset)) return(0)
+
+    # PA stores UniProt IDs in prot.mat; use analSet$uniprot_to_entrez_map for Entrez IDs
+    user.entrez <- NULL
+    analSet <- tryCatch(readSet(analSet, "analSet"), error = function(e) NULL)
+    if (!is.null(analSet) && !is.null(analSet$uniprot_to_entrez_map)) {
+      umap <- analSet$uniprot_to_entrez_map
+      user.entrez <- unique(unname(umap[!is.na(umap)]))
+    }
+    if (is.null(user.entrez) || length(user.entrez) == 0) {
+      dataSet <- readDataset(dataName)
+      if (!is.null(dataSet) && !is.null(dataSet$prot.mat)) user.entrez <- rownames(dataSet$prot.mat)
+    }
+    if (is.null(user.entrez) || length(user.entrez) == 0) return(0)
+
+    if ("FDR" %in% colnames(enr.mat)) {
+      enr.mat <- enr.mat[order(as.numeric(enr.mat[,"FDR"]))[1:min(15,nrow(enr.mat))], , drop=FALSE]
+    }
+    matched.pw <- intersect(rownames(enr.mat), names(current.geneset))
+    if (length(matched.pw) < 2) return(0)
+    hit.genes.per.pw <- lapply(matched.pw, function(pw) intersect(user.entrez, current.geneset[[pw]]))
+    names(hit.genes.per.pw) <- matched.pw
+    all.hit.genes <- unique(unlist(hit.genes.per.pw))
+    if (length(all.hit.genes) < 2) return(0)
+    gp.mat <- matrix(0, length(all.hit.genes), length(matched.pw))
+    rownames(gp.mat) <- all.hit.genes; colnames(gp.mat) <- matched.pw
+    for (pw in matched.pw) { g <- hit.genes.per.pw[[pw]]; if (length(g)>0) gp.mat[g,pw] <- 1 }
+    tryCatch({
+      ps <- readSet(paramSet, "paramSet")
+      syms <- doEntrez2SymbolMapping(rownames(gp.mat), ps$data.org, ps$data.idType)
+      if (!is.null(syms) && length(syms)==nrow(gp.mat)) rownames(gp.mat) <- make.unique(syms)
+    }, error=function(e) {})
+    if (nrow(gp.mat) > 30) gp.mat <- gp.mat[order(rowSums(gp.mat), decreasing=TRUE)[1:30], , drop=FALSE]
+    gp.mat <- gp.mat[rowSums(gp.mat)>0, colSums(gp.mat)>0, drop=FALSE]
+    if (nrow(gp.mat)<2 || ncol(gp.mat)<2) return(0)
+    colnames(gp.mat) <- make.unique(substr(colnames(gp.mat),1,40))
+    imgPath <- paste0(imgName, ".", format)
+    w.val <- if (is.na(width)) max(7, ncol(gp.mat)*0.6+3) else width/dpi
+    h.val <- max(5, nrow(gp.mat)*0.25+2)
+    png(imgPath, width=w.val, height=h.val, units="in", res=dpi, bg="white")
+    par(mar=c(1, 8, max(4, max(nchar(colnames(gp.mat)))*0.3), 1))
+    nr <- nrow(gp.mat); nc <- ncol(gp.mat)
+    plot(NA, xlim=c(0,nc), ylim=c(0,nr), xaxt="n", yaxt="n", xlab="", ylab="", bty="n", asp=NA)
+    for (i in 1:nr) for (j in 1:nc) if (gp.mat[i,j]==1) rect(j-1,nr-i,j-0.05,nr-i+0.95, col="#F4837D", border="white", lwd=0.5)
+    for (i in 0:nr) abline(h=i, col="#e0e0e0", lwd=0.3); for (j in 0:nc) abline(v=j, col="#e0e0e0", lwd=0.3)
+    mtext(rownames(gp.mat), side=2, at=nr:1-0.5, las=1, line=0.5, cex=0.7, adj=1)
+    text(x=1:nc-0.5, y=nr+0.3, labels=colnames(gp.mat), srt=45, adj=0, xpd=TRUE, cex=0.65)
+    mtext("Input Genes", side=2, line=6.5, cex=0.9, font=2)
+    mtext("Enriched Terms", side=3, line=max(2, max(nchar(colnames(gp.mat)))*0.15), cex=0.9, font=2)
+    dev.off(); return(1)
+  }, error = function(e) { message("PlotEnrichHeatmapPNG error: ", e$message); tryCatch(dev.off(), error=function(x){}); return(0) })
 }

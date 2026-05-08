@@ -128,7 +128,7 @@ ImputeMissingVar <- function(dataName="", method="min"){
             current.msg <- c(current.msg, "Missing variables were imputed using QRILC (quantile regression for left-censored data)");
           }
         } else {
-          stop("MNAR imputation methods require the 'imputeLCMD' package. Install with: BiocManager::install('imputeLCMD')")
+          AddErrMsg("MNAR imputation methods require the 'imputeLCMD' package. Install with: BiocManager::install('imputeLCMD')"); return(0);
         }
       }else if(method == "seqknn"){
         # SeqKNN: sequential K-nearest neighbors (MAR/mixed)
@@ -157,7 +157,7 @@ ImputeMissingVar <- function(dataName="", method="min"){
         }
 
         if (!has.seqknn) {
-          stop("SeqKNN requires either 'multiUS' (CRAN) or 'SeqKnn' (archived) package. Install with: install.packages('multiUS')")
+          AddErrMsg("SeqKNN requires either 'multiUS' (CRAN) or 'SeqKnn' (archived) package. Install with: install.packages('multiUS')"); return(0);
         }
       }else if(method == "impseq"){
         # Impseq: sequential covariance-based imputation
@@ -172,14 +172,14 @@ ImputeMissingVar <- function(dataName="", method="min"){
               new.mat <- t(rrcovNA::impSeqRob(t(int.mat)))
               current.msg <- c(current.msg, "Missing variables were imputed using ImpseqRob (robust sequential covariance-based)");
             } else {
-              stop("Impseq requires the 'rrcovNA' package. Install with: install.packages('rrcovNA')")
+              AddErrMsg("Impseq requires the 'rrcovNA' package. Install with: install.packages('rrcovNA')"); return(0);
             }
           })
         } else {
-          stop("Impseq requires the 'rrcovNA' package. Install with: install.packages('rrcovNA')")
+          AddErrMsg("Impseq requires the 'rrcovNA' package. Install with: install.packages('rrcovNA')"); return(0);
         }
       }else{
-        stop("Unknown imputation method: ", method)
+        AddErrMsg(paste0("Unknown imputation method: ", method)); return(0);
       }
     }
   }
@@ -299,7 +299,7 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min") {
         current.msg <- c(current.msg, "Missing variables were imputed using QRILC (quantile regression for left-censored data).");
       }
     } else {
-      stop("MNAR imputation methods require the 'imputeLCMD' package. Install with: BiocManager::install('imputeLCMD')")
+      AddErrMsg("MNAR imputation methods require the 'imputeLCMD' package. Install with: BiocManager::install('imputeLCMD')"); return(0);
     }
   }else if(method=="knn_var"){
     new.mat<-t(impute::impute.knn(as.matrix(int.mat))$data);
@@ -321,7 +321,7 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min") {
     current.msg <- c(current.msg, "Missing variables were imputed using SVD Impute");
   }else if(method=="seqknn"){
     if (!requireNamespace("imputeLCMD", quietly = TRUE)) {
-      stop("SeqKNN requires the 'imputeLCMD' package.")
+      AddErrMsg("SeqKNN requires the 'imputeLCMD' package."); return(0);
     }
     new.mat <- t(imputeLCMD::impute.SequentialKNN(t(int.mat), allowMissing = TRUE))
     current.msg <- c(current.msg, "Missing variables were imputed using SeqKNN.");

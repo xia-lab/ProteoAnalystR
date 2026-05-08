@@ -2247,7 +2247,7 @@ GetAnalysisType <- function(){
         msg("[DIA-NN][ERROR] Could not match ANY data columns to metadata rows!")
         msg("[DIA-NN] Data column examples: ", paste(head(runs, 3), collapse=", "))
         msg("[DIA-NN] Metadata row examples: ", paste(head(meta.runs, 3), collapse=", "))
-        stop("[DIA-NN] No matches found between data columns and metadata rows. Check that sample names match between files.")
+        AddErrMsg("[DIA-NN] No matches found between data columns and metadata rows. Check that sample names match between files."); return(0);
       }
 
       if (any(is.na(run.map))) {
@@ -2272,7 +2272,7 @@ GetAnalysisType <- function(){
         msg("[DIA-NN][ERROR] Metadata is empty after processing (", nrow(meta.df), " rows, ", ncol(meta.df), " cols)")
         msg("[DIA-NN][ERROR] Original metadata had ", nrow(meta), " rows and ", ncol(meta), " columns")
         msg("[DIA-NN][ERROR] Run column used: ", run.col)
-        stop("[DIA-NN] Metadata is empty after processing. Check that metadata file has valid data and sample names match between data and metadata files.")
+        AddErrMsg("[DIA-NN] Metadata is empty after processing. Check that metadata file has valid data and sample names match between data and metadata files."); return(0);
       }
 
       disc.inx <- sapply(meta.df, function(col) {

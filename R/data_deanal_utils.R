@@ -455,7 +455,8 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   require(limma)
 
   if (is.null(dataSet$design) || is.null(dataSet$contrast.matrix)) {
-    stop("design and/or contrast.matrix missing in dataSet. Run prepareEdgeRContrast() first.")
+    AddErrMsg("design and/or contrast.matrix missing in dataSet. Run prepareEdgeRContrast() first.");
+    return(0);
   }
 
   design           <- dataSet$design
@@ -603,11 +604,13 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   require(limma)
 
   if (!requireNamespace("DEqMS", quietly = TRUE)) {
-    stop("DEqMS requires the 'DEqMS' package. Install with: BiocManager::install('DEqMS')")
+    AddErrMsg("DEqMS requires the 'DEqMS' package. Install with: BiocManager::install('DEqMS')");
+    return(0);
   }
 
   if (is.null(dataSet$design) || is.null(dataSet$contrast.matrix)) {
-    stop("design and/or contrast.matrix missing in dataSet. Run prepareContrast() first.")
+    AddErrMsg("design and/or contrast.matrix missing in dataSet. Run prepareContrast() first.");
+    return(0);
   }
 
   design          <- dataSet$design
@@ -988,8 +991,10 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   grp <- factor(cls_vals, levels = ord_levels, ordered = TRUE)
   grp <- droplevels(grp)
 
-  if (nlevels(grp) < 3L)
-    stop("Williams trend test requires ≥ 3 ordered doses.")
+  if (nlevels(grp) < 3L) {
+    AddErrMsg("Williams trend test requires at least 3 ordered doses.");
+    return(0);
+  }
 
   grp_levels <- levels(grp)
   grp_index  <- lapply(grp_levels, function(lv) which(grp == lv))
@@ -997,8 +1002,10 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
   total_n  <- sum(n_per_grp)
   df_resid <- total_n - length(grp_levels)
-  if (df_resid <= 0)
-    stop("Williams trend test requires replication (df <= 0).")
+  if (df_resid <= 0) {
+    AddErrMsg("Williams trend test requires replication (df <= 0).");
+    return(0);
+  }
 
   gene_ids   <- rownames(expr)
   gene_count <- nrow(expr)
@@ -1603,9 +1610,10 @@ make_comp_res_list <- function(resTab,
 
   uniq.core <- unique(strip_logfc(lfc.cand))
 
-  if (length(uniq.core) == 0L)
-      stop("Could not detect any log-fold-change columns automatically. ",
-           "Pass lfc.cols explicitly.")
+  if (length(uniq.core) == 0L) {
+      AddErrMsg("Could not detect any log-fold-change columns automatically. Pass lfc.cols explicitly.");
+      return(0);
+  }
 
   ## build list --------------------------------------------------------
   out <- lapply(uniq.core, function(core) {
@@ -1630,7 +1638,7 @@ make_comp_res_list <- function(resTab,
 
 parse_contrast_groups <- function(contrast_str) {
   comps <- strsplit(contrast_str, " vs\\.?\\s*")[[1]]
-  if (length(comps) != 2) stop(paste("Invalid contrast format:", contrast_str))
+  if (length(comps) != 2) { AddErrMsg(paste("Invalid contrast format:", contrast_str)); return(0); }
   return(comps)
 }
 
@@ -1641,7 +1649,8 @@ parse_contrast_groups <- function(contrast_str) {
   # Automatically detect the interaction term
   interaction_name <- grep("factorA.*factorB.*", resultsNames(dds), value = TRUE)
   if (length(interaction_name) == 0) {
-    stop("No interaction term found in model.")
+    AddErrMsg("No interaction term found in model.");
+    return(0);
   }
 
   cat("Extracting interaction term:", interaction_name, "\n")
@@ -1705,9 +1714,10 @@ prepareEdgeRContrast <- function(dataSet,
   if (anal.type == "reference") {
     ref_syn <- to_syn(par1)
     if (is.null(ref_syn) || !(ref_syn %in% syn_levels)) {
-      stop("`par1` must specify a valid reference level. You gave '",
+      AddErrMsg(paste0("`par1` must specify a valid reference level. You gave '",
            if (is.null(par1)) "NULL" else par1,
-           "'. Valid (raw): ", paste(raw_levels, collapse = ", "))
+           "'. Valid (raw): ", paste(raw_levels, collapse = ", ")));
+      return(0);
     }
     others <- setdiff(syn_levels, ref_syn)
     conts  <- setNames(lapply(others, \(g) paste0(g, " - ", ref_syn)),
@@ -1727,8 +1737,9 @@ prepareEdgeRContrast <- function(dataSet,
   } else if (anal.type == "custom") {
     grp <- parse_vs(par1)
     if (anyNA(grp) || !all(grp %in% syn_levels)) {
-      stop("`par1` must be 'A vs. B'. Valid (raw): ",
-           paste(raw_levels, collapse = ", "))
+      AddErrMsg(paste0("`par1` must be 'A vs. B'. Valid (raw): ",
+           paste(raw_levels, collapse = ", ")));
+      return(0);
     }
     conts <- setNames(list(paste0(grp[2], " - ", grp[1])),
                       paste0(grp[2], "_vs_", grp[1]))
@@ -1736,8 +1747,9 @@ prepareEdgeRContrast <- function(dataSet,
   } else if (anal.type == "nested") {
     g1 <- parse_vs(par1); g2 <- parse_vs(par2)
     if (anyNA(g1) || anyNA(g2) || !all(c(g1, g2) %in% syn_levels)) {
-      stop("`par1` and `par2` must be 'A vs. B'. Valid (raw): ",
-           paste(raw_levels, collapse = ", "))
+      AddErrMsg(paste0("`par1` and `par2` must be 'A vs. B'. Valid (raw): ",
+           paste(raw_levels, collapse = ", ")));
+      return(0);
     }
     if (identical(nested.opt, "intonly")) {
       expr  <- paste0("(", g1[1], " - ", g1[2], ") - (", g2[1], " - ", g2[2], ")")
@@ -1753,7 +1765,8 @@ prepareEdgeRContrast <- function(dataSet,
     }
 
   } else {
-    stop("Unsupported `anal.type`: ", anal.type)
+    AddErrMsg(paste0("Unsupported `anal.type`: ", anal.type));
+    return(0);
   }
 
   contrast.matrix <- do.call(makeContrasts, c(conts, list(levels = design)))

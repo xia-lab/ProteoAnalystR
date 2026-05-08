@@ -16,7 +16,8 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
 
   ## ── 1 · read the CEMiTool object ────────────────────────────────
   if (!file.exists("cem.qs")) {
-    stop("cem.qs file not found. Run CEMiTool analysis first.");
+    AddErrMsg("cem.qs file not found. Run CEMiTool analysis first.");
+    return(0);
   }
 
   cem <- tryCatch({
@@ -84,7 +85,8 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
 
   ## Check if we have any edges
   if (nrow(edge.df) == 0) {
-    stop(paste0("No edges found with threshold > ", thresh, ". Try lowering the threshold or check if CEMiTool found modules."));
+    AddErrMsg(paste0("No edges found with threshold > ", thresh, ". Try lowering the threshold or check if CEMiTool found modules."));
+    return(0);
   }
 
   ## keep at most 2 000 heaviest edges
@@ -1016,8 +1018,10 @@ FilterNetByThresh <- function(thresh      = 0.05,
   analSet  <- readSet(analSet,  "analSet")
   overall.graph <- analSet$overall.graph;
   g <- overall.graph;
-  if (!"weight" %in% edge_attr_names(g))
-    stop("edge attribute 'weight' not found")
+  if (!"weight" %in% edge_attr_names(g)) {
+    AddErrMsg("edge attribute 'weight' not found");
+    return(0);
+  }
 
   # ── 1 · keep only edges above threshold ───────────────────────────
   g <- subgraph_from_edges(g, E(g)[weight > thresh], delete.vertices = FALSE)
