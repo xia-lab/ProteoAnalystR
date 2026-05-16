@@ -4,7 +4,31 @@
 ## Authors:
 ## G. Zhou, guangyan.zhou@mail.mcgill.ca
 ## Jeff Xia, jeff.xia@mcgill.ca
-###################################################  
+###################################################
+
+# Convert a vector of UniProt accessions (or Entrez IDs) to gene symbols.
+# Used by every consumer of an enrichment hit list (network, heatmap viewer,
+# ridgeline) so the user sees readable symbols instead of accessions. Handles
+# phosphosite (`_S_123`) and isoform (`-2`) suffixes by stripping them before
+# the UniProt -> Entrez lookup. Falls through to direct Entrez mapping when
+# the input vector is mostly numeric (already-Entrez).
+# Original copy lived inside utils_enrichnet.R::my.enrich.net; pulled to
+# top-level so heatmap + ridgeline can share the same mapping.
+convert.uniprot.to.symbols <- function(uniprot.ids, org) {
+  if (length(uniprot.ids) == 0) return(character(0))
+  is.entrez.like <- mean(grepl("^[0-9]+$", uniprot.ids)) > 0.9
+  if (is.entrez.like) {
+    return(doEntrez2SymbolMapping(uniprot.ids, org, "entrez"))
+  }
+  normalized.ids <- sub("_[A-Z]_\\d+$", "", uniprot.ids)  # phosphosite suffix
+  normalized.ids <- sub("-\\d+$", "", normalized.ids)     # isoform suffix
+  normalized.ids <- trimws(normalized.ids)
+  uniprot.map <- queryGeneDB("entrez_uniprot", org)
+  hit.inx <- match(normalized.ids, uniprot.map[, "accession"])
+  entrez.ids <- uniprot.map[hit.inx, "gene_id"]
+  doEntrez2SymbolMapping(entrez.ids, org, "entrez")
+}
+
 .performEnrichAnalysis <- function(dataSet, file.nm, fun.type, ora.vec, vis.type){
 
   dataSet <<- dataSet;
@@ -267,7 +291,18 @@
 
 
   # write json
-  fun.anot <- hits.query; 
+  # hits.query was converted to UniProt accessions upstream (for the
+  # enrichment-network's reverse-mapping flow). The heatmap + ridgeline
+  # viewers display these per-pathway hit lists directly, so accessions
+  # like P12345 are not human-readable. Map them back to gene symbols for
+  # the JSON payload; keep the original ID when the lookup misses (rare
+  # for canonical UniProts but possible for obsolete/private IDs).
+  fun.anot <- lapply(hits.query, function(ids) {
+    if (length(ids) == 0) return(ids);
+    syms <- convert.uniprot.to.symbols(ids, paramSet$data.org);
+    syms[is.na(syms)] <- ids[is.na(syms)];
+    unname(syms);
+  });
   total <- resTable$Total; if(length(total) ==1) { total <- matrix(total) };
   fun.pval <- resTable$Pval; if(length(fun.pval) ==1) { fun.pval <- matrix(fun.pval) };
   fun.padj <- resTable$FDR; if(length(fun.padj) ==1) { fun.padj <- matrix(fun.padj) };
