@@ -10,7 +10,17 @@ my.prepare.list.heatmap.json <- function(dataSet){
   paramSet <- readSet(paramSet, "paramSet");
   dat <- dataSet$prot.mat;
   sig.ids <- rownames(dat);
-  gene.symbols <- doEntrez2SymbolMapping(sig.ids, paramSet$data.org, paramSet$data.idType);
+  # Use convert.uniprot.to.symbols so UniProt accessions (proteomics) actually
+  # map to gene symbols. The plain doEntrez2SymbolMapping(..., "uniprot") call
+  # matched UniProts against the Entrez gene_id column and silently returned
+  # the inputs unchanged, leaving heatmap_raw.csv with UniProt rownames —
+  # which then failed to match the symbol-keyed fun.anot produced by
+  # .performEnrichAnalysis, so the pathway-map viewer rendered empty cells.
+  # The helper also handles Entrez fast-path and phosphosite / isoform suffix
+  # stripping, so it's safe to use unconditionally here. NA fallback keeps
+  # the original ID when the UniProt -> Entrez lookup misses.
+  gene.symbols <- convert.uniprot.to.symbols(sig.ids, paramSet$data.org);
+  gene.symbols[is.na(gene.symbols)] <- sig.ids[is.na(gene.symbols)];
 
   # Persist the raw signed log2FC (untransformed) keyed by GENE SYMBOL for the
   # pathway-map viewer at /vis/HeatmapListView.xhtml. Must happen BEFORE the
@@ -155,7 +165,12 @@ my.prepare.multilist.heatmap.json <- function(dataSet){
   inx <- apply(allmat, 1, function(x){sum(is.na(x))});  
   ord.inx <- order(inx)
   allmat <- allmat[ord.inx,]
-  gene.symbols <- doEntrez2SymbolMapping(rownames(allmat), paramSet$data.org, paramSet$data.idType)
+  # Same rationale as my.prepare.list.heatmap.json: use the helper that
+  # actually maps UniProt -> Symbol (the plain doEntrez2SymbolMapping with
+  # data.idType="uniprot" silently no-op'd, leaving heatmap_raw.csv keyed
+  # by UniProt while .performEnrichAnalysis's fun.anot is keyed by symbol).
+  gene.symbols <- convert.uniprot.to.symbols(rownames(allmat), paramSet$data.org)
+  gene.symbols[is.na(gene.symbols)] <- rownames(allmat)[is.na(gene.symbols)]
   
   na.inx <- is.na(allmat)
   zero.inx <- allmat == 0
