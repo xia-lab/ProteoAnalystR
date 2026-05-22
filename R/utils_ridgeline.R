@@ -410,9 +410,13 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   ridge_bw <- rp$layers[[1]]$computed_stat_params$bandwidth;
   jsonNm <- paste0(imgNm, ".json");
 
-  # Map IDs to symbols
-  # For both ORA and GSEA, df$entrez now contains UniProt IDs (after conversion)
-  symb <- doEntrez2SymbolMapping(df$entrez, paramSet$data.org, "uniprot");
+  # Map IDs to symbols. df$entrez carries UniProt accessions for proteomics
+  # (already-converted upstream). convert.uniprot.to.symbols handles both the
+  # numeric-Entrez case AND UniProts with phosphosite (`_S_123`) / isoform
+  # (`-2`) suffixes that the plain doEntrez2SymbolMapping(..., "uniprot") call
+  # would otherwise miss. Keep the original ID when the lookup misses.
+  symb <- convert.uniprot.to.symbols(df$entrez, paramSet$data.org);
+  symb[is.na(symb)] <- df$entrez[is.na(symb)];
   df$symbol <- symb;
   
   data.list <- list();

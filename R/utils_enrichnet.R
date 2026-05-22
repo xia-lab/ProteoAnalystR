@@ -123,27 +123,8 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
   V(bg)$colorw[V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(-log(pvalue), "white", F, F);
   node.nms <- V(bg)$name;
 
-  # Helper function: Convert UniProt IDs to gene symbols for proteomics data
-  convert.uniprot.to.symbols <- function(uniprot.ids, org) {
-    # Check if IDs are Entrez-like or UniProt
-    is.entrez.like <- mean(grepl("^[0-9]+$", uniprot.ids)) > 0.9
-
-    if(is.entrez.like) {
-      # Already Entrez IDs
-      return(doEntrez2SymbolMapping(uniprot.ids, org, "entrez"))
-    } else {
-      # UniProt IDs - convert to Entrez first, then to symbols
-      normalized.ids <- sub("_[A-Z]_\\d+$", "", uniprot.ids)  # Remove phosphosites
-      normalized.ids <- sub("-\\d+$", "", normalized.ids)      # Remove isoforms
-      normalized.ids <- trimws(normalized.ids)
-
-      uniprot.map <- queryGeneDB("entrez_uniprot", org)
-      hit.inx <- match(normalized.ids, uniprot.map[, "accession"])
-      entrez.ids <- uniprot.map[hit.inx, "gene_id"]
-
-      return(doEntrez2SymbolMapping(entrez.ids, org, "entrez"))
-    }
-  }
+  # convert.uniprot.to.symbols() lives at the top level of enrich_utils.R now —
+  # heatmap viewer + ridgeline reuse the same mapping.
 
   # Initialize expvals as empty named vector (will be populated in conditionals below)
   expvals <- setNames(rep(0, length(node.nms)), node.nms)
