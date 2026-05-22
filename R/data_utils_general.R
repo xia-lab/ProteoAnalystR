@@ -105,6 +105,19 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
     sqlite.path <- "";
   }
 
+  # Resolve MetaboAnalyst jointpa genetic library path (used for KEGG pathway enrichment)
+  jointpa.candidates <- c(
+    "/home/glassfish/applications/MetaboAnalyst/resources/libs/kegg/jointpa/genetic/",  # public server
+    "/home/zgy/NetBeansProjects/MetaboAnalyst/src/main/webapp/resources/libs/kegg/jointpa/genetic/",  # zgy local
+    "/Users/xialab/Dropbox/projects/MetaboAnalyst/src/main/webapp/resources/libs/kegg/jointpa/genetic/",  # xia local
+    "/Users/jeffxia/Dropbox/projects/MetaboAnalyst/src/main/webapp/resources/libs/kegg/jointpa/genetic/"   # xia local2
+  );
+  jointpa.lib.path <- NULL;
+  for(p in jointpa.candidates){
+    if(file.exists(p)){ jointpa.lib.path <- p; break; }
+  }
+  paramSet$jointpa.lib.path <- jointpa.lib.path;
+
   if(!.on.public.web) {
     paramSet$sqlite.path <- paste0(getwd(), "/");
     paramSet$lib.path <- "https://www.proteoanalyst.ca/ProteoAnalyst/resources/data/";

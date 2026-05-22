@@ -335,6 +335,8 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   if (!is.null(dataSet$prot.map)) {
     shadow_save(dataSet$prot.map, "peptide_to_protein_map.qs");
     #msg("[ReadTabExpressData] Saved peptide-to-protein map: ", nrow(dataSet$prot.map), " peptides mapped")
+  } else if (file.exists("peptide_to_protein_map.qs")) {
+    file.remove("peptide_to_protein_map.qs")
   }
 
   # Save peptide/PSM counts aligned with final processed data (for DEqMS)
@@ -2080,8 +2082,59 @@ GetAnalysisType <- function(){
     names(cont.inx) <- colnames(meta.df)
     for (i in which(disc.inx)) if (!is.factor(meta.df[[i]])) meta.df[[i]] <- factor(meta.df[[i]])
 
-    # Save DIA-NN metadata
+    # Save DIA-NN metadata (row-aligned with intens after filtering)
     diann_meta <- data.frame(Protein.IDs = rownames(intens), stringsAsFactors = FALSE)
+    if ("Proteotypic" %in% cols) {
+      diann_meta$Proteotypic <- as.integer(dat$Proteotypic)
+    }
+
+    # Parse OpenProt/DIA-NN tags from Protein.Ids column.
+    # The Genes column in DIA-NN output is unreliable for OpenProt FASTAs:
+    # DIA-NN reads "GN=GENE TA=..." as one gene name string, and most rows are empty.
+    # Protein.Ids always carries the full header, so parse tags directly from it.
+    parse.openprot.tag <- function(strings, tag) {
+      pattern <- paste0("\\b", tag, "=([^ ]+)")
+      has.tag  <- grepl(pattern, strings, perl = TRUE)
+      values   <- ifelse(has.tag,
+                         sub(paste0(".*\\b", tag, "=([^ ]+).*"), "\\1", strings, perl = TRUE),
+                         NA_character_)
+      sub(",.*$", "", values)  # keep only the first accession when comma-separated
+    }
+
+    if ("Protein.Ids" %in% cols) {
+      raw.pids    <- as.character(dat$Protein.Ids)
+      diann_meta$GN <- parse.openprot.tag(raw.pids, "GN")   # clean gene name
+      diann_meta$TA <- parse.openprot.tag(raw.pids, "TA")   # first transcript accession
+      diann_meta$PA <- parse.openprot.tag(raw.pids, "PA")   # first protein accession
+      # Gene = GN when available; fall through to Genes column below if not
+      diann_meta$Gene <- diann_meta$GN
+    }
+
+    # Fallback: parse Gene from the Genes column (standard DIA-NN / non-OpenProt FASTAs)
+    if (all(is.na(diann_meta$Gene))) {
+      gene.col.nm <- intersect(c("Genes", "Gene", "Gene.Names"), cols)[1]
+      if (!is.na(gene.col.nm)) {
+        raw.genes <- as.character(dat[[gene.col.nm]])
+        diann_meta$Gene <- vapply(strsplit(raw.genes, "[;|,]"), function(x) {
+          x <- trimws(x[nchar(trimws(x)) > 0])
+          if (length(x) == 0) return(NA_character_)
+          gsub("\\s+TA=.*$", "", x[1])  # strip TA= tag if DIA-NN included it
+        }, character(1))
+      }
+    }
+
+    # Precursor count per protein group
+    if (!is.null(prot.map)) {
+      prot_prec_counts <- table(prot.map$Protein)
+      diann_meta$Peptide.Count <- as.integer(prot_prec_counts[prot.map$Protein[match(rownames(intens), prot.map$Peptide)]])
+    }
+    # Sequence columns needed for PTM occupancy analysis
+    if ("Stripped.Sequence" %in% cols)
+      diann_meta$Stripped.Sequence <- as.character(dat$Stripped.Sequence)
+    if ("Modified.Sequence" %in% cols)
+      diann_meta$Modified.Sequence <- as.character(dat$Modified.Sequence)
+    if ("Precursor.Charge" %in% cols)
+      diann_meta$Precursor.Charge <- as.integer(dat$Precursor.Charge)
     ov_qs_save(diann_meta, "diann_metadata.qs")
 
     return(list(

@@ -423,6 +423,129 @@ ApplyFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts = list
   return(1L)
 }
 
+#' Require at least one proteotypic (unique) peptide per protein/peptide row.
+#' Operates on norm.input.anot.qs, which must already exist.
+#' Handles both protein-level and peptide-level input matrices.
+ApplyProteotypicFilter <- function(dataName) {
+  msgSet <- readSet(msgSet, "msgSet")
+
+  skip <- function(reason) {
+    msgSet$current.msg <<- c(msgSet$current.msg, paste0("[ProteotypicFilter] SKIP: ", reason))
+    saveSet(msgSet, "msgSet")
+    return(1L)
+  }
+
+  if (!file.exists("norm.input.anot.qs")) {
+    return(skip("norm.input.anot.qs not found."))
+  }
+
+  data <- ov_qs_read("norm.input.anot.qs")
+  n_before <- nrow(data)
+  rn <- rownames(data)
+  message(sprintf("[ProteotypicFilter] Starting: %d rows, first row name: '%s'", n_before, rn[1]))
+  message(sprintf("[ProteotypicFilter] Files present: diann_metadata=%s, maxquant_metadata=%s, peptide_map=%s",
+      file.exists("diann_metadata.qs"), file.exists("maxquant_metadata.qs"), file.exists("peptide_to_protein_map.qs")))
+
+  # --- DIA-NN pr_matrix: Proteotypic column is directly available ---
+  if (file.exists("diann_metadata.qs")) {
+    diann_meta <- ov_qs_read("diann_metadata.qs")
+    message(sprintf("[ProteotypicFilter] diann_metadata cols: %s", paste(names(diann_meta), collapse = ", ")))
+    if ("Proteotypic" %in% names(diann_meta)) {
+      prot_flag <- setNames(diann_meta$Proteotypic, diann_meta$Protein.IDs)
+      message(sprintf("[ProteotypicFilter] Proteotypic values (first 5): %s", paste(head(prot_flag, 5), collapse = ", ")))
+      matched <- prot_flag[rn]
+      n_matched <- sum(!is.na(matched))
+      message(sprintf("[ProteotypicFilter] Proteotypic column: %d/%d row names matched metadata IDs", n_matched, n_before))
+      if (n_matched > 0) {
+        n_proteotypic <- sum(!is.na(matched) & matched == 1L)
+        message(sprintf("[ProteotypicFilter] Of matched: %d proteotypic (==1), %d non-proteotypic", n_proteotypic, n_matched - n_proteotypic))
+        keep <- !is.na(matched) & matched == 1L
+        data <- data[keep, , drop = FALSE]
+        n_removed <- n_before - nrow(data)
+        if (nrow(data) == 0) {
+          return(skip(sprintf("Filter would remove all %d rows using Proteotypic column.", n_before)))
+        }
+        msg <- sprintf("Proteotypic filter: Removed %d non-proteotypic precursors (%d → %d retained).", n_removed, n_before, nrow(data))
+        msgSet$current.msg <- c(msgSet$current.msg, msg)
+        msgSet$prefilter.msg <- paste(c(msgSet$prefilter.msg, msg), collapse = " ")
+        ov_qs_save(data, "norm.input.anot.qs")
+        saveSet(msgSet, "msgSet")
+        return(1L)
+      }
+      message("[ProteotypicFilter] Proteotypic column present but 0 row names matched — falling through to other methods")
+    } else {
+      message("[ProteotypicFilter] diann_metadata.qs has no Proteotypic column")
+    }
+  }
+
+  # --- MaxQuant protein-level: use Unique.peptides column directly ---
+  if (file.exists("maxquant_metadata.qs")) {
+    mq_meta <- ov_qs_read("maxquant_metadata.qs")
+    message(sprintf("[ProteotypicFilter] maxquant_metadata cols: %s", paste(names(mq_meta), collapse = ", ")))
+    if (!("Unique.peptides" %in% names(mq_meta))) {
+      return(skip("Unique.peptides column not found in MaxQuant metadata."))
+    }
+    unique_counts <- setNames(mq_meta$Unique.peptides, mq_meta$Protein.IDs)
+    matched <- unique_counts[rn]
+    n_matched <- sum(!is.na(matched))
+    message(sprintf("[ProteotypicFilter] MaxQuant: %d/%d row names matched Protein.IDs; first data row='%s', first meta ID='%s'",
+        n_matched, n_before, rn[1], mq_meta$Protein.IDs[1]))
+    if (n_matched == 0) {
+      return(skip(sprintf("No row names matched MaxQuant Protein.IDs (first data row: '%s', first meta ID: '%s').", rn[1], mq_meta$Protein.IDs[1])))
+    }
+    n_with_unique <- sum(!is.na(matched) & matched >= 1)
+    message(sprintf("[ProteotypicFilter] MaxQuant: %d proteins have Unique.peptides >= 1, %d would be removed", n_with_unique, n_matched - n_with_unique))
+    keep <- !is.na(matched) & matched >= 1
+    data <- data[keep, , drop = FALSE]
+
+  # --- Peptide-to-protein map: handle both protein-level and peptide-level ---
+  } else if (file.exists("peptide_to_protein_map.qs")) {
+    prot_map <- ov_qs_read("peptide_to_protein_map.qs")
+    message(sprintf("[ProteotypicFilter] prot_map: %d rows, cols: %s", nrow(prot_map), paste(names(prot_map), collapse = ", ")))
+    message(sprintf("[ProteotypicFilter] prot_map first Peptide: '%s', first Protein: '%s'", prot_map$Peptide[1], prot_map$Protein[1]))
+    pep_freq  <- table(prot_map$Peptide)
+    proteotypic_peps  <- names(pep_freq[pep_freq == 1])
+    proteotypic_prots <- unique(prot_map$Protein[prot_map$Peptide %in% proteotypic_peps])
+    message(sprintf("[ProteotypicFilter] prot_map: %d total peptides, %d proteotypic, %d proteotypic proteins",
+        length(pep_freq), length(proteotypic_peps), length(proteotypic_prots)))
+
+    pep_overlap  <- mean(rn %in% prot_map$Peptide)
+    prot_overlap <- mean(rn %in% prot_map$Protein)
+    message(sprintf("[ProteotypicFilter] Row name overlap — peptide col: %.1f%%, protein col: %.1f%%",
+        pep_overlap * 100, prot_overlap * 100))
+
+    if (pep_overlap == 0 && prot_overlap == 0) {
+      return(skip(sprintf("Row names match neither peptides nor proteins in map (first row: '%s').", rn[1])))
+    }
+
+    if (pep_overlap >= prot_overlap) {
+      keep <- rn %in% proteotypic_peps
+      message(sprintf("[ProteotypicFilter] Peptide-level mode: %d/%d rows are proteotypic peptides", sum(keep), n_before))
+    } else {
+      keep <- rn %in% proteotypic_prots
+      message(sprintf("[ProteotypicFilter] Protein-level mode: %d/%d rows have a proteotypic peptide", sum(keep), n_before))
+    }
+    data <- data[keep, , drop = FALSE]
+
+  } else {
+    return(skip("No peptide-level information available (no maxquant_metadata.qs or peptide_to_protein_map.qs)."))
+  }
+
+  n_removed <- n_before - nrow(data)
+  if (nrow(data) == 0) {
+    return(skip(sprintf("Filter would remove all %d rows; something is wrong with ID matching.", n_before)))
+  }
+
+  message(sprintf("[ProteotypicFilter] Done: removed %d, retained %d", n_removed, nrow(data)))
+  result_msg <- sprintf("Proteotypic filter: Removed %d entries without a unique peptide (%d → %d retained).", n_removed, n_before, nrow(data))
+  msgSet$current.msg <- c(msgSet$current.msg, result_msg)
+  msgSet$prefilter.msg <- paste(c(msgSet$prefilter.msg, result_msg), collapse = " ")
+
+  ov_qs_save(data, "norm.input.anot.qs")
+  saveSet(msgSet, "msgSet")
+  return(1L)
+}
+
 PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, countOpt,
                              removeMissing = "false", missingPercent = 50){
   msg <- "";
@@ -2531,4 +2654,673 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
   stats$n_final <- nrow(data)
   saveSet(msgSet, "msgSet")
   return(list(data = data, stats = stats))
+}
+
+# Proteoform analysis: genes where the ratio of proteoform-specific peptide intensities
+# shifts between conditions while total protein abundance remains stable.
+# Requires: diann_metadata.qs (Proteotypic + Gene columns), peptide_to_protein_map.qs,
+#           peptide_level_data.qs (post-summarization) or data.stat.qs (pre-summarization),
+#           >=2 conditions with >=2 replicates each.
+DetectProteoformAnalysis <- function(dataName) {
+  msgSet  <- readSet(msgSet, "msgSet")
+  dataSet <- readDataset(dataName)
+
+  fail <- function(msg) {
+    msgSet$current.msg <- msg
+    saveSet(msgSet, "msgSet")
+    return(0L)
+  }
+
+  # After SummarizeProteomicsData, data.stat.qs is overwritten with protein-level data.
+  # The peptide-level matrix is saved explicitly as peptide_level_data.qs at that step.
+  pep.qs <- if (ov_qs_exists("peptide_level_data.qs")) "peptide_level_data.qs" else "data.stat.qs"
+  if (!file.exists(pep.qs))
+    return(fail("Peptide matrix not found. Run normalization (and summarization if applicable) first."))
+  if (!ov_qs_exists("diann_metadata.qs"))
+    return(fail("DIA-NN metadata not available. Re-upload the dataset to generate it."))
+  if (!ov_qs_exists("peptide_to_protein_map.qs"))
+    return(fail("Peptide-to-protein map not found."))
+
+  meta <- ov_qs_read("diann_metadata.qs")
+  if (!"Proteotypic" %in% names(meta))
+    return(fail("Proteotypic column missing from metadata. Re-upload the dataset."))
+
+  pep.mat  <- ov_qs_read(pep.qs)
+  prot.map <- ov_qs_read("peptide_to_protein_map.qs")
+
+  # disc.inx lives at dataSet$disc.inx after SetSelectedMetaInfo,
+  # or inside dataSet$meta.info$disc.inx before that step
+  if (!is.null(dataSet$disc.inx)) {
+    disc.inx  <- dataSet$disc.inx
+    meta.info <- if (is.data.frame(dataSet$meta.info)) dataSet$meta.info
+                 else dataSet$meta.info$meta.info
+  } else {
+    meta.info <- dataSet$meta.info$meta.info
+    disc.inx  <- dataSet$meta.info$disc.inx
+  }
+  if (is.null(meta.info) || is.null(disc.inx) || sum(disc.inx) == 0)
+    return(fail("No categorical condition found in dataset metadata."))
+
+  cond.col <- names(which(disc.inx))[1]
+  groups   <- as.character(meta.info[[cond.col]])
+  names(groups) <- rownames(meta.info)
+
+  samples <- intersect(colnames(pep.mat), names(groups))
+  pep.mat <- pep.mat[, samples, drop = FALSE]
+  groups  <- groups[samples]
+  unique.groups <- unique(groups)
+
+  if (length(unique.groups) < 2)
+    return(fail("At least two conditions are required for proteoform analysis."))
+
+  g1.idx <- groups == unique.groups[1]
+  g2.idx <- groups == unique.groups[2]
+  if (sum(g1.idx) < 2 || sum(g2.idx) < 2)
+    return(fail("At least 2 replicates per condition are required."))
+
+  # Build working table: precursors from diann_metadata that are present in the peptide matrix
+  pmat.ids <- rownames(pep.mat)
+  prec.df  <- meta[meta$Protein.IDs %in% pmat.ids, , drop = FALSE]
+
+  if (nrow(prec.df) == 0)
+    return(fail(paste0("No precursors in diann_metadata.qs match the normalized matrix row names. ",
+                       "Re-upload the dataset to regenerate metadata.")))
+
+  # Join clean protein ID from prot.map
+  prec.df$clean.prot <- prot.map$Protein[match(prec.df$Protein.IDs, prot.map$Peptide)]
+
+  # Restrict to proteotypic precursors with valid protein assignments
+  prec.df <- prec.df[!is.na(prec.df$Proteotypic) & prec.df$Proteotypic == 1L, ]
+  prec.df <- prec.df[!is.na(prec.df$clean.prot), ]
+
+  if (nrow(prec.df) == 0)
+    return(fail("No proteotypic precursors with valid protein assignments found in the normalized matrix."))
+
+  # Auto-detect grouping strategy:
+  #   UniProt isoform FASTA: ≥1% of protein IDs carry a -N suffix (Q09028-2) → group by canonical base
+  #   Gene-name mode (OpenProt / standard without isoform FASTA): group by gene name,
+  #     each distinct protein accession within a gene is treated as a separate proteoform.
+  #     GN column (parsed from Protein.Ids header) is preferred over Gene (from DIA-NN Genes column)
+  #     because OpenProt headers embed GN=, TA=, PA= tags reliably.
+  frac.iso.suffix <- mean(grepl("-[0-9]+$", prec.df$clean.prot))
+
+  if (frac.iso.suffix >= 0.01) {
+    prec.df$group.key <- sub("-[0-9]+$", "", prec.df$clean.prot)  # canonical base
+    group.mode <- "uniprot"
+  } else {
+    # Pick best gene name column: GN (OpenProt-parsed) > Gene > Genes
+    gene.col <- NA_character_
+    for (cand in c("GN", "Gene", "Genes")) {
+      if (cand %in% names(prec.df)) {
+        vals <- as.character(prec.df[[cand]])
+        if (mean(!is.na(vals) & vals != "") > 0.3) { gene.col <- cand; break }
+      }
+    }
+    if (is.na(gene.col))
+      return(fail("No UniProt isoform suffixes detected and no usable Gene/GN column. Cannot group proteoforms."))
+    prec.df$group.key <- as.character(prec.df[[gene.col]])
+    prec.df <- prec.df[!is.na(prec.df$group.key) & prec.df$group.key != "", ]
+    if (nrow(prec.df) == 0)
+      return(fail("Gene column is empty for all proteotypic precursors. Cannot group by gene name."))
+    group.mode <- "gene"
+  }
+
+  # Find groups (canonical base or gene) with ≥2 distinct protein IDs having proteotypic precursors
+  group.isoforms <- tapply(prec.df$clean.prot, prec.df$group.key, function(x) unique(x))
+  multi.groups   <- names(group.isoforms)[sapply(group.isoforms, length) >= 2]
+
+  if (length(multi.groups) == 0)
+    return(fail(paste0(
+      "No ", if (group.mode == "uniprot") "canonical proteins" else "genes",
+      " with ≥2 distinct proteoforms having proteotypic peptides detected (",
+      length(group.isoforms), " group(s) with any proteotypic coverage)."
+    )))
+
+  get.gene <- function(grp) {
+    if (group.mode == "gene") return(grp)
+    if ("Gene" %in% names(prec.df)) {
+      idx <- which(prec.df$group.key == grp & !is.na(prec.df$Gene) & prec.df$Gene != "")
+      if (length(idx) > 0) return(as.character(prec.df$Gene[idx[1]]))
+    }
+    grp
+  }
+
+  get.abd <- function(peps) {
+    peps <- intersect(peps, pmat.ids)
+    if (length(peps) == 0) return(NULL)
+    if (length(peps) == 1) return(as.numeric(pep.mat[peps, ]))
+    colMeans(pep.mat[peps, , drop = FALSE], na.rm = TRUE)
+  }
+
+  results.list <- lapply(multi.groups, function(grp) {
+    isoforms <- group.isoforms[[grp]]
+    # Pick top-2 by peptide count so we test the best-covered pair
+    pep.counts <- sapply(isoforms, function(iso)
+      sum(prec.df$group.key == grp & prec.df$clean.prot == iso))
+    isoforms <- isoforms[order(pep.counts, decreasing = TRUE)]
+    isoA <- isoforms[1]; isoB <- isoforms[2]
+
+    abd.A <- get.abd(prec.df$Protein.IDs[prec.df$group.key == grp & prec.df$clean.prot == isoA])
+    abd.B <- get.abd(prec.df$Protein.IDs[prec.df$group.key == grp & prec.df$clean.prot == isoB])
+    if (is.null(abd.A) || is.null(abd.B)) return(NULL)
+
+    log.ratio <- abd.A - abd.B
+    if (sum(!is.na(log.ratio[g1.idx])) < 2 || sum(!is.na(log.ratio[g2.idx])) < 2) return(NULL)
+
+    tt.ratio <- tryCatch(t.test(log.ratio[g1.idx], log.ratio[g2.idx]), error = function(e) NULL)
+    if (is.null(tt.ratio)) return(NULL)
+
+    all.abd  <- get.abd(prec.df$Protein.IDs[prec.df$group.key == grp])
+    tt.total <- tryCatch(t.test(all.abd[g1.idx], all.abd[g2.idx]), error = function(e) NULL)
+
+    get.ta <- function(iso) {
+      if (!"TA" %in% names(prec.df)) return(NA_character_)
+      idx <- which(prec.df$group.key == grp & prec.df$clean.prot == iso & !is.na(prec.df$TA) & prec.df$TA != "")
+      if (length(idx) > 0) prec.df$TA[idx[1]] else NA_character_
+    }
+
+    data.frame(
+      Gene           = get.gene(grp),
+      Proteoform.A   = isoA,
+      Transcript.A   = get.ta(isoA),
+      Proteoform.B   = isoB,
+      Transcript.B   = get.ta(isoB),
+      Peptides.A     = pep.counts[isoA],
+      Peptides.B     = pep.counts[isoB],
+      LogRatio.Cond1 = round(mean(log.ratio[g1.idx], na.rm = TRUE), 3),
+      LogRatio.Cond2 = round(mean(log.ratio[g2.idx], na.rm = TRUE), 3),
+      Delta.LogRatio = round(mean(log.ratio[g2.idx], na.rm = TRUE) - mean(log.ratio[g1.idx], na.rm = TRUE), 3),
+      Ratio.Pvalue   = signif(tt.ratio$p.value, 3),
+      Total.Pvalue   = if (!is.null(tt.total)) signif(tt.total$p.value, 3) else NA_real_,
+      stringsAsFactors = FALSE
+    )
+  })
+
+  results <- do.call(rbind, Filter(Negate(is.null), results.list))
+  if (is.null(results) || nrow(results) == 0)
+    return(fail("Insufficient data per condition for proteoform analysis (need >=2 non-NA values per group)."))
+
+  results$Ratio.FDR <- signif(p.adjust(results$Ratio.Pvalue, method = "BH"), 3)
+  results$Is.Switch <- results$Ratio.FDR < 0.05 &
+                       results$Peptides.A >= 2 & results$Peptides.B >= 2 &
+                       (is.na(results$Total.Pvalue) | results$Total.Pvalue > 0.1)
+  results <- results[order(results$Ratio.Pvalue), ]
+
+  ov_qs_save(results, "proteoform_analysis_results.qs")
+  fast.write(results, "proteoform_analysis_results.csv")
+
+  msgSet$current.msg <- paste0(
+    "Detected ", nrow(results), " proteoform pair(s) with proteotypic peptide coverage."
+  )
+  saveSet(msgSet, "msgSet")
+  return(as.integer(nrow(results)))
+}
+
+PlotProteoformIntensityProfile <- function(dataName, imageName, isoA, isoB,
+                                        format = "png", dpi = 96, paletteOpt = "default",
+                                        plotType = "violin") {
+  require(ggplot2)
+
+  dataSet  <- readDataset(dataName)
+  prot.map <- if (ov_qs_exists("peptide_to_protein_map.qs")) ov_qs_read("peptide_to_protein_map.qs") else NULL
+  pep.qs   <- if (ov_qs_exists("peptide_level_data.qs")) "peptide_level_data.qs" else "data.stat.qs"
+  if (!file.exists(pep.qs) || is.null(prot.map)) return(invisible(0))
+
+  pep.mat <- ov_qs_read(pep.qs)
+  pmat.ids <- rownames(pep.mat)
+
+  # Use the same derivation as DetectIsoformSwitching: clean.prot from prot.map,
+  # restrict to rows that are actually in the peptide matrix.
+  # This guarantees we find precursors for isoA/isoB even when non-proteotypic
+  # precursors were filtered out of the matrix by the proteotypic filter.
+  map.in.mat <- prot.map[prot.map$Peptide %in% pmat.ids & !is.na(prot.map$Protein), ]
+
+  peps.A <- map.in.mat$Peptide[map.in.mat$Protein == isoA]
+  peps.B <- map.in.mat$Peptide[map.in.mat$Protein == isoB]
+
+  if (length(peps.A) == 0 && length(peps.B) == 0) return(invisible(0))
+
+  # Condition vector
+  if (!is.null(dataSet$disc.inx)) {
+    disc.inx  <- dataSet$disc.inx
+    meta.info <- if (is.data.frame(dataSet$meta.info)) dataSet$meta.info else dataSet$meta.info$meta.info
+  } else {
+    meta.info <- dataSet$meta.info$meta.info
+    disc.inx  <- dataSet$meta.info$disc.inx
+  }
+  cond.col <- names(which(disc.inx))[1]
+  groups   <- as.character(meta.info[[cond.col]])
+  names(groups) <- rownames(meta.info)
+  samples  <- intersect(colnames(pep.mat), names(groups))
+
+  # Average precursor intensities per sample for each isoform
+  avg_isoform <- function(peps) {
+    peps <- intersect(peps, pmat.ids)
+    if (length(peps) == 0) return(NULL)
+    mat <- pep.mat[peps, samples, drop = FALSE]
+    if (length(peps) == 1) as.numeric(mat) else colMeans(mat, na.rm = TRUE)
+  }
+
+  # Build long-format data frame — keep NaN rows so both isoform facets always appear
+  make_rows <- function(abd, iso_label) {
+    if (is.null(abd)) return(NULL)
+    abd <- as.numeric(abd)
+    data.frame(
+      Sample    = samples,
+      Condition = groups[samples],
+      Isoform   = iso_label,
+      Intensity = abd,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  df <- rbind(make_rows(avg_isoform(peps.A), isoA),
+              make_rows(avg_isoform(peps.B), isoB))
+  if (is.null(df) || nrow(df) == 0) return(invisible(0))
+
+  # Facet labels: truncate long protein IDs
+  trunc_label <- function(x, n = 18) ifelse(nchar(x) > n, paste0(substr(x, 1, n), "…"), x)
+  df$IsoformLabel <- trunc_label(df$Isoform)
+  # Preserve facet order: isoA first, isoB second
+  df$IsoformLabel <- factor(df$IsoformLabel,
+                            levels = unique(trunc_label(c(isoA, isoB))))
+
+  col <- GetGroupPalette(df$Condition, paletteOpt)
+
+  plotType <- tolower(trimws(plotType))
+  if (!(plotType %in% c("violin", "boxplot"))) plotType <- "violin"
+  use.violin <- plotType == "violin"
+
+  plot.geom <- if (use.violin) {
+    geom_violin(trim = FALSE, aes(color = Condition), show.legend = FALSE)
+  } else {
+    geom_boxplot(aes(color = Condition), outlier.shape = NA, width = 0.5, show.legend = FALSE)
+  }
+
+  myplot <- ggplot(df, aes(x = Condition, y = Intensity, fill = Condition)) +
+    plot.geom +
+    geom_jitter(width = 0.08, height = 0, size = 2, na.rm = TRUE, show.legend = FALSE) +
+    stat_summary(fun = mean, colour = "yellow", geom = "point",
+                 shape = 18, size = 3, na.rm = TRUE, show.legend = FALSE) +
+    scale_fill_manual(values = col) +
+    scale_color_manual(values = col) +
+    facet_wrap(~ IsoformLabel, ncol = 2) +
+    theme_bw(base_size = 10) +
+    theme(axis.title.x   = element_blank(),
+          legend.position = "none",
+          panel.grid      = element_blank(),
+          strip.text      = element_text(size = 8),
+          plot.title      = element_text(size = 11, hjust = 0.5)) +
+    ylab("Log2 Intensity") +
+    ggtitle(paste0(trunc_label(isoA, 25), " vs ", trunc_label(isoB, 25)))
+
+  imgName <- paste0(imageName, "dpi", dpi, ".", format)
+  Cairo(file = imgName, width = 7, height = 4.5, unit = "in",
+        dpi = dpi, bg = "white", type = format)
+  invisible(print(myplot))
+  invisible(dev.off())
+  return(invisible(1))
+}
+
+# PTM Occupancy Analysis
+# UniMod:4 (Carbamidomethyl) is a fixed sample-prep modification — excluded from occupancy pairing.
+PTM_FIXED_MODS <- "UniMod:4"
+
+PTM_UNIMOD_NAMES <- c(
+  "UniMod:1"   = "Acetyl",
+  "UniMod:21"  = "Phospho",
+  "UniMod:35"  = "Oxidation",
+  "UniMod:36"  = "Dimethyl",
+  "UniMod:121" = "GlyGly",
+  "UniMod:737" = "TMT6plex"
+)
+
+ptm.format.mod.name <- function(unimods) {
+  nms <- PTM_UNIMOD_NAMES[unimods]
+  nms[is.na(nms)] <- unimods[is.na(nms)]
+  paste(sort(nms), collapse = "+")
+}
+
+ptm.extract.bio.mods <- function(seq) {
+  all.mods <- regmatches(seq, gregexpr("UniMod:[0-9]+", seq, perl = TRUE))[[1]]
+  setdiff(all.mods, PTM_FIXED_MODS)
+}
+
+# For each gene with peptides detected in both modified and unmodified forms,
+# computes per-sample occupancy (fraction modified) and tests whether it shifts
+# between conditions independently of total peptide abundance.
+DetectPTMOccupancy <- function(dataName) {
+  message("[PTMOccupancy] Starting DetectPTMOccupancy for dataset: ", dataName)
+  msgSet  <- readSet(msgSet, "msgSet")
+  dataSet <- readDataset(dataName)
+
+  fail <- function(msg) {
+    message("[PTMOccupancy] FAIL: ", msg)
+    msgSet$current.msg <- msg
+    saveSet(msgSet, "msgSet")
+    return(0L)
+  }
+
+  if (!ov_qs_exists("diann_metadata.qs"))
+    return(fail("DIA-NN metadata not available. Re-upload the pr_matrix file."))
+
+  meta <- ov_qs_read("diann_metadata.qs")
+  message("[PTMOccupancy] diann_metadata.qs cols: ", paste(names(meta), collapse = ", "))
+  message("[PTMOccupancy] diann_metadata rows: ", nrow(meta))
+
+  if (!all(c("Stripped.Sequence", "Modified.Sequence") %in% names(meta)))
+    return(fail("Sequence columns missing from metadata. Re-upload the pr_matrix file to regenerate it."))
+
+  pep.qs <- if (ov_qs_exists("peptide_level_data.qs")) "peptide_level_data.qs" else "data.stat.qs"
+  message("[PTMOccupancy] Using peptide matrix: ", pep.qs, " (exists=", file.exists(pep.qs), ")")
+  if (!file.exists(pep.qs))
+    return(fail("Peptide matrix not found. Run normalization first."))
+
+  pep.mat <- ov_qs_read(pep.qs)
+  message("[PTMOccupancy] pep.mat dim: ", nrow(pep.mat), " x ", ncol(pep.mat))
+
+  if (!is.null(dataSet$disc.inx)) {
+    disc.inx  <- dataSet$disc.inx
+    meta.info <- if (is.data.frame(dataSet$meta.info)) dataSet$meta.info else dataSet$meta.info$meta.info
+  } else {
+    meta.info <- dataSet$meta.info$meta.info
+    disc.inx  <- dataSet$meta.info$disc.inx
+  }
+  if (is.null(meta.info) || is.null(disc.inx) || sum(disc.inx) == 0)
+    return(fail("No categorical condition found in dataset metadata."))
+
+  cond.col <- names(which(disc.inx))[1]
+  groups   <- as.character(meta.info[[cond.col]])
+  names(groups) <- rownames(meta.info)
+  message("[PTMOccupancy] cond.col=", cond.col, " groups=", paste(unique(groups), collapse=","))
+
+  samples <- intersect(colnames(pep.mat), names(groups))
+  pep.mat <- pep.mat[, samples, drop = FALSE]
+  groups  <- groups[samples]
+  unique.groups <- unique(groups)
+  message("[PTMOccupancy] samples matched: ", length(samples))
+
+  if (length(unique.groups) < 2) return(fail("At least two conditions required."))
+  g1.idx <- groups == unique.groups[1]
+  g2.idx <- groups == unique.groups[2]
+  message("[PTMOccupancy] g1=", sum(g1.idx), " g2=", sum(g2.idx))
+  if (sum(g1.idx) < 2 || sum(g2.idx) < 2)
+    return(fail("At least 2 replicates per condition required."))
+
+  pmat.ids <- rownames(pep.mat)
+  meta <- meta[meta$Protein.IDs %in% pmat.ids, , drop = FALSE]
+  message("[PTMOccupancy] meta rows after matching to pep.mat: ", nrow(meta))
+  if (nrow(meta) == 0)
+    return(fail("No precursors match the peptide matrix. Re-upload the dataset."))
+
+  # Vectorized mod extraction: one gregexpr call over all sequences instead of lapply
+  all.matches  <- regmatches(meta$Modified.Sequence,
+                              gregexpr("UniMod:[0-9]+", meta$Modified.Sequence, perl = TRUE))
+  meta$bio.mods   <- lapply(all.matches, function(m) setdiff(m, PTM_FIXED_MODS))
+  meta$is.bio.mod <- lengths(meta$bio.mods) > 0L
+  meta$mod.sig    <- vapply(meta$bio.mods, function(m) {
+    if (length(m) == 0L) "unmodified" else paste(sort(unique(m)), collapse = "+")
+  }, character(1L))
+  message("[PTMOccupancy] bio.modified rows: ", sum(meta$is.bio.mod),
+          " unmodified rows: ", sum(!meta$is.bio.mod))
+  message("[PTMOccupancy] mod.sig table: ", paste(names(table(meta$mod.sig)), table(meta$mod.sig), sep="=", collapse=", "))
+
+  # Vectorized intensity aggregation with rowsum() — avoids per-sequence matrix operations.
+  # 1. Exponentiate the whole matrix once to linear scale.
+  # 2. rowsum() group-sums by (Stripped.Sequence + mod.sig) in a single C pass.
+  # 3. Per-sample NA tracking: if every precursor in a group is NA for a sample → NA result.
+  grp.key  <- paste0(meta$Stripped.Sequence, "___", meta$mod.sig)
+  lin.mat  <- 2^pep.mat[meta$Protein.IDs, samples, drop = FALSE]
+  lin.mat[is.nan(lin.mat)] <- NA
+
+  lin.mat0 <- lin.mat; lin.mat0[is.na(lin.mat0)] <- 0  # NA→0 for rowsum
+  det.mat  <- (!is.na(lin.mat)) + 0L                    # 1 if detected, 0 if NA
+
+  grp.sum  <- rowsum(lin.mat0, grp.key)
+  grp.det  <- rowsum(det.mat,  grp.key)
+  grp.sum[grp.det == 0] <- NA_real_   # restore NA where nothing was detected
+
+  grp.rn  <- rownames(grp.sum)
+  grp.seq <- sub("___.*$",  "", grp.rn)
+  grp.sig <- sub("^[^_]*___", "", grp.rn)
+
+  prec.count <- table(grp.key)
+
+  # Gene annotation: build lookup table in one pass via match() instead of per-seq scan
+  uniq.seqs <- unique(grp.seq)
+  gene.for.seq <- local({
+    gene.col <- NA_character_
+    for (gc in c("Gene", "GN")) {
+      if (gc %in% names(meta)) { gene.col <- gc; break }
+    }
+    if (!is.na(gene.col)) {
+      valid    <- !is.na(meta[[gene.col]]) & meta[[gene.col]] != ""
+      meta.sub <- meta[valid, ]
+      idx      <- match(uniq.seqs, meta.sub$Stripped.Sequence)
+      setNames(meta.sub[[gene.col]][idx], uniq.seqs)
+    } else {
+      setNames(rep(NA_character_, length(uniq.seqs)), uniq.seqs)
+    }
+  })
+
+  seqs.with.both <- intersect(
+    unique(grp.seq[grp.sig == "unmodified"]),
+    unique(grp.seq[grp.sig != "unmodified"])
+  )
+  message("[PTMOccupancy] peptide sequences with both forms: ", length(seqs.with.both))
+
+  if (length(seqs.with.both) == 0)
+    return(fail(paste0(
+      "No peptide sequences found with both modified and unmodified precursors. ",
+      "PTM occupancy requires both forms to be quantified in the same run."
+    )))
+
+  mod.sigs.by.seq <- split(
+    grp.sig[grp.sig != "unmodified"],
+    grp.seq[grp.sig != "unmodified"]
+  )
+
+  results.list <- lapply(seqs.with.both, function(sq) {
+    int.unmod <- grp.sum[paste0(sq, "___unmodified"), ]
+    mod.sigs  <- unique(mod.sigs.by.seq[[sq]])
+
+    lapply(mod.sigs, function(sig) {
+      int.mod   <- grp.sum[paste0(sq, "___", sig), ]
+      total.int <- int.unmod + int.mod
+      occ <- ifelse(is.na(int.unmod) | is.na(int.mod) | total.int == 0,
+                    NA_real_, int.mod / total.int)
+
+      valid.g1 <- occ[g1.idx][!is.na(occ[g1.idx])]
+      valid.g2 <- occ[g2.idx][!is.na(occ[g2.idx])]
+      if (length(valid.g1) < 2 || length(valid.g2) < 2) return(NULL)
+
+      logit <- function(p) log((p + 1e-6) / (1 - p + 1e-6))
+      tt.occ  <- tryCatch(t.test(logit(valid.g1), logit(valid.g2)), error = function(e) NULL)
+      if (is.null(tt.occ)) return(NULL)
+
+      total.log <- log2(total.int + 1)
+      tt.total  <- tryCatch(t.test(total.log[g1.idx], total.log[g2.idx]), error = function(e) NULL)
+
+      data.frame(
+        Gene             = gene.for.seq[sq],
+        Peptide          = sq,
+        Modification     = ptm.format.mod.name(strsplit(sig, "+", fixed = TRUE)[[1]]),
+        Mod.Sig          = sig,
+        Precursors.Unmod = as.integer(prec.count[paste0(sq, "___unmodified")]),
+        Precursors.Mod   = as.integer(prec.count[paste0(sq, "___", sig)]),
+        Occupancy.Cond1  = round(mean(valid.g1), 3),
+        Occupancy.Cond2  = round(mean(valid.g2), 3),
+        Delta.Occupancy  = round(mean(valid.g2) - mean(valid.g1), 3),
+        Occ.Pvalue       = signif(tt.occ$p.value, 3),
+        Total.Pvalue     = if (!is.null(tt.total)) signif(tt.total$p.value, 3) else NA_real_,
+        stringsAsFactors = FALSE
+      )
+    })
+  })
+
+  results <- do.call(rbind, Filter(Negate(is.null),
+                                   unlist(results.list, recursive = FALSE)))
+  if (is.null(results) || nrow(results) == 0)
+    return(fail(paste0(
+      "Insufficient data for PTM occupancy analysis. ",
+      "Need ≥2 samples with both modified and unmodified forms detected per condition."
+    )))
+
+  results$Occ.FDR <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
+  results <- results[order(results$Occ.Pvalue), ]
+
+  message("[PTMOccupancy] Final results: ", nrow(results), " pairs")
+  ov_qs_save(results, "ptm_occupancy_results.qs")
+  fast.write(results, "ptm_occupancy_results.csv")
+
+  msgSet$current.msg <- paste0(
+    "Analyzed PTM occupancy for ", nrow(results), " peptide-modification pair(s)."
+  )
+  saveSet(msgSet, "msgSet")
+  message("[PTMOccupancy] Done. Returning ", nrow(results))
+  return(as.integer(nrow(results)))
+}
+
+PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
+                                    format = "png", dpi = 96, paletteOpt = "default") {
+  require(ggplot2)
+
+  dataSet <- readDataset(dataName)
+
+  if (!ov_qs_exists("diann_metadata.qs")) return(invisible(0))
+  meta <- ov_qs_read("diann_metadata.qs")
+  if (!all(c("Stripped.Sequence", "Modified.Sequence") %in% names(meta))) return(invisible(0))
+
+  pep.qs <- if (ov_qs_exists("peptide_level_data.qs")) "peptide_level_data.qs" else "data.stat.qs"
+  if (!file.exists(pep.qs)) return(invisible(0))
+  pep.mat <- ov_qs_read(pep.qs)
+
+  if (!is.null(dataSet$disc.inx)) {
+    disc.inx  <- dataSet$disc.inx
+    meta.info <- if (is.data.frame(dataSet$meta.info)) dataSet$meta.info else dataSet$meta.info$meta.info
+  } else {
+    meta.info <- dataSet$meta.info$meta.info
+    disc.inx  <- dataSet$meta.info$disc.inx
+  }
+  cond.col <- names(which(disc.inx))[1]
+  groups   <- as.character(meta.info[[cond.col]])
+  names(groups) <- rownames(meta.info)
+  samples  <- intersect(colnames(pep.mat), names(groups))
+  pep.mat  <- pep.mat[, samples, drop = FALSE]
+  groups   <- groups[samples]
+
+  # Filter to the target peptide first — avoids running mod extraction on all 100k+ rows
+  seq.rows <- meta[meta$Stripped.Sequence == peptide & meta$Protein.IDs %in% rownames(pep.mat), , drop = FALSE]
+  if (nrow(seq.rows) == 0) return(invisible(0))
+
+  all.matches        <- regmatches(seq.rows$Modified.Sequence,
+                                    gregexpr("UniMod:[0-9]+", seq.rows$Modified.Sequence, perl = TRUE))
+  seq.rows$bio.mods   <- lapply(all.matches, function(m) setdiff(m, PTM_FIXED_MODS))
+  seq.rows$is.bio.mod <- lengths(seq.rows$bio.mods) > 0L
+  seq.rows$mod.sig    <- vapply(seq.rows$bio.mods, function(m) {
+    if (length(m) == 0L) "unmodified" else paste(sort(unique(m)), collapse = "+")
+  }, character(1L))
+  unmod.ids <- seq.rows$Protein.IDs[!seq.rows$is.bio.mod]
+  mod.ids   <- seq.rows$Protein.IDs[seq.rows$mod.sig == modSig]
+
+  sum.lin <- function(ids) {
+    ids <- intersect(ids, rownames(pep.mat))
+    if (length(ids) == 0) return(rep(NA_real_, length(samples)))
+    mat.lin <- 2^pep.mat[ids, samples, drop = FALSE]
+    if (nrow(mat.lin) == 1) return(as.numeric(mat.lin))
+    apply(mat.lin, 2, function(col) if (all(is.na(col))) NA_real_ else sum(col, na.rm = TRUE))
+  }
+
+  int.unmod <- sum.lin(unmod.ids)
+  int.mod   <- sum.lin(mod.ids)
+  total     <- int.unmod + int.mod
+  occ       <- ifelse(is.na(int.unmod) | is.na(int.mod) | total == 0,
+                      NA_real_, int.mod / total)
+
+  df <- data.frame(
+    Sample    = samples,
+    Condition = groups[samples],
+    Occupancy = occ,
+    stringsAsFactors = FALSE
+  )
+  df <- df[!is.na(df$Occupancy), ]
+  if (nrow(df) == 0) return(invisible(0))
+
+  col <- GetGroupPalette(df$Condition, paletteOpt)
+
+  mod.label <- ptm.format.mod.name(strsplit(modSig, "+", fixed = TRUE)[[1]])
+  trunc.seq <- if (nchar(peptide) > 28) paste0(substr(peptide, 1, 28), "…") else peptide
+
+  myplot <- ggplot(df, aes(x = Condition, y = Occupancy, fill = Condition)) +
+    geom_boxplot(aes(color = Condition), outlier.shape = NA, show.legend = FALSE) +
+    geom_jitter(width = 0.05, height = 0, show.legend = FALSE) +
+    stat_summary(fun = mean, colour = "yellow", geom = "point",
+                 shape = 18, size = 3, show.legend = FALSE) +
+    scale_fill_manual(values = col) +
+    scale_color_manual(values = col) +
+    scale_y_continuous(limits = c(0, 1),
+                       labels = function(x) paste0(round(x * 100), "%")) +
+    theme_bw(base_size = 10) +
+    theme(axis.title.x   = element_blank(),
+          legend.position = "none",
+          panel.grid      = element_blank(),
+          plot.title      = element_text(size = 11, hjust = 0.5),
+          plot.subtitle   = element_text(size = 9,  hjust = 0.5, color = "#666666")) +
+    ylab("Modification Occupancy") +
+    ggtitle(trunc.seq, subtitle = mod.label)
+
+  imgName <- paste0(imageName, "dpi", dpi, ".", format)
+  Cairo(file = imgName, width = 5, height = 5, unit = "in", dpi = dpi, bg = "white", type = format)
+  invisible(print(myplot))
+  invisible(dev.off())
+  return(invisible(1))
+}
+
+PrepPTMOccupancyVolcano <- function(dataName, fileNm) {
+  res <- ov_qs_read("ptm_occupancy_results.qs")
+  if (is.null(res) || nrow(res) == 0) {
+    message("[PTMVolcano] No PTM occupancy results found")
+    return(invisible(0))
+  }
+
+  res$label <- make.unique(paste0(res$Gene, " [", res$Modification, "]"))
+
+  delta  <- setNames(as.list(res$Delta.Occupancy), res$label)
+  p.log  <- setNames(as.list(-log10(pmax(res$Occ.FDR, 1e-300))), res$label)
+  inx.up   <- !is.na(res$Delta.Occupancy) & !is.na(res$Occ.FDR) &
+               res$Delta.Occupancy > 0.1 & res$Occ.FDR < 0.05
+  inx.down <- !is.na(res$Delta.Occupancy) & !is.na(res$Occ.FDR) &
+               res$Delta.Occupancy < -0.1 & res$Occ.FDR < 0.05
+  inx.p    <- inx.up | inx.down
+
+  sig.up.ids   <- res$label[inx.up]
+  sig.down.ids <- res$label[inx.down]
+  non.sig.ids  <- res$label[!inx.p]
+
+  conv <- data.frame(anot.id = res$Gene, symbol = res$Gene, stringsAsFactors = FALSE)
+
+  json.obj <- list(
+    fc.log     = delta,
+    fc.log.uniq = delta,
+    p.log      = p.log,
+    p.raw      = setNames(as.list(res$Occ.FDR), res$label),
+    inx.up     = setNames(as.list(inx.up),   res$label),
+    inx.down   = setNames(as.list(inx.down), res$label),
+    inx.p      = setNames(as.list(inx.p),    res$label),
+    sigUpIds   = sig.up.ids,
+    sigDownIds = sig.down.ids,
+    nonSigIds  = non.sig.ids,
+    conv       = conv,
+    raw.threshx = 0.1,
+    raw.threshy = 0.05,
+    thresh.y    = -log10(0.05),
+    fc.symb     = res$label,
+    analType    = "ptm_occupancy",
+    org         = paramSet$data.org,
+    naviString  = "PTM Occupancy Volcano"
+  )
+
+  json.path <- paste0(fileNm, ".json")
+  write(RJSONIO::toJSON(json.obj), json.path)
+  return(invisible(1))
 }

@@ -334,6 +334,14 @@
     folderNm <- paramSet$data.org;
   }
 
+  # For KEGG, prefer the jointpa genetic library from MetaboAnalyst when available
+  if(fun.type == "kegg" && !is.null(paramSet$jointpa.lib.path)){
+    jointpa.file <- paste0(paramSet$jointpa.lib.path, folderNm, ".qs");
+    if(file.exists(jointpa.file)){
+      return(.loadJointpaGeneticLib(jointpa.file));
+    }
+  }
+
   if(exists("api.lib.path")){
     lib.path <- api.lib.path;
   }else{
@@ -346,7 +354,7 @@
     download.file(my.path, destfile = nmdb, method="libcurl", mode = "wb");
     my.path <- nmdb;
   }
-  
+
   if (!file.exists(my.path)) {
     AddErrMsg(paste0("[EnrichLib] Library file not found: ", my.path));
     return(0);
@@ -357,19 +365,19 @@
       stop("[EnrichLib] Failed to read library file: ", my.path, " | ", conditionMessage(e))
     }
   );
-  
-  if(substr(fun.type, 0, 2)=="go"){  
+
+  if(substr(fun.type, 0, 2)=="go"){
     if(is.null(names(my.lib))){ # some go lib does not give names
       names(my.lib) <- c("link", "term", "sets");
     }
   }
-  
+
   current.featureset <- my.lib$sets;
   #remove empty pathways
   keep.inx <- lapply(current.featureset,length)>0
   current.featureset <- current.featureset[keep.inx]
   my.lib$term <- my.lib$term[keep.inx]
-  set.ids<- names(current.featureset); 
+  set.ids<- names(current.featureset);
   names(set.ids) <- names(current.featureset) <- my.lib$term;
   
   if(substr(fun.type, 0, 2)=="go"){
@@ -383,6 +391,47 @@
   res$current.setlink <- my.lib$link;
   res$current.setids <- set.ids;
   res$current.featureset <- current.featureset;
+  return(res);
+}
+
+# Load MetaboAnalyst jointpa genetic .qs file and return the same structure as .loadEnrichLib()
+# jointpa mset.list: keyed by pathway IDs, values = space-separated "hsa:1234" gene ID strings
+# jointpa path.ids: named by pathway names, values = pathway IDs
+.loadJointpaGeneticLib <- function(file.path) {
+  jlib <- tryCatch(
+    ov_qs_read(file.path),
+    error = function(e) {
+      stop("[JointpaLib] Failed to read: ", file.path, " | ", conditionMessage(e))
+    }
+  );
+
+  # Reverse path.ids: pathway_ID -> pathway_name
+  rev.ids <- setNames(names(jlib$path.ids), jlib$path.ids);
+
+  # Parse mset.list: each entry is a character vector of space-separated KEGG ID groups
+  # Strip "org:" prefix, filter out "cpd:" entries and NAs, deduplicate
+  sets <- lapply(jlib$mset.list, function(x) {
+    ids <- unlist(strsplit(x, " ", fixed = TRUE));
+    ids <- ids[!is.na(ids)];
+    ids <- ids[!grepl("^cpd:", ids, perl = TRUE)];
+    ids <- unique(gsub("^[a-z]+:", "", ids, perl = TRUE));
+    ids[nchar(ids) > 0]
+  });
+  # sets is keyed by pathway IDs; term = pathway names (parallel)
+  term <- rev.ids[names(sets)];
+
+  keep.inx <- sapply(sets, length) > 0;
+  sets <- sets[keep.inx];
+  term <- term[keep.inx];
+
+  set.ids <- names(sets);  # pathway IDs
+  names(set.ids) <- names(sets) <- term;  # re-key by pathway names
+
+  ov_qs_save(sets, "current_featureset.qs");
+  res <- list();
+  res$current.setlink <- "https://www.genome.jp/dbget-bin/www_bget?pathway+";
+  res$current.setids <- set.ids;
+  res$current.featureset <- sets;
   return(res);
 }
 
