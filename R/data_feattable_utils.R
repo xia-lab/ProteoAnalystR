@@ -522,6 +522,14 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
       write.csv(data.frame(GeneID = character(0)), file = out_bin_file, row.names = FALSE)
       #msg("No features passed any comparison; wrote empty binary matrix to: ", out_bin_file)
     }
+
+  # UpSet plot: pairwise sig-feature intersections for multi-group limma runs.
+  # Requires comp.res.list (≥2 contrasts) — dose-response / two-group skip.
+  if (dataSet$de.method == "limma" &&
+      !is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) >= 2) {
+    PlotPairwiseUpsetPNG(dataName = dataName, imgName = "upset_pairwise_0",
+                         p.lvl = p.lvl, fc.lvl = fc.lvl, FDR = FDR)
+  }
 }
 dataSet$comp.res.list <- lapply(dataSet$comp.res.list, function(tbl) {
   if (is.null(tbl) || nrow(tbl) == 0) return(tbl)

@@ -369,3 +369,125 @@ SetUpsetMode <- function(mode){
       paramSet$upsetMode <- mode;
   saveSet(paramSet, "paramSet");
 }
+
+#' Plot pairwise UpSet diagram for multi-group limma runs.
+#'
+#' Reads comp.res.list from the dataset, builds per-contrast sig-feature sets,
+#' and writes a PNG via Cairo + UpSetR.  Skips gracefully if UpSetR is missing
+#' or fewer than 2 contrasts have significant features.
+#'
+#' @param dataName   dataset name (passed to readDataset)
+#' @param imgName    base name for the output file (no extension)
+#' @param p.lvl      p-value / FDR threshold
+#' @param fc.lvl     minimum |logFC| threshold
+#' @param FDR        "true" to use adj.P.Val, otherwise P.Value
+#' @param max.sets   maximum number of sets to display
+#' @param max.inter  maximum number of intersections to display
+#' @param dpi,format passed to Cairo
+#'
+#' @return Path to the written PNG, or NULL on failure / no data.
+PlotPairwiseUpsetPNG <- function(dataName  = "",
+                                 imgName   = "upset_pairwise_0",
+                                 p.lvl     = 0.05,
+                                 fc.lvl    = 0,
+                                 FDR       = "true",
+                                 max.sets  = 15,
+                                 max.inter = 20,
+                                 dpi       = 150,
+                                 format    = "png") {
+  tryCatch({
+    if (!requireNamespace("UpSetR", quietly = TRUE)) {
+      message("[PlotPairwiseUpsetPNG] UpSetR package not installed — skipping")
+      return(invisible(NULL))
+    }
+    require(Cairo)
+
+    dataSet <- readDataset(dataName)
+    if (is.null(dataSet) || is.null(dataSet$comp.res.list) ||
+        length(dataSet$comp.res.list) < 2) {
+      message("[PlotPairwiseUpsetPNG] comp.res.list missing or only 1 contrast — skipping")
+      return(invisible(NULL))
+    }
+
+    use.fdr <- (FDR == "true") || isTRUE(FDR)
+    comp.list  <- dataSet$comp.res.list
+    comp.names <- names(comp.list)
+    if (is.null(comp.names) || any(comp.names == "")) {
+      comp.names <- paste0("C", seq_along(comp.list))
+    }
+
+    # Build named list of significant feature IDs per contrast
+    sig.sets <- vector("list", length(comp.list))
+    names(sig.sets) <- comp.names
+    for (i in seq_along(comp.list)) {
+      rt <- comp.list[[i]]
+      if (is.null(rt) || nrow(rt) == 0) {
+        sig.sets[[i]] <- character(0); next
+      }
+      pcol <- if (use.fdr && "adj.P.Val" %in% names(rt)) "adj.P.Val"
+              else if ("P.Value" %in% names(rt)) "P.Value"
+              else if ("padj" %in% names(rt)) "padj"
+              else "P.Value"
+      lfc_col <- if ("logFC" %in% names(rt)) "logFC"
+                 else if ("log2FoldChange" %in% names(rt)) "log2FoldChange"
+                 else NULL
+      pvec <- suppressWarnings(as.numeric(rt[[pcol]]))
+      pass.p <- is.finite(pvec) & (pvec <= p.lvl)
+      pass.fc <- if (!is.null(lfc_col)) {
+        lf <- suppressWarnings(as.numeric(rt[[lfc_col]]))
+        is.finite(lf) & (abs(lf) >= fc.lvl)
+      } else TRUE
+      sig.sets[[i]] <- rownames(rt)[pass.p & pass.fc]
+    }
+
+    # Drop contrasts with zero sig features
+    keep <- vapply(sig.sets, function(x) length(x) > 0, logical(1))
+    if (sum(keep) < 2) {
+      message("[PlotPairwiseUpsetPNG] fewer than 2 contrasts have sig features — skipping")
+      return(invisible(NULL))
+    }
+    sig.sets <- sig.sets[keep]
+
+    upset.df <- UpSetR::fromList(sig.sets)
+    if (nrow(upset.df) == 0) {
+      message("[PlotPairwiseUpsetPNG] no features in any sig set — skipping")
+      return(invisible(NULL))
+    }
+
+    n.sets <- min(length(sig.sets), max.sets)
+    w.in <- max(8, 0.45 * n.sets + 6)
+    h.in <- 6
+
+    imgPath <- paste0(imgName, ".", format)
+    Cairo::Cairo(file = imgPath, unit = "in", dpi = dpi,
+                 width = w.in, height = h.in, type = format, bg = "white")
+    tryCatch({
+      print(UpSetR::upset(
+        upset.df,
+        sets         = rev(colnames(upset.df))[seq_len(min(n.sets, ncol(upset.df)))],
+        nsets        = n.sets,
+        nintersects  = max.inter,
+        order.by     = "freq",
+        keep.order   = TRUE,
+        mainbar.y.label = "Features in intersection",
+        sets.x.label    = "Sig. features per contrast",
+        point.size   = 2.4,
+        line.size    = 0.8,
+        text.scale   = c(1.3, 1.2, 1.2, 1.0, 1.1, 1.0)
+      ))
+    }, error = function(e) {
+      message("[PlotPairwiseUpsetPNG] UpSetR::upset render error: ", conditionMessage(e))
+    })
+    dev.off()
+
+    n.total <- nrow(upset.df)
+    message("[PlotPairwiseUpsetPNG] wrote ", imgPath,
+            " (", length(sig.sets), " contrasts, ",
+            n.total, " unique sig features across the union)")
+    return(invisible(imgPath))
+  }, error = function(e) {
+    message("[PlotPairwiseUpsetPNG] FAILED: ", conditionMessage(e))
+    tryCatch(dev.off(), error = function(x) {})
+    return(invisible(NULL))
+  })
+}
