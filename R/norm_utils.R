@@ -31,18 +31,21 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
   #msg("[Norm] PerformNormalization start data=", dataName, " type=", dataSet$type, " norm.opt=", norm.opt,
   #        " var.thresh=", var.thresh, " count.thresh=", count.thresh, " filterUnmapped=", filterUnmapped)
 
-  # Read the current normalization input, which is rebuilt from the immutable
-  # annotated baseline on every normalization submit.
-  if(file.exists("norm.input.anot.qs")){
+  # Read the peptide-level normalization input.  Priority:
+  # 1. peptide.input.anot.qs — saved by SummarizeProteomicsData before it overwrites
+  #    norm.input.anot.qs with protein-level data.  Ensures re-running normalization
+  #    after summarization still starts from the original peptide matrix.
+  # 2. norm.input.anot.qs   — the filtered peptide baseline (pre-summarization path).
+  # 3. orig.data.anot.qs    — annotated baseline (fallback).
+  # 4. data.anot.qs         — backward-compatibility fallback.
+  if (file.exists("peptide.input.anot.qs")) {
+    ds <- ov_qs_read("peptide.input.anot.qs")
+  } else if(file.exists("norm.input.anot.qs")){
     ds <- ov_qs_read("norm.input.anot.qs");
-    #msg("[Norm] Using norm.input.anot.qs (current normalization input)")
   } else if(file.exists("orig.data.anot.qs")){
     ds <- ov_qs_read("orig.data.anot.qs");
-    #msg("[Norm] Using orig.data.anot.qs (annotated baseline)")
   } else {
-    # Fallback for backward compatibility (older data that doesn't have orig.data.anot.qs)
     ds <- ov_qs_read("data.anot.qs");
-    #msg("[Norm] Fallback: using data.anot.qs")
   }
   #msg("[Norm] Loaded data head rows=", paste(utils::head(rownames(ds), 5), collapse=", "),
   #        " cols=", paste(utils::head(colnames(ds), 5), collapse=", "))
@@ -435,11 +438,16 @@ ApplyProteotypicFilter <- function(dataName) {
     return(1L)
   }
 
-  if (!file.exists("norm.input.anot.qs")) {
+  # After peptide summarization, norm.input.anot.qs holds protein-level data and must
+  # not be filtered here.  peptide.input.anot.qs (written by SummarizeProteomicsData)
+  # is the correct peptide-level target; PerformNormalization already prefers it.
+  target_file <- if (file.exists("peptide.input.anot.qs")) "peptide.input.anot.qs" else "norm.input.anot.qs"
+
+  if (!file.exists(target_file)) {
     return(skip("norm.input.anot.qs not found."))
   }
 
-  data <- ov_qs_read("norm.input.anot.qs")
+  data <- ov_qs_read(target_file)
   n_before <- nrow(data)
   rn <- rownames(data)
   message(sprintf("[ProteotypicFilter] Starting: %d rows, first row name: '%s'", n_before, rn[1]))
@@ -451,9 +459,8 @@ ApplyProteotypicFilter <- function(dataName) {
     diann_meta <- ov_qs_read("diann_metadata.qs")
     message(sprintf("[ProteotypicFilter] diann_metadata cols: %s", paste(names(diann_meta), collapse = ", ")))
     if ("Proteotypic" %in% names(diann_meta)) {
-      prot_flag <- setNames(diann_meta$Proteotypic, diann_meta$Protein.IDs)
-      message(sprintf("[ProteotypicFilter] Proteotypic values (first 5): %s", paste(head(prot_flag, 5), collapse = ", ")))
-      matched <- prot_flag[rn]
+      idx <- match(rn, diann_meta$Protein.IDs)
+      matched <- diann_meta$Proteotypic[idx]
       n_matched <- sum(!is.na(matched))
       message(sprintf("[ProteotypicFilter] Proteotypic column: %d/%d row names matched metadata IDs", n_matched, n_before))
       if (n_matched > 0) {
@@ -468,7 +475,7 @@ ApplyProteotypicFilter <- function(dataName) {
         msg <- sprintf("Proteotypic filter: Removed %d non-proteotypic precursors (%d → %d retained).", n_removed, n_before, nrow(data))
         msgSet$current.msg <- c(msgSet$current.msg, msg)
         msgSet$prefilter.msg <- paste(c(msgSet$prefilter.msg, msg), collapse = " ")
-        ov_qs_save(data, "norm.input.anot.qs")
+        ov_qs_save(data, target_file)
         saveSet(msgSet, "msgSet")
         return(1L)
       }
@@ -485,8 +492,8 @@ ApplyProteotypicFilter <- function(dataName) {
     if (!("Unique.peptides" %in% names(mq_meta))) {
       return(skip("Unique.peptides column not found in MaxQuant metadata."))
     }
-    unique_counts <- setNames(mq_meta$Unique.peptides, mq_meta$Protein.IDs)
-    matched <- unique_counts[rn]
+    idx <- match(rn, mq_meta$Protein.IDs)
+    matched <- mq_meta$Unique.peptides[idx]
     n_matched <- sum(!is.na(matched))
     message(sprintf("[ProteotypicFilter] MaxQuant: %d/%d row names matched Protein.IDs; first data row='%s', first meta ID='%s'",
         n_matched, n_before, rn[1], mq_meta$Protein.IDs[1]))
@@ -503,11 +510,12 @@ ApplyProteotypicFilter <- function(dataName) {
     prot_map <- ov_qs_read("peptide_to_protein_map.qs")
     message(sprintf("[ProteotypicFilter] prot_map: %d rows, cols: %s", nrow(prot_map), paste(names(prot_map), collapse = ", ")))
     message(sprintf("[ProteotypicFilter] prot_map first Peptide: '%s', first Protein: '%s'", prot_map$Peptide[1], prot_map$Protein[1]))
-    pep_freq  <- table(prot_map$Peptide)
-    proteotypic_peps  <- names(pep_freq[pep_freq == 1])
-    proteotypic_prots <- unique(prot_map$Protein[prot_map$Peptide %in% proteotypic_peps])
+    is_dup <- duplicated(prot_map$Peptide) | duplicated(prot_map$Peptide, fromLast = TRUE)
+    not_dup_idx       <- which(!is_dup)
+    proteotypic_peps  <- prot_map$Peptide[not_dup_idx]
+    proteotypic_prots <- unique(prot_map$Protein[not_dup_idx])
     message(sprintf("[ProteotypicFilter] prot_map: %d total peptides, %d proteotypic, %d proteotypic proteins",
-        length(pep_freq), length(proteotypic_peps), length(proteotypic_prots)))
+        nrow(prot_map), length(proteotypic_peps), length(proteotypic_prots)))
 
     pep_overlap  <- mean(rn %in% prot_map$Peptide)
     prot_overlap <- mean(rn %in% prot_map$Protein)
@@ -541,7 +549,7 @@ ApplyProteotypicFilter <- function(dataName) {
   msgSet$current.msg <- c(msgSet$current.msg, result_msg)
   msgSet$prefilter.msg <- paste(c(msgSet$prefilter.msg, result_msg), collapse = " ")
 
-  ov_qs_save(data, "norm.input.anot.qs")
+  ov_qs_save(data, target_file)
   saveSet(msgSet, "msgSet")
   return(1L)
 }
@@ -1108,6 +1116,14 @@ SummarizeProteomicsData <- function(dataName = "",
   }
   prot.ids <- vapply(rownames(prot.mat), clean_uniprot, character(1))
   rownames(prot.mat) <- prot.ids
+
+  # Snapshot the pre-normalization peptide input before overwriting it with protein-level
+  # data.  PerformNormalization reads norm.input.anot.qs as its starting point, so without
+  # this copy re-running normalization after summarization would re-normalize protein-level
+  # data instead of the original peptides.
+  if (file.exists("norm.input.anot.qs")) {
+    file.copy("norm.input.anot.qs", "peptide.input.anot.qs", overwrite = TRUE)
+  }
 
   # Persist protein-level matrix for downstream annotation
   ov_qs_save(prot.mat, "int.mat.qs")

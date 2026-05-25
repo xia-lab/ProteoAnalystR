@@ -52,6 +52,116 @@ rescale2NewRange <- function(qvec, a, b){
   return(new.vec);
 }
 
+.paNormalizeUniprotIds <- function(ids) {
+  if (length(ids) == 0) {
+    return(ids)
+  }
+  cleaned <- trimws(as.character(ids))
+  cleaned <- sub("^.*\\|([^|]+)\\|.*$", "\\1", cleaned)
+  cleaned <- sub("^([^;]+);.*$", "\\1", cleaned)
+  cleaned <- sub("^([^,]+),.*$", "\\1", cleaned)
+  cleaned <- sub("-\\d+$", "", cleaned)
+  cleaned <- sub("_[A-Z]_\\d+$", "", cleaned)
+  cleaned
+}
+
+.paCompartmentColors <- function() {
+  list(
+    "Nucleus" = "#e41a1c",
+    "Cell surface & adhesion" = "#377eb8",
+    "Cytoskeleton" = "#4daf4a",
+    "Endomembrane" = "#984ea3",
+    "Mitochondria & metabolic organelles" = "#ff7f00",
+    "Mitochondrial & metabolic organelles" = "#17becf",
+    "Cytosol" = "#a65628",
+    "Extracellular" = "#f781bf",
+    "Unknown" = "#999999"
+  )
+}
+
+.paScaleGraphNodeSizes <- function(g, from = 8, to = 20) {
+  degs <- igraph::degree(g)
+  vals <- log10(degs + 1)
+  rng <- range(vals, na.rm = TRUE)
+  if (!all(is.finite(rng)) || rng[2] - rng[1] == 0) {
+    return(rep((from + to) / 2, length(vals)))
+  }
+  (vals - rng[1]) / (rng[2] - rng[1]) * (to - from) + from
+}
+
+.paResolveGraphIds <- function(g, org = "hsa") {
+  nms <- as.character(V(g)$name)
+  n <- length(nms)
+  is_empty <- function(x) {
+    is.na(x) | !nzchar(trimws(as.character(x)))
+  }
+
+  graph.is.entrez <- if (n > 0) mean(grepl("^[0-9]+$", nms)) > 0.9 else FALSE
+  entrez.ids <- rep(NA_character_, n)
+  uniprot.ids <- rep(NA_character_, n)
+
+  if (!is.null(V(g)$entrez) && length(V(g)$entrez) == n) {
+    entrez.ids <- as.character(V(g)$entrez)
+  }
+  if (graph.is.entrez) {
+    missing.entrez <- is_empty(entrez.ids)
+    entrez.ids[missing.entrez] <- nms[missing.entrez]
+  }
+
+  if (!is.null(V(g)$uniprot) && length(V(g)$uniprot) == n) {
+    uniprot.ids <- as.character(V(g)$uniprot)
+  }
+  if (!graph.is.entrez) {
+    missing.uniprot <- is_empty(uniprot.ids)
+    uniprot.ids[missing.uniprot] <- .paNormalizeUniprotIds(nms[missing.uniprot])
+  }
+
+  needs.entrez <- any(is_empty(entrez.ids))
+  needs.uniprot <- any(is_empty(uniprot.ids))
+  if (needs.entrez || needs.uniprot) {
+    tryCatch({
+      uniprot.map <- queryGeneDB("entrez_uniprot", org)
+      if (!is.null(uniprot.map) && is.data.frame(uniprot.map) &&
+          "gene_id" %in% colnames(uniprot.map) && "accession" %in% colnames(uniprot.map)) {
+        map.entrez <- as.character(uniprot.map$gene_id)
+        map.accession <- as.character(uniprot.map$accession)
+        valid <- !is_empty(map.entrez) & !is_empty(map.accession)
+        map.entrez <- map.entrez[valid]
+        map.accession <- map.accession[valid]
+
+        if (any(is_empty(entrez.ids)) && !graph.is.entrez) {
+          node.norm <- .paNormalizeUniprotIds(nms)
+          acc.norm <- .paNormalizeUniprotIds(map.accession)
+          hit.inx <- match(node.norm, acc.norm)
+          fill <- is_empty(entrez.ids) & !is.na(hit.inx)
+          entrez.ids[fill] <- map.entrez[hit.inx[fill]]
+        }
+
+        if (any(is_empty(uniprot.ids))) {
+          hit.inx <- match(entrez.ids, map.entrez)
+          fill <- is_empty(uniprot.ids) & !is.na(hit.inx)
+          uniprot.ids[fill] <- map.accession[hit.inx[fill]]
+        }
+      }
+    }, error = function(e) {
+      if (exists("msg", mode = "function")) {
+        msg("[IDMap] Warning: could not resolve graph IDs: ", e$message)
+      }
+    })
+  }
+
+  entrez.ids[is_empty(entrez.ids)] <- NA_character_
+  uniprot.ids[is_empty(uniprot.ids)] <- NA_character_
+
+  list(
+    node_id = nms,
+    entrez = entrez.ids,
+    uniprot = uniprot.ids,
+    graph_is_entrez = graph.is.entrez,
+    id_type = ifelse(graph.is.entrez, "entrez", "uniprot")
+  )
+}
+
 
 ComputeColorGradient <- function(nd.vec, background="black", centered, colorblind){
   require("RColorBrewer");
@@ -190,45 +300,94 @@ ExtractModule<- function(nodeids, type="enr"){
   msg("[ExtractModule] Network has ", vcount(g), " vertices and ", ecount(g), " edges")
   msg("[ExtractModule] Network vertex names (first 10): ", paste(head(V(g)$name, 10), collapse=", "))
 
-  # Check if input nodes are UniProt IDs (contain letters) vs Entrez IDs (all numeric)
-  # Graph vertices are stored as Entrez IDs
-  first_node <- nodes[1]
-  is_uniprot <- grepl("[A-Za-z]", first_node)
+  nodes <- unique(trimws(as.character(nodes)))
+  nodes <- nodes[!is.na(nodes) & nzchar(nodes)]
+  graph.nodes <- as.character(V(g)$name)
+  org <- if (!is.null(paramSet$data.org)) paramSet$data.org else "hsa"
+  graph.ids <- .paResolveGraphIds(g, org)
+  V(g)$entrez <- graph.ids$entrez
+  V(g)$uniprot <- graph.ids$uniprot
+  graph.is.entrez <- mean(grepl("^[0-9]+$", graph.nodes)) > 0.9
+  input.is.entrez <- mean(grepl("^[0-9]+$", nodes)) > 0.9
+  msg("[ExtractModule] Graph ID namespace appears to be: ", ifelse(graph.is.entrez, "Entrez", "UniProt/other"))
+  msg("[ExtractModule] Input ID namespace appears to be: ", ifelse(input.is.entrez, "Entrez", "mixed/UniProt/other"))
 
-  if (is_uniprot) {
-    msg("[ExtractModule] Input IDs appear to be UniProt format, converting to Entrez...")
-    org <- if (!is.null(paramSet$data.org)) paramSet$data.org else "hsa"
+  normalize.uniprot <- .paNormalizeUniprotIds
 
-    # Convert UniProt to Entrez using database
-    tryCatch({
-      uniprot.map <- queryGeneDB("entrez_uniprot", org)
-
-      if (!is.null(uniprot.map) && is.data.frame(uniprot.map) &&
-          "gene_id" %in% colnames(uniprot.map) && "accession" %in% colnames(uniprot.map)) {
-
-        # Match UniProt accessions to get Entrez IDs
-        hit.inx <- match(nodes, as.character(uniprot.map$accession))
-        entrez.ids <- uniprot.map$gene_id[hit.inx]
-
-        # Remove NAs
-        valid.inx <- !is.na(entrez.ids)
-        nodes <- as.character(entrez.ids[valid.inx])
-
-        msg("[ExtractModule] Converted ", sum(valid.inx), " UniProt IDs to Entrez IDs")
-        msg("[ExtractModule] Converted IDs (first 10): ", paste(head(nodes, 10), collapse=", "))
-      } else {
-        msg("[ExtractModule] ERROR: Could not load UniProt mapping database")
-        return("NA")
-      }
-    }, error = function(e) {
-      msg("[ExtractModule] ERROR: Failed to convert UniProt IDs: ", e$message)
-      return("NA")
-    })
+  matched.nodes <- unique(nodes[nodes %in% graph.nodes])
+  if (length(matched.nodes) > 0) {
+    msg("[ExtractModule] Direct ID matches: ", length(matched.nodes))
   }
+
+  # Use graph-level Entrez annotations if available.
+  if (!is.null(V(g)$entrez)) {
+    graph.entrez <- as.character(V(g)$entrez)
+    attr.hits <- graph.nodes[graph.entrez %in% nodes]
+    attr.hits <- attr.hits[!is.na(attr.hits) & nzchar(attr.hits)]
+    if (length(attr.hits) > 0) {
+      matched.nodes <- unique(c(matched.nodes, attr.hits))
+      msg("[ExtractModule] Matched ", length(unique(attr.hits)), " nodes through graph Entrez attributes")
+    }
+  }
+
+  # If direct matching fails because the module list and graph use different
+  # namespaces, convert through the Entrez-UniProt mapping table and keep only
+  # IDs that actually exist as graph vertices.
+  tryCatch({
+    uniprot.map <- queryGeneDB("entrez_uniprot", org)
+    if (!is.null(uniprot.map) && is.data.frame(uniprot.map) &&
+        "gene_id" %in% colnames(uniprot.map) && "accession" %in% colnames(uniprot.map)) {
+
+      map.entrez <- as.character(uniprot.map$gene_id)
+      map.accession <- as.character(uniprot.map$accession)
+
+      if (!graph.is.entrez) {
+        # Graph vertices are UniProt accessions; module node IDs can be Entrez.
+        entrez.query <- nodes[grepl("^[0-9]+$", nodes)]
+        if (length(entrez.query) > 0) {
+          mapped.accessions <- map.accession[map.entrez %in% entrez.query]
+          mapped.accessions <- mapped.accessions[mapped.accessions %in% graph.nodes]
+          if (length(mapped.accessions) > 0) {
+            matched.nodes <- unique(c(matched.nodes, mapped.accessions))
+            msg("[ExtractModule] Converted Entrez input IDs to ", length(unique(mapped.accessions)), " UniProt graph node(s)")
+          }
+        }
+
+        # Also normalize UniProt-like inputs so isoform/header/site suffixes can match graph nodes.
+        non.entrez.query <- nodes[!grepl("^[0-9]+$", nodes)]
+        if (length(non.entrez.query) > 0) {
+          graph.norm <- normalize.uniprot(graph.nodes)
+          query.norm <- normalize.uniprot(non.entrez.query)
+          norm.hits <- graph.nodes[graph.norm %in% query.norm]
+          if (length(norm.hits) > 0) {
+            matched.nodes <- unique(c(matched.nodes, norm.hits))
+            msg("[ExtractModule] Matched ", length(unique(norm.hits)), " normalized UniProt-like graph node(s)")
+          }
+        }
+      } else {
+        # Graph vertices are Entrez IDs; module node IDs can be UniProt.
+        non.entrez.query <- normalize.uniprot(nodes[!grepl("^[0-9]+$", nodes)])
+        if (length(non.entrez.query) > 0) {
+          mapped.entrez <- map.entrez[map.accession %in% non.entrez.query]
+          mapped.entrez <- mapped.entrez[mapped.entrez %in% graph.nodes]
+          if (length(mapped.entrez) > 0) {
+            matched.nodes <- unique(c(matched.nodes, mapped.entrez))
+            msg("[ExtractModule] Converted UniProt input IDs to ", length(unique(mapped.entrez)), " Entrez graph node(s)")
+          }
+        }
+      }
+    } else {
+      msg("[ExtractModule] WARNING: Could not load Entrez-UniProt mapping table for ", org)
+    }
+  }, error = function(e) {
+    msg("[ExtractModule] WARNING: ID namespace conversion failed: ", e$message)
+  })
+
+  nodes <- unique(matched.nodes)
 
   # try to see if the nodes themselves are already connected
   hit.inx <- V(g)$name %in% nodes;
-  msg("[ExtractModule] Found ", sum(hit.inx), " of ", length(nodes), " nodes in network")
+  msg("[ExtractModule] Found ", sum(hit.inx), " of ", length(nodes), " mapped nodes in network")
 
   if(sum(hit.inx) == 0) {
     msg("[ExtractModule] ERROR: None of the requested nodes found in network")
@@ -281,7 +440,13 @@ ExtractModule<- function(nodeids, type="enr"){
     g <- simplify(delete_vertices(g, nodes2rm));
     msg("[ExtractModule] After path extraction: ", vcount(g), " vertices, ", ecount(g), " edges")
   }
-  nodeList <- igraph::as_data_frame(g, "vertices");
+  node.labels <- if (!is.null(V(g)$gene_symbol) && length(V(g)$gene_symbol) == vcount(g)) {
+    as.character(V(g)$gene_symbol)
+  } else {
+    as.character(V(g)$name)
+  }
+  node.labels[is.na(node.labels) | !nzchar(node.labels)] <- as.character(V(g)$name)[is.na(node.labels) | !nzchar(node.labels)]
+  nodeList <- data.frame(Id = as.character(V(g)$name), Label = node.labels, stringsAsFactors = FALSE);
   msg("[ExtractModule] Extracted ", nrow(nodeList), " nodes for module")
 
   if(nrow(nodeList) < 3){
@@ -289,22 +454,21 @@ ExtractModule<- function(nodeids, type="enr"){
     return ("NA");
   }
 
-  if(ncol(nodeList) == 1){
-    nodeList <- data.frame(Id=nodeList[,1], Label=nodeList[,1]);
-  }
-
   paramSet$module.count <- paramSet$module.count + 1;
   module.nm <- paste("module", paramSet$module.count, sep="");
   msg("[ExtractModule] Creating module: ", module.nm)
 
-  colnames(nodeList) <- c("Id", "Label");
   ndFileNm <- paste(module.nm, "_node_list.csv", sep="");
   fast.write(nodeList, file=ndFileNm, row.names=F);
   msg("[ExtractModule] Wrote node list to: ", ndFileNm)
 
-  edgeList <- igraph::as_data_frame(g, "edges");
-  edgeList <- cbind(rownames(edgeList), edgeList);
-  colnames(edgeList) <- c("Id", "Source", "Target");
+  edge.mat <- igraph::as_edgelist(g, names = TRUE);
+  edgeList <- data.frame(
+    Id = paste0("e", seq_len(nrow(edge.mat))),
+    Source = edge.mat[, 1],
+    Target = edge.mat[, 2],
+    stringsAsFactors = FALSE
+  );
   edgFileNm <- paste(module.nm, "_edge_list.csv", sep="");
   fast.write(edgeList, file=edgFileNm, row.names=F);
   msg("[ExtractModule] Wrote edge list to: ", edgFileNm)
@@ -313,6 +477,9 @@ ExtractModule<- function(nodeids, type="enr"){
   msg("[ExtractModule] Computing layout and node attributes...")
   vc <- vcount(g)
   nms <- V(g)$name
+  graph.ids <- .paResolveGraphIds(g, org)
+  V(g)$entrez <- graph.ids$entrez
+  V(g)$uniprot <- graph.ids$uniprot
 
   # Calculate network metrics
   node.dgr <- igraph::degree(g)
@@ -324,15 +491,17 @@ ExtractModule<- function(nodeids, type="enr"){
     node.expr <- V(g)$expr
   }
 
-  # Calculate node sizes based on degree (same logic as compartment network)
-  if (vc > 500) {
-    min.size <- 2
-  } else if (vc > 200) {
-    min.size <- 3
+  # Preserve existing sizes from the parent PPI graph when available.
+  stored.sizes <- if (!is.null(V(g)$size) && length(V(g)$size) == vc) {
+    suppressWarnings(as.numeric(V(g)$size))
   } else {
-    min.size <- 4
+    rep(NA_real_, vc)
   }
-  node.sizes <- rescale2NewRange((log(node.dgr + 1))^2, min.size, 12)
+  if (all(is.finite(stored.sizes))) {
+    node.sizes <- stored.sizes
+  } else {
+    node.sizes <- .paScaleGraphNodeSizes(g)
+  }
 
   # Compute expression-based colors (centered gradient) - store as expcolb/expcolw/expcolc
   centered <- TRUE
@@ -359,35 +528,52 @@ ExtractModule<- function(nodeids, type="enr"){
   pos.y <- (layout.coords[, 2] - min(layout.coords[, 2])) /
            (max(layout.coords[, 2]) - min(layout.coords[, 2])) * 100
 
-  # Check if compartment information was preserved from original graph
-  if (!is.null(V(g)$broad_category) && !is.null(V(g)$main_location)) {
-    n_with_compartment <- sum(V(g)$broad_category != "Unknown")
-    msg("[ExtractModule] Preserved compartment info for ", n_with_compartment, "/", vc, " nodes")
-
-    # Log compartment distribution
-    comp_table <- table(V(g)$broad_category)
-    msg("[ExtractModule] Compartment distribution: ", paste(names(comp_table), "=", comp_table, collapse=", "))
+  category <- if (!is.null(V(g)$broad_category) && length(V(g)$broad_category) == vc) {
+    as.character(V(g)$broad_category)
   } else {
-    msg("[ExtractModule] WARNING: No compartment information found on extracted nodes")
-    msg("[ExtractModule] Setting default compartment attributes...")
-
-    # Set default compartment attributes if not present
-    V(g)$broad_category <- "Unknown"
-    V(g)$main_location <- "Unknown"
+    rep(NA_character_, vc)
+  }
+  main.loc <- if (!is.null(V(g)$main_location) && length(V(g)$main_location) == vc) {
+    as.character(V(g)$main_location)
+  } else {
+    rep(NA_character_, vc)
   }
 
+  missing.category <- is.na(category) | !nzchar(category) | category == "Unknown"
+  missing.location <- is.na(main.loc) | !nzchar(main.loc) | main.loc == "Unknown"
+  if (any(missing.category) || any(missing.location)) {
+    loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+    if (file.exists(loc.path)) {
+      loc.data <- ov_qs_read(loc.path)
+      loc.map <- loc.data[match(as.character(V(g)$entrez), as.character(loc.data$EntrezID)), ]
+      loc.category <- ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
+                             "Unknown",
+                             as.character(loc.map$Broad.category))
+      loc.main <- ifelse(is.na(loc.map$Main.location) | loc.map$Main.location == "",
+                         "Unknown",
+                         as.character(loc.map$Main.location))
+
+      fill.category <- missing.category & loc.category != "Unknown"
+      fill.location <- missing.location & loc.main != "Unknown"
+      category[fill.category] <- loc.category[fill.category]
+      main.loc[fill.location] <- loc.main[fill.location]
+      msg("[ExtractModule] Recovered compartment info for ",
+          sum(category != "Unknown", na.rm = TRUE), "/", vc, " nodes")
+    }
+  }
+
+  category[is.na(category) | !nzchar(category)] <- "Unknown"
+  main.loc[is.na(main.loc) | !nzchar(main.loc)] <- "Unknown"
+  V(g)$broad_category <- category
+  V(g)$main_location <- main.loc
+
+  n_with_compartment <- sum(V(g)$broad_category != "Unknown")
+  msg("[ExtractModule] Preserved compartment info for ", n_with_compartment, "/", vc, " nodes")
+  comp_table <- table(V(g)$broad_category)
+  msg("[ExtractModule] Compartment distribution: ", paste(names(comp_table), "=", comp_table, collapse=", "))
+
   # Get compartment colors (matching PPI network export logic)
-  category.colors <- list(
-    "Nucleus" = "#e41a1c",
-    "Cell surface & adhesion" = "#377eb8",
-    "Cytoskeleton" = "#4daf4a",
-    "Endomembrane" = "#984ea3",
-    "Mitochondria & metabolic organelles" = "#ff7f00",
-    "Mitochondrial & metabolic organelles" = "#17becf",
-    "Cytosol" = "#a65628",
-    "Extracellular" = "#f781bf",
-    "Unknown" = "#999999"
-  )
+  category.colors <- .paCompartmentColors()
 
   # Assign compartment colors as default (like PPI network)
   comp.colors <- sapply(V(g)$broad_category, function(cat) {

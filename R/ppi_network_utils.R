@@ -702,22 +702,46 @@ CreateGraph <- function(dummy = NA) {
   V(g)$abundance <- expr.vec  # Also set abundance for compatibility
   expr.vec <<- expr.vec[!is.na(expr.vec)]
 
-  # Mark seed nodes (nodes from original upload/query)
-  # Seeds are stored in Entrez IDs in the cache
+  # Mark seed nodes and attach both Entrez and UniProt identifiers. PPI graphs
+  # can be stored with UniProt vertex names, while localization and symbols are
+  # keyed by Entrez.
   node.names <- V(g)$name
+  org <- if (!is.null(paramSet$data.org) && nzchar(paramSet$data.org)) {
+    paramSet$data.org
+  } else if (!is.null(paramSet$org) && nzchar(paramSet$org)) {
+    paramSet$org
+  } else {
+    "hsa"
+  }
+  graph.ids <- .paResolveGraphIds(g, org)
+  V(g)$entrez <- graph.ids$entrez
+  V(g)$uniprot <- graph.ids$uniprot
 
-  is.seed <- node.names %in% cache$seeds
+  seed.ids <- unique(trimws(as.character(cache$seeds)))
+  seed.ids <- seed.ids[!is.na(seed.ids) & nzchar(seed.ids)]
+  seed.uniprot <- .paNormalizeUniprotIds(seed.ids)
+  is.seed <- node.names %in% seed.ids |
+    V(g)$entrez %in% seed.ids |
+    V(g)$uniprot %in% seed.uniprot
   V(g)$is_query <- is.seed;
+  V(g)$size <- .paScaleGraphNodeSizes(g)
+
+  gene.symbols <- tryCatch({
+    doEntrez2SymbolMapping(V(g)$entrez, org, "entrez")
+  }, error = function(e) {
+    rep(NA_character_, length(node.names))
+  })
+  gene.symbols[is.na(gene.symbols) | !nzchar(gene.symbols)] <- node.names[is.na(gene.symbols) | !nzchar(gene.symbols)]
+  V(g)$gene_symbol <- gene.symbols
 
   # Add compartment/localization information as vertex attributes
   # This preserves compartment data for extracted modules
-  org <- if (!is.null(paramSet$org)) paramSet$org else "hsa"
   loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
 
   if (file.exists(loc.path)) {
     msg(sprintf("[CreateGraph] Loading localization data from: %s\n", loc.path))
     loc.data <- ov_qs_read(loc.path)
-    loc.map <- loc.data[match(node.names, as.character(loc.data$EntrezID)), ]
+    loc.map <- loc.data[match(as.character(V(g)$entrez), as.character(loc.data$EntrezID)), ]
 
     # Add compartment attributes to graph
     V(g)$broad_category <- ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
@@ -911,10 +935,13 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   # Get organism from paramSet
   org <- paramSet$data.org
-  if(is.null(org)) {
+  if(is.null(org) || !nzchar(org)) {
     warning(".exportNetworkToJSON: organism not found in paramSet, using 'hsa' as default")
     org <- "hsa"
   }
+  graph.ids <- .paResolveGraphIds(g, org)
+  V(g)$entrez <- graph.ids$entrez
+  V(g)$uniprot <- graph.ids$uniprot
 
   # Calculate network metrics
   node.dgr <- igraph::degree(g)
@@ -929,64 +956,18 @@ PrepareNetwork <- function(net.nm, json.nm) {
     node.expr[is.na(node.expr)] <- 0
   }
 
-  # Calculate node sizes based on degree
-  # Use existing sizes if available (to maintain consistency across network switches)
-  if (!is.null(V(g)$size) && length(V(g)$size) == n) {
-    node.sizes <- V(g)$size
+  # Use existing graph sizes when present so switching between extracted and
+  # original networks does not silently rescale the same nodes.
+  stored.sizes <- if (!is.null(V(g)$size) && length(V(g)$size) == n) {
+    suppressWarnings(as.numeric(V(g)$size))
   } else {
-    # Calculate new sizes using the original overall network size for consistency
-    # Use overall.graph size if available, otherwise fall back to current network size
-    overall.n <- n
-    overall.dgrs <- node.dgr  # Default to current network degrees
-
-    if (exists("overall.graph") && !is.null(overall.graph) && igraph::is.igraph(overall.graph)) {
-      overall.n <- igraph::vcount(overall.graph)
-
-      # Get degrees from overall network for nodes in current subnetwork
-      # This ensures consistent scaling across all subnetworks
-      overall.all.dgrs <- igraph::degree(overall.graph)
-      overall.dgrs <- overall.all.dgrs[match(nms, names(V(overall.graph)))]
-
-      # For any nodes not found in overall graph (shouldn't happen), use subnetwork degree
-      overall.dgrs[is.na(overall.dgrs)] <- node.dgr[is.na(overall.dgrs)]
-    }
-
-    # Determine min.size based on OVERALL network size, not subnetwork size
-    if (overall.n > 500) {
-      min.size <- 2
-    } else if (overall.n > 200) {
-      min.size <- 3
-    } else {
-      min.size <- 4
-    }
-
-    # Calculate transformed degree values
-    transformed.dgrs <- (log(overall.dgrs + 1))^2
-
-    # Use overall network degree range for scaling to ensure consistency
-    # rescale2NewRange uses min/max of input vector, so we need to ensure consistent range
-    if (exists("overall.graph") && !is.null(overall.graph) && igraph::is.igraph(overall.graph)) {
-      # Get all degrees from overall network to establish the full range
-      all.overall.dgrs <- igraph::degree(overall.graph)
-      all.transformed <- (log(all.overall.dgrs + 1))^2
-      q.min <- min(all.transformed)
-      q.max <- max(all.transformed)
-
-      # Manual rescaling using overall network's degree range
-      if (length(transformed.dgrs) < 50) {
-        min.size <- min.size * 2
-      }
-      if (q.max == q.min) {
-        node.sizes <- rep(8, length(transformed.dgrs))
-      } else {
-        coef.a <- (12 - min.size) / (q.max - q.min)
-        const.b <- 12 - coef.a * q.max
-        node.sizes <- coef.a * transformed.dgrs + const.b
-      }
-    } else {
-      # No overall graph available, use standard rescaling
-      node.sizes <- rescale2NewRange(transformed.dgrs, min.size, 12)
-    }
+    rep(NA_real_, n)
+  }
+  if (all(is.finite(stored.sizes))) {
+    node.sizes <- stored.sizes
+  } else {
+    node.sizes <- .paScaleGraphNodeSizes(g)
+    V(g)$size <- node.sizes
   }
 
   # Compute colors based on expression (centered gradient)
@@ -1015,18 +996,35 @@ PrepareNetwork <- function(net.nm, json.nm) {
   pos.y <- (layout.coords[, 2] - min(layout.coords[, 2])) /
            (max(layout.coords[, 2]) - min(layout.coords[, 2])) * 100
 
-  # Load localization data for compartment assignment
-  org <- if (!is.null(paramSet$org)) paramSet$org else "hsa"
+  # Load localization data for compartment assignment. Localization tables use
+  # Entrez IDs, even when the graph itself uses UniProt vertex names.
   loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
 
-  node.labels <- doEntrez2SymbolMapping(nms, org, "entrez")
+  node.labels <- tryCatch({
+    doEntrez2SymbolMapping(graph.ids$entrez, org, "entrez")
+  }, error = function(e) {
+    rep(NA_character_, length(nms))
+  })
+  if (!is.null(V(g)$gene_symbol) && length(V(g)$gene_symbol) == length(nms)) {
+    use.attr.label <- is.na(node.labels) | !nzchar(node.labels)
+    node.labels[use.attr.label] <- as.character(V(g)$gene_symbol)[use.attr.label]
+  }
+  node.labels[is.na(node.labels) | !nzchar(node.labels)] <- nms[is.na(node.labels) | !nzchar(node.labels)]
 
   loc.map <- NULL
+  node.categories <- rep("Unknown", length(nms))
+  node.locations <- rep("Unknown", length(nms))
   if (file.exists(loc.path)) {
     msg(sprintf("[exportNetworkToJSON] Loading localization data from: %s
 ", loc.path))
     loc.data <- ov_qs_read(loc.path)
-    loc.map <- loc.data[match(nms, as.character(loc.data$EntrezID)), ]
+    loc.map <- loc.data[match(as.character(graph.ids$entrez), as.character(loc.data$EntrezID)), ]
+    node.categories <- ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
+                              "Unknown",
+                              as.character(loc.map$Broad.category))
+    node.locations <- ifelse(is.na(loc.map$Main.location) | loc.map$Main.location == "",
+                             "Unknown",
+                             as.character(loc.map$Main.location))
     msg(sprintf("[exportNetworkToJSON] Mapped %d/%d nodes to localization data
 ",
                 sum(!is.na(loc.map$Broad.category)), length(nms)))
@@ -1035,21 +1033,21 @@ PrepareNetwork <- function(net.nm, json.nm) {
 "))
   }
 
-  uniprot.vec <- rep(NA_character_, length(nms))
-  tryCatch({
-    uniprot.map <- queryGeneDB("entrez_uniprot", org)
-    if (!is.null(uniprot.map) && is.data.frame(uniprot.map) &&
-        "gene_id" %in% colnames(uniprot.map) && "accession" %in% colnames(uniprot.map)) {
-      hit.inx <- match(as.character(nms), as.character(uniprot.map$gene_id))
-      uniprot.vec <- uniprot.map$accession[hit.inx]
-    } else {
-      msg(sprintf("[exportNetworkToJSON] Warning: entrez_uniprot table not available for organism %s
-", org))
-    }
-  }, error = function(e) {
-    msg(sprintf("[exportNetworkToJSON] Warning: Could not load UniProt mapping: %s
-", e$message))
-  })
+  if (!is.null(V(g)$broad_category) && length(V(g)$broad_category) == length(nms)) {
+    attr.categories <- as.character(V(g)$broad_category)
+    keep.attr <- !is.na(attr.categories) & nzchar(attr.categories) & attr.categories != "Unknown"
+    node.categories[keep.attr] <- attr.categories[keep.attr]
+  }
+  if (!is.null(V(g)$main_location) && length(V(g)$main_location) == length(nms)) {
+    attr.locations <- as.character(V(g)$main_location)
+    keep.attr <- !is.na(attr.locations) & nzchar(attr.locations) & attr.locations != "Unknown"
+    node.locations[keep.attr] <- attr.locations[keep.attr]
+  }
+
+  V(g)$broad_category <- node.categories
+  V(g)$main_location <- node.locations
+
+  uniprot.vec <- graph.ids$uniprot
 
   phosphosite.map <- list()
   if (!is.null(paramSet$phospho.mapping) && !is.null(paramSet$phospho.mapping$entrez.to.phospho)) {
@@ -1058,30 +1056,17 @@ PrepareNetwork <- function(net.nm, json.nm) {
 ", length(phosphosite.map)))
   }
 
-  category.colors <- list(
-    "Nucleus" = "#e41a1c",
-    "Cell surface & adhesion" = "#377eb8",
-    "Cytoskeleton" = "#4daf4a",
-    "Endomembrane" = "#984ea3",
-    "Mitochondria & metabolic organelles" = "#ff7f00",
-    "Mitochondrial & metabolic organelles" = "#17becf",
-    "Cytosol" = "#a65628",
-    "Extracellular" = "#f781bf",
-    "Unknown" = "#999999"
-  )
+  category.colors <- .paCompartmentColors()
 
   gene.nodes <- lapply(seq_along(nms), function(i) {
-    entrez.id <- as.character(nms[i])
-
-    if (!is.null(loc.map)) {
-      category <- loc.map$Broad.category[i]
-      if (is.na(category) || category == "") category <- "Unknown"
-      main.loc <- loc.map$Main.location[i]
-      if (is.na(main.loc)) main.loc <- "Unknown"
+    node.id <- as.character(nms[i])
+    entrez.id <- if (!is.na(graph.ids$entrez[i]) && nzchar(graph.ids$entrez[i])) {
+      as.character(graph.ids$entrez[i])
     } else {
-      category <- net.nm
-      main.loc <- "PPI Network"
+      ""
     }
+    category <- node.categories[i]
+    main.loc <- node.locations[i]
 
     comp.id <- gsub("[^A-Za-z0-9_]", "_", category)
     comp.color <- category.colors[[category]]
@@ -1096,7 +1081,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
     is.query <- if (!is.null(V(g)$is_query)) V(g)$is_query[i] else FALSE
 
     phosphosites <- NULL
-    if (length(phosphosite.map) > 0 && entrez.id %in% names(phosphosite.map)) {
+    if (length(phosphosite.map) > 0 && nzchar(entrez.id) && entrez.id %in% names(phosphosite.map)) {
       phosphosites <- phosphosite.map[[entrez.id]]
       if (length(phosphosites) > 0) {
         phosphosites <- paste(phosphosites, collapse = ";")
@@ -1106,7 +1091,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
     }
 
     node.data <- list(
-      id = entrez.id,
+      id = node.id,
       label = node.labels[i],
       uniprot = uniprot.id,
       entrez = entrez.id,
@@ -1143,12 +1128,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   compartment.map <- list()
   for (i in seq_along(nms)) {
-    if (!is.null(loc.map)) {
-      category <- loc.map$Broad.category[i]
-      if (is.na(category) || category == "") category <- "Unknown"
-    } else {
-      category <- net.nm
-    }
+    category <- node.categories[i]
     comp.id <- gsub("[^A-Za-z0-9_]", "_", category)
 
     if (is.null(compartment.map[[comp.id]])) {
@@ -1225,6 +1205,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
       id = node$id,
       label = node$label,
       uniprot = if (!is.null(node$uniprot) && node$uniprot != "") node$uniprot else "",
+      entrez = if (!is.null(node$entrez) && node$entrez != "") node$entrez else "",
       degree = if (!is.null(node$degree)) node$degree else 0,
       betweenness = if (!is.null(node$between)) node$between else 0,
       expr = if (!is.null(node$exp)) node$exp else 0,
@@ -1238,8 +1219,8 @@ PrepareNetwork <- function(net.nm, json.nm) {
     edges = edges.list,
     compartments = compartment.info,
     nodeTable = node.table,
-    idType = "entrez",  # NEW: ppi_uniprot.sqlite uses UniProt IDs
-    org = if (!is.null(paramSet$org)) paramSet$org else "hsa",
+    idType = graph.ids$id_type,
+    org = org,
     hasPeptideData = HasPeptideLevelData(),
     metadata = list(
       largestComponent = largest.comp.id,

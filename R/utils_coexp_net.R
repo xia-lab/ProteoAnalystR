@@ -279,6 +279,28 @@ CorrIgraph2SigmaJS <- function(g,
     }
   }
 
+  # PPI modules may already carry resolved identifier attributes from
+  # CreateGraph/ExtractModule. Prefer those where the external symbol map is
+  # absent or incomplete.
+  if (!is.null(V(g)$uniprot) && length(V(g)$uniprot) == length(nms)) {
+    attr.uniprot <- as.character(V(g)$uniprot)
+    fill <- (is.na(uniprot.vec) | !nzchar(uniprot.vec)) &
+      !is.na(attr.uniprot) & nzchar(attr.uniprot)
+    uniprot.vec[fill] <- attr.uniprot[fill]
+  }
+  if (!is.null(V(g)$entrez) && length(V(g)$entrez) == length(nms)) {
+    attr.entrez <- as.character(V(g)$entrez)
+    fill <- (is.na(entrez.vec) | !nzchar(entrez.vec)) &
+      !is.na(attr.entrez) & nzchar(attr.entrez)
+    entrez.vec[fill] <- attr.entrez[fill]
+  }
+  if (!is.null(V(g)$gene_symbol) && length(V(g)$gene_symbol) == length(nms)) {
+    attr.symbol <- as.character(V(g)$gene_symbol)
+    fill <- (is.na(symVec) | !nzchar(symVec) | symVec == nms) &
+      !is.na(attr.symbol) & nzchar(attr.symbol)
+    symVec[fill] <- attr.symbol[fill]
+  }
+
   # If we got symbols from symbol.map.qs and the original symVec mapping failed or is incomplete,
   # use the symbols from symbol.map.qs instead
   if (!is.null(symbol.vec.from.map) && sum(!is.na(symbol.vec.from.map)) > 0) {
