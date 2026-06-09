@@ -113,7 +113,16 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
   }
 
   pep.mat <- ov_qs_read(peptide.file)
-  pep.map <- ov_qs_read("peptide_to_protein_map.qs")
+  pep.cache <- if (exists(".paGetPeptideFeatureCache", mode = "function")) {
+    try(.paGetPeptideFeatureCache(dataName), silent = TRUE)
+  } else {
+    NULL
+  }
+  pep.map <- if (!inherits(pep.cache, "try-error") && !is.null(pep.cache) && !is.null(pep.cache$pep.map)) {
+    pep.cache$pep.map
+  } else {
+    ov_qs_read("peptide_to_protein_map.qs")
+  }
   if (is.null(pep.mat) || is.null(pep.map) || nrow(pep.map) == 0) {
     msg("[PlotProteinPeptideOverview] peptide inputs are empty")
     return(0)
@@ -122,7 +131,11 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
   pep.col <- if ("Peptide" %in% colnames(pep.map)) "Peptide" else colnames(pep.map)[1]
   prot.col <- if ("Protein" %in% colnames(pep.map)) "Protein" else colnames(pep.map)[2]
   prot.norm <- NormalizeFeatureId(protein.id)
-  map.prot.norm <- vapply(pep.map[[prot.col]], NormalizeFeatureId, character(1))
+  map.prot.norm <- if ("Protein.norm" %in% colnames(pep.map)) {
+    as.character(pep.map$Protein.norm)
+  } else {
+    vapply(pep.map[[prot.col]], NormalizeFeatureId, character(1))
+  }
   map.prot.raw <- trimws(as.character(pep.map[[prot.col]]))
   peps <- unique(as.character(pep.map[[pep.col]][map.prot.raw == protein.id | map.prot.norm == prot.norm]))
   peps <- peps[!is.na(peps) & nzchar(peps)]
@@ -165,7 +178,19 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
     ifelse(nchar(id) > 64, paste0(substr(id, 1, 61), "..."), id)
   }
 
-  protein.label <- make_label("Protein", protein.row.id)
+  protein.display <- protein.row.id
+  protein.symbol <- tryCatch({
+    paramSet <- readSet(paramSet, "paramSet")
+    id.type <- tolower(paramSet$data.idType)
+    org <- paramSet$data.org
+    mapped <- if (id.type == "uniprot") {
+      doUniprot2SymbolMapping(protein.row.id, org, paramSet$data.idType)
+    } else {
+      doEntrez2SymbolMapping(protein.row.id, org, paramSet$data.idType)
+    }
+    if (is.null(mapped) || is.na(mapped) || !nzchar(as.character(mapped)[1])) protein.row.id else as.character(mapped)[1]
+  }, error = function(e) protein.row.id)
+  protein.label <- make_label("Protein", protein.symbol)
   plot.df <- data.frame(
     Type = "Protein",
     Feature = protein.label,
@@ -199,45 +224,93 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
   plot.df$Feature <- factor(plot.df$Feature, levels = feature.levels)
   plot.df$Group <- factor(plot.df$Group)
   col <- GetGroupPalette(plot.df$Group, paletteOpt)
+  make_axis_expr <- function(lbl, is.protein = FALSE) {
+    lbl <- as.character(lbl)
+    lbl <- gsub("\\\\", "\\\\\\\\", lbl)
+    lbl <- gsub("\"", "\\\\\"", lbl)
+    if (is.protein) {
+      return(paste0("bold(\"", lbl, "\")"))
+    }
+    paste0("\"", lbl, "\"")
+  }
+  feature.labels <- setNames(
+    vapply(as.character(feature.levels), function(lbl) make_axis_expr(lbl, identical(lbl, protein.label)), character(1)),
+    as.character(feature.levels)
+  )
+  group.levels <- levels(plot.df$Group)
+  group.count <- length(group.levels)
+  dodge.width <- if (group.count > 1) 0.72 else 0
+
+  n.feat <- length(feature.levels)
+  band.df <- data.frame(
+    xmin = c(-Inf, seq_len(n.feat - 1) + 0.5),
+    xmax = c(seq_len(n.feat - 1) + 0.5, Inf),
+    ymin = -Inf,
+    ymax = Inf,
+    Fill = rep(c("#d9d9d9", "#ececec"), length.out = n.feat),
+    stringsAsFactors = FALSE
+  )
 
   plot.geom <- if (use.violin) {
-    geom_violin(trim = FALSE, aes(color = Group), show.legend = TRUE)
+    geom_violin(aes(color = Group),
+                trim = FALSE,
+                position = position_dodge(width = dodge.width),
+                width = if (group.count > 1) 0.66 else 0.72,
+                show.legend = TRUE)
   } else {
-    geom_boxplot(aes(color = Group), outlier.shape = NA, show.legend = TRUE)
+    geom_boxplot(aes(color = Group),
+                 outlier.shape = NA,
+                 position = position_dodge(width = dodge.width),
+                 width = if (group.count > 1) 0.56 else 0.62,
+                 show.legend = TRUE)
   }
 
-  myplot <- ggplot(plot.df, aes(x = Group, y = Value, fill = Group)) +
+  myplot <- ggplot(plot.df, aes(x = Feature, y = Value, fill = Group)) +
+    geom_rect(data = band.df,
+              aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+              inherit.aes = FALSE,
+              fill = band.df$Fill,
+              alpha = 0.7) +
     plot.geom +
-    geom_jitter(width = 0.05, height = 0, show.legend = FALSE) +
+    geom_point(color = "black",
+               position = position_jitterdodge(jitter.width = 0.08, jitter.height = 0,
+                                                dodge.width = dodge.width),
+               size = 1.25,
+               alpha = 0.65,
+               show.legend = FALSE) +
     stat_summary(fun = mean, colour = "yellow", geom = "point",
-                 shape = 18, size = 3, show.legend = FALSE) +
-    facet_grid(. ~ Feature, scales = "free_x", space = "free_x") +
+                 shape = 18, size = 2.4,
+                 position = position_dodge(width = dodge.width),
+                 show.legend = FALSE) +
     scale_fill_manual(values = col) +
     scale_color_manual(values = col) +
-    theme_bw(base_size = 10) +
+    scale_x_discrete(labels = parse(text = feature.labels)) +
+    theme_gray(base_size = 10) +
     theme(
       axis.title.x = element_blank(),
-      axis.text.x = element_blank(),
-      axis.ticks.x = element_line(colour = "black"),
-      strip.text.x = element_text(size = 8),
-      legend.position = "bottom",
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8),
+      axis.ticks.x = element_line(colour = "#555555"),
+      legend.position = "right",
       legend.title = element_blank(),
-      panel.grid = element_blank(),
+      panel.grid.major.x = element_blank(),
       panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_line(color = "white", size = 0.35),
+      panel.background = element_rect(fill = "#e5e5e5", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
       plot.title = element_blank()
     ) +
     ylab("Expression")
 
   imgName <- paste(imageName, "dpi", dpi, ".", format, sep = "")
-  plot.width <- min(18, max(8.5, 2.0 + 1.15 * length(feature.levels)))
-  Cairo(file = imgName, width = plot.width, height = 5.2, unit = "in",
+  plot.width <- min(20, max(9.2, 4.2 + 0.55 * length(feature.levels)))
+  Cairo(file = imgName, width = plot.width, height = 5.8, unit = "in",
         dpi = dpi, bg = "white", type = format)
   invisible(print(myplot))
   invisible(dev.off())
   return(0)
 }
 
-PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolcano", format="png", dpi=96, fc = T, plotType = "violin", dataType = "default", paletteOpt = "default"){
+PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolcano", format="png", dpi=96, fc = T, plotType = "boxplot", dataType = "default", paletteOpt = "default"){
 
   require(see)
   require(ggplot2)
@@ -258,7 +331,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
 
   plotType <- tolower(plotType)
   if (!(plotType %in% c("violin", "boxplot"))) {
-    plotType <- "violin"
+    plotType <- "boxplot"
   }
   use.violin <- plotType == "violin"
   imgName <- paste(imageName,"dpi",dpi,".",format,sep="");
@@ -270,11 +343,15 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
   }
   if(anal.type %in% c("onedata", "proteinlist")){
     # Look up symbol directly by gene ID (not positional index, which can desync)
-    cmpdNm <- tryCatch(
-      doEntrez2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType),
-      error = function(e) gene.id
-    )
-    if (dataType == "peptide" || is.na(cmpdNm) || length(cmpdNm) == 0) {
+    cmpdNm <- tryCatch({
+      id.type <- tolower(paramSet$data.idType)
+      if (id.type == "uniprot") {
+        doUniprot2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType)
+      } else {
+        doEntrez2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType)
+      }
+    }, error = function(e) gene.id)
+    if (dataType == "peptide" || is.null(cmpdNm) || is.na(cmpdNm) || length(cmpdNm) == 0 || cmpdNm == "") {
       cmpdNm <- gene.id
     }
     if(type== "volcano"){
@@ -421,7 +498,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
 
       myplot <- ggplot(df, aes(x = name, y = value, fill = name)) +
              plot.geom +
-             geom_jitter(width = 0.05, height = 0, show.legend = FALSE)       +
+             geom_jitter(width = 0.05, height = 0, color = "black", show.legend = FALSE)       +
              stat_summary(fun = mean, colour = "yellow", geom = "point",
                           shape = 18, size = 3, show.legend = FALSE)          +
              scale_fill_manual(values = col) + scale_color_manual(values = col) +
@@ -515,7 +592,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
 
       p.time <- ggplot2::ggplot(alldata, aes(x=group, y=value, fill=group, label=sample)) +
         plot.geom +
-        geom_jitter(aes(x = group, color = group), height = 0, width = 0.05, show.legend = FALSE) +
+        geom_jitter(aes(x = group), height = 0, width = 0.05, color = "black", show.legend = FALSE) +
         facet_wrap(~facA, nrow = row.num) +
         theme(axis.title.x = element_blank(), legend.position = "none", axis.text.x = element_text(angle=90, hjust=1),
               plot.title = element_text(size = 11, hjust=0.5, face = "bold"), panel.grid.minor = element_blank(), panel.grid.major = element_blank()) +
@@ -559,7 +636,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
       }
 
       p.norm <- ggplot2::ggplot(df.norm, aes(x=name, y=value, fill=name))
-      p.norm <- p.norm + plot.geom + geom_jitter(height = 0, width = 0.05, show.legend = FALSE)  + theme_bw()
+      p.norm <- p.norm + plot.geom + geom_jitter(height = 0, width = 0.05, color = "black", show.legend = FALSE)  + theme_bw()
       p.norm <- p.norm + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
       p.norm <- p.norm + stat_summary(fun=mean, colour="yellow", geom="point", shape=18, size=3, show.legend = FALSE)
       p.norm <- p.norm + scale_fill_manual(values=col) +
@@ -629,7 +706,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
       p.time <- ggplot(alldata, aes(x = Factor, y = value, fill=Factor)) +
         theme_bw() +
         plot.geom +
-        geom_jitter(height = 0, width = 0.05, show.legend = FALSE) +
+        geom_jitter(height = 0, width = 0.05, color = "black", show.legend = FALSE) +
         scale_fill_manual(values = col) +
         theme(axis.title.x = element_blank(),   # Remove x-axis title
               axis.text.x = element_blank(),     # Remove x-axis tick text
@@ -650,7 +727,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
   }
 }
 
-UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png", dpi=96, paletteOpt="default", plotType="violin"){
+UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png", dpi=96, paletteOpt="default", plotType="boxplot"){
   
   require(ggplot2);
   require(see);
@@ -661,15 +738,24 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
   dataSet <- readDataset(dataName);
   anal.type <- paramSet$anal.type;
   imgName <- paste(imgName,"dpi",dpi,".",format,sep="");
+  plotType <- tolower(as.character(plotType)[1])
+  if (!(plotType %in% c("violin", "boxplot"))) {
+    plotType <- "boxplot"
+  }
   meta <- dataSet$meta.info[dataSet$meta.info[,boxmeta]!="NA",boxmeta,drop=F];
   cls <- droplevels(meta[,boxmeta]);
   data.norm <- dataSet$data.norm[,colnames(dataSet$data.norm) %in% rownames(meta)];
   
   if(anal.type == "onedata"){
-    cmpdNm <- tryCatch(
-      doEntrez2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType),
-      error = function(e) gene.id
-    )
+    cmpdNm <- tryCatch({
+      id.type <- tolower(paramSet$data.idType)
+      if (id.type == "uniprot") {
+        doUniprot2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType)
+      } else {
+        doEntrez2SymbolMapping(gene.id, paramSet$data.org, paramSet$data.idType)
+      }
+    }, error = function(e) gene.id)
+    if (is.null(cmpdNm) || is.na(cmpdNm) || cmpdNm == "") cmpdNm <- gene.id
 
     # FIX: Suppress Quartz popup on macOS
     Cairo(file = imgName,  width=320*dpi/72, height=380*dpi/72, type=format, dpi=dpi, bg="white");
@@ -685,7 +771,7 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
       }
       p.norm <- ggplot2::ggplot(df.norm, aes(x = name, y = value, fill = name)) +
         plot.geom +
-        geom_jitter(height = 0, width = 0.05, show.legend = FALSE) +
+        geom_jitter(height = 0, width = 0.05, color = "black", show.legend = FALSE) +
         theme_bw()+
         theme(legend.position = "none") +  xlab(boxmeta) +
         stat_summary(fun=mean, colour="yellow", geom="point", shape=18, size=3, show.legend = FALSE) +
@@ -721,10 +807,15 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
       # FIX: Suppress Quartz popup on macOS
       Cairo(file = imgName, width=280*dpi/72, height=320*dpi/72, type=format, dpi=dpi, bg="white");
       
-      col <- unique(GetColorSchema(as.character(inmex.meta$cls.lbl)));   
+      col <- GetGroupPalette(as.character(inmex.meta$cls.lbl), paletteOpt);
       df.norm <- data.frame(value=inmex.meta$plot.data[gene.id,], name = as.character(inmex.meta$cls.lbl))
+      plot.geom <- if (identical(plotType, "boxplot")) {
+        geom_boxplot(aes(color = name), outlier.shape = NA, show.legend = FALSE)
+      } else {
+        geom_violin(trim = FALSE, aes(color = name), show.legend = FALSE)
+      }
       p.norm <- ggplot2::ggplot(df.norm, aes(x=name, y=value, fill=name))  
-      p.norm <- p.norm + geom_violin(trim = FALSE, aes(color = name), show.legend = FALSE) + geom_jitter(height = 0, width = 0.05, show.legend = FALSE)  + theme_bw()
+      p.norm <- p.norm + plot.geom + geom_jitter(height = 0, width = 0.05, color = "black", show.legend = FALSE)  + theme_bw()
       p.norm <- p.norm + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), legend.position = "none")
       p.norm <- p.norm + stat_summary(fun=mean, colour="yellow", geom="point", shape=18, size=3, show.legend = FALSE)
       p.norm <- p.norm + scale_fill_manual(values=col) + 
@@ -756,7 +847,7 @@ PlotSelectedGeneRaw <- function(gene.id="",imgName="", format="png", dpi=96) {
 
   p <- ggplot2::ggplot(df.raw, aes(x = name, y = value, fill = name)) +
           geom_violin(trim = FALSE, aes(color = name), show.legend = FALSE) + 
-          geom_jitter(height = 0, width = 0.05, show.legend = FALSE) +
+          geom_jitter(height = 0, width = 0.05, color = "black", show.legend = FALSE) +
           theme(legend.position = "none") +  
           xlab("Metadata") +
           stat_summary(fun=mean, colour="yellow", geom="point", shape=18, size=3, show.legend = FALSE) +

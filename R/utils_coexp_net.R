@@ -340,17 +340,53 @@ CorrIgraph2SigmaJS <- function(g,
   }
 
   # Define compartment colors (matching PPI network export)
-  category.colors <- list(
-    "Nucleus" = "#e41a1c",
-    "Cell surface & adhesion" = "#377eb8",
-    "Cytoskeleton" = "#4daf4a",
-    "Endomembrane" = "#984ea3",
-    "Mitochondria & metabolic organelles" = "#ff7f00",
-    "Mitochondrial & metabolic organelles" = "#17becf",
-    "Cytosol" = "#a65628",
-    "Extracellular" = "#f781bf",
-    "Unknown" = "#999999"
-  )
+  category.colors <- .paCompartmentColors()
+
+  # Load localization data using entrez.vec built above
+  node.categories <- rep("Unknown", length(nms))
+  node.locations  <- rep("Unknown", length(nms))
+  if (!is.null(V(g)$broad_category) && length(V(g)$broad_category) == length(nms)) {
+    attr.locs <- if (!is.null(V(g)$main_location) && length(V(g)$main_location) == length(nms)) {
+      as.character(V(g)$main_location)
+    } else {
+      rep(NA_character_, length(nms))
+    }
+    attr.cats <- .paResolveCompartmentAnnotations(as.character(V(g)$broad_category), attr.locs)$primary
+    keep <- !is.na(attr.cats) & nzchar(attr.cats) & attr.cats != "Unknown"
+    node.categories[keep] <- attr.cats[keep]
+  }
+  if (!is.null(V(g)$main_location) && length(V(g)$main_location) == length(nms)) {
+    attr.locs <- as.character(V(g)$main_location)
+    keep <- !is.na(attr.locs) & nzchar(attr.locs) & attr.locs != "Unknown"
+    node.locations[keep] <- attr.locs[keep]
+  }
+  # If any nodes still lack compartment info, try loading localization file
+  missing.cats <- node.categories == "Unknown"
+  if (any(missing.cats)) {
+    org <- if (!is.null(paramSet$org)) paramSet$org else "hsa"
+    loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+    if (file.exists(loc.path)) {
+      tryCatch({
+        loc.data <- ov_qs_read(loc.path)
+        loc.map  <- loc.data[match(as.character(entrez.vec), as.character(loc.data$EntrezID)), ]
+        raw.cats <- ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
+                           "Unknown", as.character(loc.map$Broad.category))
+        raw.locs <- ifelse(is.na(loc.map$Main.location) | loc.map$Main.location == "",
+                           "Unknown", as.character(loc.map$Main.location))
+        norm.cats <- .paResolveCompartmentAnnotations(raw.cats, raw.locs)$primary
+        fill.cat <- missing.cats & norm.cats != "Unknown"
+        node.categories[fill.cat] <- norm.cats[fill.cat]
+        fill.loc <- node.locations == "Unknown" & raw.locs != "Unknown"
+        node.locations[fill.loc] <- raw.locs[fill.loc]
+        msg(sprintf("[CorrIgraph2SigmaJS] Localization: mapped %d/%d nodes from %s",
+                    sum(node.categories != "Unknown"), length(nms), loc.path))
+      }, error = function(e) {
+        msg("[CorrIgraph2SigmaJS] WARNING: Could not load localization data: ", e$message)
+      })
+    } else {
+      msg("[CorrIgraph2SigmaJS] Localization file not found: ", loc.path)
+    }
+  }
 
   nodes <- lapply(seq_len(vcount(g)), function(i) {
     v   <- V(g)[i]
@@ -384,9 +420,8 @@ CorrIgraph2SigmaJS <- function(g,
       ""
     }
 
-    # Get compartment info from vertex attributes (if available)
-    broad_cat <- if (!is.null(v$broad_category)) as.character(v$broad_category) else "Unknown"
-    main_loc <- if (!is.null(v$main_location)) as.character(v$main_location) else "Unknown"
+    broad_cat <- node.categories[i]
+    main_loc  <- node.locations[i]
     comp.id <- gsub("[^A-Za-z0-9_]", "_", broad_cat)
     comp.color <- category.colors[[broad_cat]]
     if (is.null(comp.color)) comp.color <- "#999999"

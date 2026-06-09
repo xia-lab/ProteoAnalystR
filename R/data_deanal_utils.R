@@ -1344,6 +1344,13 @@ MultiCovariateRegression <- function(fileName,
     cat("DEBUG [.multiCovariateRegression]: RETURNING 0 - sample order mismatch\n");
     return(0)
   }
+
+  dataSet$block <- NULL
+  if(!is.null(blocking.factor) && !is.na(blocking.factor) &&
+     blocking.factor!="NA" && blocking.factor!="" &&
+     blocking.factor %in% colnames(covariates)){
+    dataSet$block <- covariates[, blocking.factor]
+  }
   
   
   # get analysis type
@@ -1898,34 +1905,116 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
 #' @param dataName Dataset name
 #' @param proteinID Protein ID to get peptides for
 #' @export
+.paNormalizeProteinId <- function(x) {
+  if (is.null(x) || length(x) == 0) return(NA_character_)
+  x <- as.character(x)
+  x <- trimws(x)
+  x <- x[!is.na(x) & nzchar(x)]
+  if (!length(x)) return(NA_character_)
+  first <- strsplit(x[1], ";", fixed = TRUE)[[1]][1]
+  first <- trimws(first)
+  if (grepl("\\|", first)) {
+    parts <- strsplit(first, "\\|")[[1]]
+    if (length(parts) >= 2 && nzchar(parts[2])) {
+      first <- parts[2]
+    }
+  }
+  first <- sub("_.*$", "", first)
+  first <- sub("-\\d+$", "", first)
+  first
+}
+
+.paPeptideFileStamp <- function(file) {
+  if (!file.exists(file)) return("missing")
+  info <- file.info(file)
+  paste(normalizePath(file, winslash = "/", mustWork = FALSE),
+        as.numeric(info$mtime),
+        info$size,
+        sep = "|")
+}
+
+.paGetPeptideFeatureCache <- function(dataName = "") {
+  dataSet <- readDataset(dataName)
+  if (is.null(dataSet)) {
+    return(NULL)
+  }
+  if (!exists(".paPeptideFeatureCacheEnv", envir = .GlobalEnv, inherits = FALSE)) {
+    assign(".paPeptideFeatureCacheEnv", new.env(parent = emptyenv()), envir = .GlobalEnv)
+  }
+  cache.env <- get(".paPeptideFeatureCacheEnv", envir = .GlobalEnv)
+  active.nm <- dataSet$active.comp.nm
+  key <- paste(
+    normalizePath(getwd(), winslash = "/", mustWork = FALSE),
+    dataName,
+    ifelse(is.null(active.nm), "", active.nm),
+    .paPeptideFileStamp("peptide_de_results.qs"),
+    .paPeptideFileStamp("peptide_to_protein_map.qs"),
+    sep = "||"
+  )
+  if (exists(key, envir = cache.env, inherits = FALSE)) {
+    cached <- get(key, envir = cache.env)
+    cached$dataSet <- dataSet
+    return(cached)
+  }
+
+  if (!file.exists("peptide_to_protein_map.qs")) {
+    msg("[R DEBUG] peptide_to_protein_map.qs does not exist")
+    return(NULL)
+  }
+
+  pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
+  if (inherits(pep.map, "try-error") || is.null(pep.map)) {
+    msg("[R DEBUG] Error reading peptide_to_protein_map.qs")
+    return(NULL)
+  }
+  pep.col <- if ("Peptide" %in% colnames(pep.map)) "Peptide" else colnames(pep.map)[1]
+  prot.col <- if ("Protein" %in% colnames(pep.map)) "Protein" else colnames(pep.map)[2]
+  pep.map$Peptide <- as.character(pep.map[[pep.col]])
+  pep.map$Protein <- as.character(pep.map[[prot.col]])
+  pep.map$Protein.norm <- vapply(pep.map$Protein, .paNormalizeProteinId, character(1))
+
+  pep.res <- NULL
+  if (file.exists("peptide_de_results.qs")) {
+    pep.all <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
+    if (!inherits(pep.all, "try-error")) {
+      if (is.list(pep.all) && !is.data.frame(pep.all)) {
+        pep.res <- if (!is.null(active.nm) && active.nm %in% names(pep.all)) pep.all[[active.nm]] else pep.all[[1]]
+      } else {
+        pep.res <- pep.all
+      }
+      msg("[R DEBUG] Cached peptide_de_results.qs with ", nrow(pep.res), " rows")
+    } else {
+      msg("[R DEBUG] Error reading peptide_de_results.qs")
+    }
+  } else {
+    msg("[R DEBUG] peptide_de_results.qs does not exist — will show NA for peptide stats")
+  }
+
+  cached <- list(
+    dataSet = dataSet,
+    pep.map = pep.map,
+    pep.res = pep.res,
+    exact.index = split(pep.map$Peptide, pep.map$Protein),
+    norm.index = split(pep.map$Peptide, pep.map$Protein.norm),
+    protein.by.norm = split(pep.map$Protein, pep.map$Protein.norm)
+  )
+  assign(key, cached, envir = cache.env)
+  msg("[R DEBUG] Cached peptide_to_protein_map.qs with ", nrow(pep.map), " rows")
+  msg("[R DEBUG] Peptide map column names: ", paste(colnames(pep.map), collapse=", "))
+  msg("[R DEBUG] First few unique protein IDs in map: ", paste(head(unique(pep.map$Protein), 10), collapse=", "))
+  cached
+}
+
 GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   msg("[R DEBUG] GetProteinPeptideMapping called with proteinID: ", proteinID)
 
-  normalize_protein_id <- function(x) {
-    if (is.null(x) || length(x) == 0) return(NA_character_)
-    x <- as.character(x)
-    x <- trimws(x)
-    x <- x[!is.na(x) & nzchar(x)]
-    if (!length(x)) return(NA_character_)
-    first <- strsplit(x[1], ";", fixed = TRUE)[[1]][1]
-    first <- trimws(first)
-    if (grepl("\\|", first)) {
-      parts <- strsplit(first, "\\|")[[1]]
-      if (length(parts) >= 2 && nzchar(parts[2])) {
-        first <- parts[2]
-      }
-    }
-    first <- sub("_.*$", "", first)
-    first <- sub("-\\d+$", "", first)
-    first
-  }
-
   # Load protein-level DE results from dataset
-  dataSet <- readDataset(dataName)
-  if (is.null(dataSet)) {
+  cache <- .paGetPeptideFeatureCache(dataName)
+  if (is.null(cache) || is.null(cache$dataSet)) {
     msg("[R DEBUG] Failed to load dataset: ", dataName)
     return(NULL)
   }
+  dataSet <- cache$dataSet
 
   if (is.null(dataSet$comp.res)) {
     msg("[R DEBUG] dataSet$comp.res is NULL - DE analysis may not have been run")
@@ -1935,53 +2024,20 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   prot.res <- dataSet$comp.res
   msg("[R DEBUG] Loaded protein DE results from dataSet with ", nrow(prot.res), " rows")
 
-  # Load peptide-level DE results (optional — show NA when absent)
-  pep.res <- NULL
-  if (file.exists("peptide_de_results.qs")) {
-    pep.all <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
-    if (!inherits(pep.all, "try-error")) {
-      if (is.list(pep.all) && !is.data.frame(pep.all)) {
-        active.nm <- dataSet$active.comp.nm
-        pep.res <- if (!is.null(active.nm) && active.nm %in% names(pep.all)) pep.all[[active.nm]] else pep.all[[1]]
-      } else {
-        pep.res <- pep.all
-      }
-      msg("[R DEBUG] Loaded peptide_de_results.qs with ", nrow(pep.res), " rows")
-    } else {
-      msg("[R DEBUG] Error reading peptide_de_results.qs")
-    }
-  } else {
-    msg("[R DEBUG] peptide_de_results.qs does not exist — will show NA for peptide stats")
-  }
-
-  # Load peptide-to-protein map
-  if (!file.exists("peptide_to_protein_map.qs")) {
-    msg("[R DEBUG] peptide_to_protein_map.qs does not exist")
-    return(NULL)
-  }
-
-  pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
-  if (inherits(pep.map, "try-error")) {
-    msg("[R DEBUG] Error reading peptide_to_protein_map.qs")
-    return(NULL)
-  }
-  msg("[R DEBUG] Loaded peptide_to_protein_map.qs with ", nrow(pep.map), " rows")
-  msg("[R DEBUG] Peptide map column names: ", paste(colnames(pep.map), collapse=", "))
-  msg("[R DEBUG] First few unique protein IDs in map: ", paste(head(unique(pep.map$Protein), 10), collapse=", "))
-
   # Get peptides for this protein
   original.protein.id <- proteinID
-  protein.id.norm <- normalize_protein_id(proteinID)
-  pep.map$Protein <- as.character(pep.map$Protein)
-  pep.map$Protein.norm <- vapply(pep.map$Protein, normalize_protein_id, character(1))
+  protein.id.norm <- .paNormalizeProteinId(proteinID)
+  pep.map <- cache$pep.map
+  pep.res <- cache$pep.res
 
   matched.protein.id <- proteinID
-  peptides <- pep.map$Peptide[pep.map$Protein == matched.protein.id]
+  peptides <- cache$exact.index[[matched.protein.id]]
+  if (is.null(peptides)) peptides <- character(0)
   if (length(peptides) == 0 && !is.na(protein.id.norm)) {
-    peptides <- pep.map$Peptide[pep.map$Protein.norm == protein.id.norm]
+    peptides <- cache$norm.index[[protein.id.norm]]
+    if (is.null(peptides)) peptides <- character(0)
     if (length(peptides) > 0) {
-      match.idx <- which(pep.map$Protein.norm == protein.id.norm)[1]
-      matched.protein.id <- pep.map$Protein[match.idx]
+      matched.protein.id <- cache$protein.by.norm[[protein.id.norm]][1]
       msg("[R DEBUG] Matched via normalized protein ID: ", protein.id.norm, " -> ", matched.protein.id)
     }
   }
@@ -1991,15 +2047,16 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   if (length(peptides) == 0) {
     msg("[R DEBUG] No exact match for protein ", proteinID)
     # Check if protein ID exists with different formatting
-    matching_proteins <- unique(pep.map$Protein[
-      grepl(proteinID, pep.map$Protein, fixed = TRUE) |
-      (!is.na(protein.id.norm) & grepl(protein.id.norm, pep.map$Protein, fixed = TRUE))
-    ])
+    matching_proteins <- unique(pep.map$Protein[grepl(proteinID, pep.map$Protein, fixed = TRUE)])
+    if (length(matching_proteins) == 0 && !is.na(protein.id.norm)) {
+      matching_proteins <- unique(pep.map$Protein[grepl(protein.id.norm, pep.map$Protein, fixed = TRUE)])
+    }
     if (length(matching_proteins) > 0) {
       msg("[R DEBUG] Found similar protein IDs: ", paste(matching_proteins, collapse=", "))
       msg("[R DEBUG] Using first match: ", matching_proteins[1])
       matched.protein.id <- matching_proteins[1]
-      peptides <- pep.map$Peptide[pep.map$Protein == matched.protein.id]
+      peptides <- cache$exact.index[[matched.protein.id]]
+      if (is.null(peptides)) peptides <- character(0)
       if (matched.protein.id != original.protein.id) {
         msg("[R DEBUG] Using matched ID for peptides only: ", matched.protein.id, " (input: ", original.protein.id, ")")
       }
@@ -2013,7 +2070,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   prot.lookup.id <- original.protein.id
   if (!(prot.lookup.id %in% rownames(prot.res))) {
     rn <- rownames(prot.res)
-    rn.norm <- vapply(rn, normalize_protein_id, character(1))
+    rn.norm <- vapply(rn, .paNormalizeProteinId, character(1))
     if (!is.na(protein.id.norm) && protein.id.norm %in% rn.norm) {
       prot.lookup.id <- rn[match(protein.id.norm, rn.norm)]
       msg("[R DEBUG] Using normalized protein ID match in DE results: ", prot.lookup.id)
@@ -2082,60 +2139,22 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
     return(list())
   }
 
-  normalize_protein_id <- function(x) {
-    if (is.null(x) || length(x) == 0) return(NA_character_)
-    x <- as.character(x)
-    x <- trimws(x)
-    x <- x[!is.na(x) & nzchar(x)]
-    if (!length(x)) return(NA_character_)
-    first <- strsplit(x[1], ";", fixed = TRUE)[[1]][1]
-    first <- trimws(first)
-    if (grepl("\\|", first)) {
-      parts <- strsplit(first, "\\|")[[1]]
-      if (length(parts) >= 2 && nzchar(parts[2])) {
-        first <- parts[2]
-      }
-    }
-    first <- sub("_.*$", "", first)
-    first <- sub("-\\d+$", "", first)
-    first
-  }
-
-  dataSet <- readDataset(dataName)
-  if (is.null(dataSet) || is.null(dataSet$comp.res)) {
+  cache <- .paGetPeptideFeatureCache(dataName)
+  if (is.null(cache) || is.null(cache$dataSet) || is.null(cache$dataSet$comp.res)) {
     return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
   }
-
-  if (!file.exists("peptide_de_results.qs") || !file.exists("peptide_to_protein_map.qs")) {
-    return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
-  }
-
-  pep.all <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
-  pep.map <- try(ov_qs_read("peptide_to_protein_map.qs"), silent = TRUE)
-  if (inherits(pep.all, "try-error") || inherits(pep.map, "try-error")) {
-    return(setNames(vector("list", length(proteinIDs)), as.character(proteinIDs)))
-  }
-
-  # Handle list (new) vs. legacy data.frame format
-  if (is.list(pep.all) && !is.data.frame(pep.all)) {
-    active.nm <- dataSet$active.comp.nm
-    pep.res <- if (!is.null(active.nm) && active.nm %in% names(pep.all)) pep.all[[active.nm]] else pep.all[[1]]
-  } else {
-    pep.res <- pep.all
-  }
-
-  pep.map$Protein <- as.character(pep.map$Protein)
-  pep.map$Peptide <- as.character(pep.map$Peptide)
-  pep.map$Protein.norm <- vapply(pep.map$Protein, normalize_protein_id, character(1))
+  pep.res <- cache$pep.res
   pep.rownms <- rownames(pep.res)
 
   out <- setNames(vector("list", length(proteinIDs)), as.character(proteinIDs))
 
   for (pid in as.character(proteinIDs)) {
-    pid.norm <- normalize_protein_id(pid)
-    peptides <- pep.map$Peptide[pep.map$Protein == pid]
+    pid.norm <- .paNormalizeProteinId(pid)
+    peptides <- cache$exact.index[[pid]]
+    if (is.null(peptides)) peptides <- character(0)
     if (length(peptides) == 0 && !is.na(pid.norm)) {
-      peptides <- pep.map$Peptide[pep.map$Protein.norm == pid.norm]
+      peptides <- cache$norm.index[[pid.norm]]
+      if (is.null(peptides)) peptides <- character(0)
     }
     peptides <- unique(peptides)
 
@@ -2154,11 +2173,13 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
     pep.fc <- rep(NA_real_, length(peptides))
     pep.p <- rep(NA_real_, length(peptides))
 
-    idx <- match(peptides, pep.rownms)
-    valid <- !is.na(idx)
-    if (any(valid)) {
-      pep.fc[valid] <- pep.res[idx[valid], "logFC"]
-      pep.p[valid] <- pep.res[idx[valid], "P.Value"]
+    if (!is.null(pep.res) && length(pep.rownms) > 0) {
+      idx <- match(peptides, pep.rownms)
+      valid <- !is.na(idx)
+      if (any(valid)) {
+        pep.fc[valid] <- pep.res[idx[valid], "logFC"]
+        pep.p[valid] <- pep.res[idx[valid], "P.Value"]
+      }
     }
 
     out[[pid]] <- data.frame(

@@ -239,14 +239,13 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
 
   min.score <- .roundScore(confThresh)
 
-  # Determine if this database uses UniProt or Entrez IDs
-  db_parts <- strsplit(dbName, "_")[[1]]
-  db_type <- if (length(db_parts) >= 2) db_parts[2] else "string"
-  uses_uniprot_ids <- db_type %in% c("rolland", "irefinx")
-  has_uniprot_sqlite <- file.exists(paste0(sqlite.path, "ppi_uniprot.sqlite"))
-  use_uniprot_sqlite <- has_uniprot_sqlite
-  msg(sprintf("[PPI] Database name: %s", dbName))
-  msg(sprintf("[PPI] Uses UniProt IDs: %s (ppi_uniprot.sqlite available: %s; active: %s)", uses_uniprot_ids, has_uniprot_sqlite, use_uniprot_sqlite))
+  # Determine if this database uses UniProt IDs (ppi_uniprot.sqlite) or Entrez IDs (ppi.sqlite).
+  # Routing is per-database, not based on file existence.
+  UNIPROT_DBS <- c("intact", "huri", "rolland", "irefinx")
+  use_uniprot_sqlite <- dbName %in% UNIPROT_DBS &&
+                        file.exists(paste0(sqlite.path, "ppi_uniprot.sqlite"))
+  msg(sprintf("[PPI] Database: %s | ID mode: %s | ppi_uniprot.sqlite used: %s",
+              dbName, ifelse(use_uniprot_sqlite, "UniProt", "Entrez"), use_uniprot_sqlite))
   if (length(seeds) > 0) {
   }
 
@@ -307,9 +306,6 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
         uniprot_to_entrez_map <- uniprot_to_entrez[lookup_seeds]
         names(uniprot_to_entrez_map) <- as.character(uniprot_seeds)
         uniprot_to_entrez_map <- uniprot_to_entrez_map[!is.na(uniprot_to_entrez_map)]
-        if (!is.null(dataset_uniprot_map) && length(dataset_uniprot_map) > 0) {
-          uniprot_to_entrez_map <- dataset_uniprot_map
-        }
         analSet$uniprot_to_entrez_map <- uniprot_to_entrez_map
         saveSet(analSet, "analSet")
       } else if (.isEntrezLike(uniprot_seeds)) {
@@ -456,75 +452,27 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
       intra.edges <- data.frame()
     }
 
-    # msg(sprintf("[PPI] After intra-compartment expansion: %d nodes, %d edges\n",
-    #            length(network.nodes), nrow(intra.edges)))
+    edges <- if (intra.count > 0) intra.edges else data.frame()
 
-    # PASS 2: Inter-compartment edges between existing nodes
-    # Query database again with all nodes now in the network
-    if (length(network.nodes) > length(seeds)) {
-      # msg("[PPI] Querying for inter-compartment edges between existing nodes...\n")
-
-      inter.edges <- tryCatch({
-        QueryPpiSQLite(sqlite.path, dbName, network.nodes, requireExp, min.score, use.uniprot = use_uniprot_sqlite)
-      }, error = function(e) {
-        msg(sprintf("[PPI] Warning: Failed to query inter-compartment edges: %s\n", conditionMessage(e)))
-        NULL
-      })
-
-      if (!is.null(inter.edges) && nrow(inter.edges) > 0) {
-        inter.edges <- unique(.normalizePpiEdges(inter.edges))
-        inter.edges <- inter.edges[inter.edges$id1 != inter.edges$id2, , drop = FALSE]
-
-        # Filter to only edges between nodes already in network and different compartments
-        # OPTIMIZED: Use list to collect edges, then combine once (10-100x faster)
-        inter.filtered.list <- vector("list", nrow(inter.edges))
-        inter.count <- 0
-
-        for (i in 1:nrow(inter.edges)) {
-          id1 <- as.character(inter.edges$id1[i])
-          id2 <- as.character(inter.edges$id2[i])
-
-          # Both must be in network
-          if (!(id1 %in% network.nodes && id2 %in% network.nodes)) {
-            next
-          }
-
-          # Get compartments
-          comp1 <- comp.map[id1]
-          comp2 <- comp.map[id2]
-          if (is.na(comp1)) comp1 <- "Unknown"
-          if (is.na(comp2)) comp2 <- "Unknown"
-
-          # Different compartments only (same compartment already handled in PASS 1)
-          if (comp1 != comp2) {
-            inter.count <- inter.count + 1
-            inter.filtered.list[[inter.count]] <- inter.edges[i, , drop = FALSE]
-          }
-        }
-
-        # Combine all edges at once
-        if (inter.count > 0) {
-          inter.filtered <- do.call(rbind, inter.filtered.list[1:inter.count])
-        } else {
-          inter.filtered <- data.frame()
-        }
-
-        # Combine with intra-compartment edges
-        if (nrow(inter.filtered) > 0) {
-          edges <- unique(rbind(intra.edges, inter.filtered))
-          # msg(sprintf("[PPI] Added %d inter-compartment edges\n", nrow(inter.filtered)))
-        } else {
-          edges <- intra.edges
-        }
-      } else {
-        edges <- intra.edges
+    # For dense databases without a confidence score filter (non-STRING), prune non-seed
+    # neighbor nodes that connect to only one seed — these are peripheral and inflate the
+    # network. Only retain non-seeds with >= 2 seed connections (linker nodes).
+    if (!grepl("string$", dbName) && nrow(edges) > 0) {
+      all.edge.nodes <- unique(c(as.character(edges$id1), as.character(edges$id2)))
+      non.seeds <- setdiff(all.edge.nodes, seeds)
+      if (length(non.seeds) > 0) {
+        seed.conn <- vapply(non.seeds, function(nd) {
+          partners <- c(as.character(edges$id2[as.character(edges$id1) == nd]),
+                        as.character(edges$id1[as.character(edges$id2) == nd]))
+          sum(partners %in% seeds)
+        }, integer(1))
+        keep.nodes <- c(seeds, non.seeds[seed.conn >= 2])
+        edges <- edges[as.character(edges$id1) %in% keep.nodes &
+                       as.character(edges$id2) %in% keep.nodes, , drop = FALSE]
+        network.nodes <- unique(c(seeds, as.character(edges$id1), as.character(edges$id2)))
+        msg(sprintf("[PPI] After linker filter: %d nodes, %d edges", length(network.nodes), nrow(edges)))
       }
-    } else {
-      edges <- intra.edges
     }
-
-    # msg(sprintf("[PPI] Final compartment-aware network: %d nodes, %d edges\n",
-    #            length(network.nodes), nrow(edges)))
   }
 
   nodes <- unique(c(edges$id1, edges$id2))
@@ -552,6 +500,18 @@ CreateGraph <- function(dummy = NA) {
   }
   g <- igraph::graph_from_data_frame(cache$edges[, c("id1", "id2")], directed = FALSE)
   g <- igraph::simplify(g, remove.multiple = TRUE, remove.loops = TRUE)
+
+  # Seed proteins whose edges were fully pruned (e.g. by the linker filter) won't
+  # appear in the edge list and are therefore missing from the graph. Add them back
+  # as isolated vertices so their expression values are preserved in the output.
+  if (!is.null(cache$seeds) && length(cache$seeds) > 0) {
+    missing.seeds <- setdiff(as.character(cache$seeds), V(g)$name)
+    if (length(missing.seeds) > 0) {
+      g <- igraph::add_vertices(g, length(missing.seeds), name = missing.seeds)
+      msg(sprintf("[CreateGraph] Added %d isolated seed(s) missing from edge list", length(missing.seeds)))
+    }
+  }
+
   if (igraph::vcount(g) == 0) {
     current.msg <<- "Failed to construct graph: no nodes remain after simplification."
     return(c(0, 0, 0))
@@ -674,28 +634,73 @@ CreateGraph <- function(dummy = NA) {
     out
   }
 
+  msg(sprintf("[CreateGraph-EXPR] graph nodes=%d; sample node names: %s",
+              igraph::vcount(g), paste(head(V(g)$name, 5), collapse=",")))
+  msg(sprintf("[CreateGraph-EXPR] uniprot_to_entrez_map size=%d; sample: %s",
+              length(analSet$uniprot_to_entrez_map),
+              if (length(analSet$uniprot_to_entrez_map) > 0)
+                paste0(head(names(analSet$uniprot_to_entrez_map), 3), "->",
+                       head(analSet$uniprot_to_entrez_map, 3), collapse=",") else "EMPTY"))
+
   de.fc.vals <- collectCompResLogFC()
+  msg(sprintf("[CreateGraph-EXPR] collectCompResLogFC returned %d values; sample: %s",
+              length(de.fc.vals),
+              if (length(de.fc.vals) > 0) paste(head(names(de.fc.vals), 3), collapse=",") else "NONE"))
   if (length(de.fc.vals) > 0) {
     fillExprFromNamedValues(de.fc.vals)
   }
 
+  msg(sprintf("[CreateGraph-EXPR] after DE fill: %d/%d nodes have non-zero expr",
+              sum(!is.na(expr.vec) & expr.vec != 0), length(expr.vec)))
+
   if (!is.null(paramSet$all.ent.mat)) {
     exp.mat <- paramSet$all.ent.mat
     if (!is.null(dim(exp.mat)) && nrow(exp.mat) > 0) {
+      cat(sprintf("[CreateGraph-EXPR] all.ent.mat: %d rows, sample rownames: %s, sample values: %s\n",
+                  nrow(exp.mat), paste(head(rownames(exp.mat), 3), collapse=","),
+                  paste(head(suppressWarnings(as.numeric(exp.mat[,1])), 3), collapse=",")))
       exp.vals <- suppressWarnings(as.numeric(exp.mat[, 1]))
       names(exp.vals) <- rownames(exp.mat)
       fillExprFromNamedValues(exp.vals)
+      cat(sprintf("[CreateGraph-EXPR] after all.ent.mat direct fill: %d/%d nodes non-zero\n",
+                  sum(!is.na(expr.vec) & expr.vec != 0), length(expr.vec)))
+      # If rownames are UniProt-like, re-key via uniprot_to_entrez_map and try again
+      up2ent <- analSet$uniprot_to_entrez_map
+      if (!is.null(up2ent) && length(up2ent) > 0) {
+        norm.up <- .normalizeUniprotIds(rownames(exp.mat))
+        norm.keys <- .normalizeUniprotIds(names(up2ent))
+        entrez.from.up <- up2ent[match(norm.up, norm.keys)]
+        valid.conv <- !is.na(entrez.from.up) & nzchar(entrez.from.up)
+        if (any(valid.conv)) {
+          conv.vals <- suppressWarnings(as.numeric(exp.mat[valid.conv, 1]))
+          names(conv.vals) <- as.character(entrez.from.up[valid.conv])
+          fillExprFromNamedValues(conv.vals)
+          cat(sprintf("[CreateGraph-EXPR] after UniProt->Entrez conversion fill: %d/%d nodes non-zero (converted %d IDs)\n",
+                      sum(!is.na(expr.vec) & expr.vec != 0), length(expr.vec), sum(valid.conv)))
+        } else {
+          cat("[CreateGraph-EXPR] UniProt->Entrez map present but no overlap with all.ent.mat rownames\n")
+        }
+      } else {
+        cat("[CreateGraph-EXPR] no uniprot_to_entrez_map available\n")
+      }
     }
+  } else {
+    cat("[CreateGraph-EXPR] paramSet$all.ent.mat is NULL - expression values not available\n")
   }
 
   if (!is.null(paramSet$all.prot.mat)) {
     exp.tbl <- paramSet$all.prot.mat
     if (!is.null(dim(exp.tbl)) && nrow(exp.tbl) > 0 && ncol(exp.tbl) >= 2) {
+      msg(sprintf("[CreateGraph-EXPR] all.prot.mat: %d rows, sample col2: %s",
+                  nrow(exp.tbl), paste(head(as.character(exp.tbl[, 2]), 3), collapse=",")))
       exp.vals <- suppressWarnings(as.numeric(exp.tbl[, 1]))
       names(exp.vals) <- as.character(exp.tbl[, 2])
       fillExprFromNamedValues(exp.vals)
     }
   }
+
+  cat(sprintf("[CreateGraph-EXPR] FINAL: %d/%d nodes have non-zero expr\n",
+              sum(!is.na(expr.vec) & expr.vec != 0), length(expr.vec)))
 
   expr.vec[is.na(expr.vec)] <- 0
   V(g)$expr <- expr.vec
@@ -743,19 +748,25 @@ CreateGraph <- function(dummy = NA) {
     loc.data <- ov_qs_read(loc.path)
     loc.map <- loc.data[match(as.character(V(g)$entrez), as.character(loc.data$EntrezID)), ]
 
-    # Add compartment attributes to graph
-    V(g)$broad_category <- ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
-                                   "Unknown",
-                                   as.character(loc.map$Broad.category))
-    V(g)$main_location <- ifelse(is.na(loc.map$Main.location),
-                                  "Unknown",
-                                  as.character(loc.map$Main.location))
+    comp.res <- .paResolveCompartmentAnnotations(
+      ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
+             "Unknown",
+             as.character(loc.map$Broad.category)),
+      ifelse(is.na(loc.map$Main.location),
+             "Unknown",
+             as.character(loc.map$Main.location))
+    )
+
+    V(g)$broad_category <- comp.res$primary
+    V(g)$compartment_all <- comp.res$all_categories
+    V(g)$main_location <- comp.res$all_locations
 
     msg(sprintf("[CreateGraph] Added compartment info to %d/%d nodes\n",
                 sum(V(g)$broad_category != "Unknown"), vcount(g)))
   } else {
     # No localization data available - set defaults
     V(g)$broad_category <- "Unknown"
+    V(g)$compartment_all <- "Unknown"
     V(g)$main_location <- "Unknown"
     msg(sprintf("[CreateGraph] Localization data not found, all nodes marked as Unknown\n"))
   }
@@ -1013,18 +1024,23 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   loc.map <- NULL
   node.categories <- rep("Unknown", length(nms))
+  node.category.all <- rep("Unknown", length(nms))
   node.locations <- rep("Unknown", length(nms))
   if (file.exists(loc.path)) {
     msg(sprintf("[exportNetworkToJSON] Loading localization data from: %s
 ", loc.path))
     loc.data <- ov_qs_read(loc.path)
     loc.map <- loc.data[match(as.character(graph.ids$entrez), as.character(loc.data$EntrezID)), ]
-    node.categories <- ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
-                              "Unknown",
-                              as.character(loc.map$Broad.category))
-    node.locations <- ifelse(is.na(loc.map$Main.location) | loc.map$Main.location == "",
+    raw.categories <- ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
                              "Unknown",
-                             as.character(loc.map$Main.location))
+                             as.character(loc.map$Broad.category))
+    raw.locations <- ifelse(is.na(loc.map$Main.location) | loc.map$Main.location == "",
+                            "Unknown",
+                            as.character(loc.map$Main.location))
+    comp.res <- .paResolveCompartmentAnnotations(raw.categories, raw.locations)
+    node.categories <- comp.res$primary
+    node.category.all <- comp.res$all_categories
+    node.locations <- comp.res$all_locations
     msg(sprintf("[exportNetworkToJSON] Mapped %d/%d nodes to localization data
 ",
                 sum(!is.na(loc.map$Broad.category)), length(nms)))
@@ -1034,9 +1050,16 @@ PrepareNetwork <- function(net.nm, json.nm) {
   }
 
   if (!is.null(V(g)$broad_category) && length(V(g)$broad_category) == length(nms)) {
-    attr.categories <- as.character(V(g)$broad_category)
-    keep.attr <- !is.na(attr.categories) & nzchar(attr.categories) & attr.categories != "Unknown"
-    node.categories[keep.attr] <- attr.categories[keep.attr]
+    attr.locations <- if (!is.null(V(g)$main_location) && length(V(g)$main_location) == length(nms)) {
+      as.character(V(g)$main_location)
+    } else {
+      rep(NA_character_, length(nms))
+    }
+    attr.res <- .paResolveCompartmentAnnotations(as.character(V(g)$broad_category), attr.locations)
+    keep.attr <- !is.na(attr.res$primary) & nzchar(attr.res$primary) & attr.res$primary != "Unknown"
+    node.categories[keep.attr] <- attr.res$primary[keep.attr]
+    node.category.all[keep.attr] <- attr.res$all_categories[keep.attr]
+    node.locations[keep.attr] <- attr.res$all_locations[keep.attr]
   }
   if (!is.null(V(g)$main_location) && length(V(g)$main_location) == length(nms)) {
     attr.locations <- as.character(V(g)$main_location)
@@ -1045,6 +1068,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
   }
 
   V(g)$broad_category <- node.categories
+  V(g)$compartment_all <- node.category.all
   V(g)$main_location <- node.locations
 
   uniprot.vec <- graph.ids$uniprot
@@ -1066,6 +1090,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
       ""
     }
     category <- node.categories[i]
+    category.all <- node.category.all[i]
     main.loc <- node.locations[i]
 
     comp.id <- gsub("[^A-Za-z0-9_]", "_", category)
@@ -1114,6 +1139,8 @@ PrepareNetwork <- function(net.nm, json.nm) {
       location = main.loc,
       main_location = main.loc,
       broad_category = category,
+      compartment_all = category.all,
+      all_compartments = category.all,
       degree = node.dgr[i],
       between = round(node.btw[i], 2),
       query = if (is.query) "Y" else "N"
@@ -1209,7 +1236,9 @@ PrepareNetwork <- function(net.nm, json.nm) {
       degree = if (!is.null(node$degree)) node$degree else 0,
       betweenness = if (!is.null(node$between)) node$between else 0,
       expr = if (!is.null(node$exp)) node$exp else 0,
-      location = if (!is.null(node$main_location)) node$main_location else "Unknown"
+      location = if (!is.null(node$main_location)) node$main_location else "Unknown",
+      primary_compartment = if (!is.null(node$broad_category)) node$broad_category else "Unknown",
+      all_compartments = if (!is.null(node$all_compartments)) node$all_compartments else "Unknown"
     )
   })
 

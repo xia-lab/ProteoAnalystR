@@ -50,78 +50,32 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     names(ora.vec) <- ora.vec;
   }
 
-  # PROTEOMICS: Convert UniProt IDs to Entrez IDs for enrichment
-  # Store original UniProt IDs for reverse mapping later
-  # NOTE: After upload and ID mapping, ProteoAnalyst always uses UniProt IDs internally
-  # So we ALWAYS perform this conversion (paramSet$data.idType refers to the initial upload type)
-  original.uniprot.vec <- ora.vec;
-  original.ora.nms <- ora.nms;
-
-  # Check if ora.vec already contains Entrez IDs (all numeric)
-  # Filter out NA values before checking (grepl returns FALSE for NA inputs)
-  # Use >= 0.8 threshold to be more permissive (allows up to 20% NA/non-numeric)
+  # Check if ora.vec already contains Entrez IDs (all numeric).
+  # When the JS sends node.entrez directly, no conversion is needed at all.
   non_na_vec <- ora.vec[!is.na(ora.vec)]
   is.entrez.like <- length(non_na_vec) > 0 && mean(grepl("^[0-9]+$", non_na_vec)) >= 0.8
 
   if (is.entrez.like) {
-    # IDs are already Entrez, no conversion needed
-    entrez.vec <- ora.vec
-    sym.vec <- doEntrez2SymbolMapping(entrez.vec, paramSet$data.org, "entrez")
-
-    # For reverse mapping, try to get UniProt IDs from Entrez
-    uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
-    hit.inx <- match(entrez.vec, uniprot.map[, "gene_id"])
-    uniprot.vec <- uniprot.map[hit.inx, "accession"]
-
-    # Create reverse mapping (Entrez → UniProt)
-    uniprot.to.entrez.map <- entrez.vec
-    names(uniprot.to.entrez.map) <- ifelse(is.na(uniprot.vec), entrez.vec, uniprot.vec)
-    original.uniprot.vec <- ifelse(is.na(uniprot.vec), entrez.vec, uniprot.vec)
-
-    # Use Entrez IDs for matching
-    ora.vec <- entrez.vec
-    ora.nms <- sym.vec
-
+    # Already Entrez — resolve symbols for display; no UniProt round-trip needed.
+    ora.nms <- doEntrez2SymbolMapping(ora.vec, paramSet$data.org, "entrez");
+    na.inx <- is.na(ora.vec);
+    ora.vec <- ora.vec[!na.inx];
+    ora.nms <- ora.nms[!na.inx];
   } else {
-    # IDs are UniProt, convert to Entrez
+    # IDs are UniProt — convert to Entrez for pathway matching.
+    # Normalize: strip phosphosite suffixes (Q9D1F4_T_247 → Q9D1F4) and isoforms.
+    normalized.ora.vec <- sub("_[A-Z]_\\d+$", "", trimws(ora.vec));
+    normalized.ora.vec <- sub("-\\d+$", "", normalized.ora.vec);
 
-    # Normalize UniProt IDs (remove phosphosite annotations, isoforms, etc.)
-    # e.g., Q9D1F4_T_247 → Q9D1F4, P12345-1 → P12345
-    normalized.ora.vec <- ora.vec
-    normalized.ora.vec <- sub("_[A-Z]_\\d+$", "", normalized.ora.vec)  # Remove phosphosites
-    normalized.ora.vec <- sub("-\\d+$", "", normalized.ora.vec)         # Remove isoforms
-    normalized.ora.vec <- trimws(normalized.ora.vec)
+    uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org);
+    hit.inx <- match(normalized.ora.vec, uniprot.map[, "accession"]);
+    entrez.vec <- uniprot.map[hit.inx, "gene_id"];
+    sym.vec    <- doEntrez2SymbolMapping(entrez.vec, paramSet$data.org, "entrez");
 
-    # Query UniProt → Entrez mapping
-    uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
-    hit.inx <- match(normalized.ora.vec, uniprot.map[, "accession"])
-    entrez.vec <- uniprot.map[hit.inx, "gene_id"]
-
-    # Get symbols for display names
-    sym.vec <- doEntrez2SymbolMapping(entrez.vec, paramSet$data.org, "entrez");
-
-    na.inx <- is.na(entrez.vec)
-
-    # Create UniProt → Entrez mapping dictionary for reverse conversion
-    uniprot.to.entrez.map <- entrez.vec
-    names(uniprot.to.entrez.map) <- ora.vec
-
-    # Use Entrez IDs for matching, named by symbols
-    ora.vec <- entrez.vec
-    ora.nms <- sym.vec
-
-    # Remove NAs (unmapped UniProts)
-    ora.vec <- ora.vec[!na.inx]
-    ora.nms <- ora.nms[!na.inx]
-    original.uniprot.vec <- original.uniprot.vec[!na.inx]
-    uniprot.to.entrez.map <- uniprot.to.entrez.map[!na.inx]
-
+    na.inx <- is.na(entrez.vec);
+    ora.vec <- entrez.vec[!na.inx];
+    ora.nms <- sym.vec[!na.inx];
   }
-
-  # Store mapping in analSet for downstream use (e.g., network analysis)
-  analSet <- readSet(analSet, "analSet");
-  analSet$uniprot_to_entrez_map <- uniprot.to.entrez.map
-  saveSet(analSet, "analSet");
   
   if(paramSet$universe.opt == "library"){
     current.universe <- unique(unlist(current.featureset));
@@ -165,24 +119,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
                        }
   );
 
-  # PROTEOMICS: Convert hits back to UniProt IDs (reverse mapping)
-  if(!is.null(uniprot.to.entrez.map)){
-
-    # Create symbol → UniProt mapping
-    symbol.to.uniprot.map <- original.uniprot.vec
-    names(symbol.to.uniprot.map) <- ora.nms
-
-    # Convert each hit list from symbols to UniProt IDs
-    hits.query <- lapply(hits.query, function(symbol.list) {
-      # Map symbols to UniProt IDs
-      uniprot.list <- symbol.to.uniprot.map[symbol.list]
-      # Remove NAs (shouldn't happen but be safe)
-      uniprot.list <- uniprot.list[!is.na(uniprot.list)]
-      # Remove names for clean JSON output (JavaScript expects array of IDs, not named vector)
-      unname(uniprot.list)
-    })
-
-  }
+  # hits.query already contains gene symbols — no reverse mapping needed.
 
   ov_qs_save(hits.query, "hits_query.qs");
 
@@ -191,13 +128,13 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   
   gene.vec <- current.universe;
   sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, paramSet$data.idType);
-  gene.nms <- sym.vec;
-
-  current.featureset.symb <- lapply(current.featureset, 
-                       function(x) {
-                         gene.nms[gene.vec%in%unlist(x)];
-  }
-  );
+  # Build a named lookup once (entrez → symbol) so each pathway query is O(k)
+  # where k = pathway size, not O(universe_size).
+  univ.sym.map <- setNames(sym.vec, gene.vec);
+  current.featureset.symb <- lapply(current.featureset, function(x) {
+    hits <- intersect(as.character(x), gene.vec);
+    univ.sym.map[hits];
+  });
 
   # total unique gene number
   uniq.count <- length(current.universe);
@@ -250,8 +187,8 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     imp.inx <- res.mat[,4] <= 0.05;
     imp.inx[is.na(imp.inx)] <- F
 
-    if(sum(imp.inx) < 10){ # too little left, give the top ones
-      topn <- ifelse(nrow(res.mat) > 10, 10, nrow(res.mat));
+    if(sum(imp.inx) < 20){ # too little left, give the top ones
+      topn <- ifelse(nrow(res.mat) > 20, 20, nrow(res.mat));
       res.mat <- res.mat[1:topn,];
       hits.query <- hits.query[1:topn];
     }else{
@@ -297,12 +234,8 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # like P12345 are not human-readable. Map them back to gene symbols for
   # the JSON payload; keep the original ID when the lookup misses (rare
   # for canonical UniProts but possible for obsolete/private IDs).
-  fun.anot <- lapply(hits.query, function(ids) {
-    if (length(ids) == 0) return(ids);
-    syms <- convert.uniprot.to.symbols(ids, paramSet$data.org);
-    syms[is.na(syms)] <- ids[is.na(syms)];
-    unname(syms);
-  });
+  # hits.query already holds gene symbols — use them directly.
+  fun.anot <- lapply(hits.query, function(syms) unname(syms));
   total <- resTable$Total; if(length(total) ==1) { total <- matrix(total) };
   fun.pval <- resTable$Pval; if(length(fun.pval) ==1) { fun.pval <- matrix(fun.pval) };
   fun.padj <- resTable$FDR; if(length(fun.padj) ==1) { fun.padj <- matrix(fun.padj) };
@@ -363,6 +296,11 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     return(.loadCustomEnrichLib(fun.type, paramSet));
   }
 
+  # Build compartment library dynamically from localization data
+  if(fun.type == "compartment"){
+    return(.loadCompartmentEnrichLib(paramSet));
+  }
+
   if(paramSet$data.org == "generic"){
     folderNm <- paramSet$data.idType;
   }else{
@@ -373,8 +311,20 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   if(fun.type == "kegg" && !is.null(paramSet$jointpa.lib.path)){
     jointpa.file <- paste0(paramSet$jointpa.lib.path, folderNm, ".qs");
     if(file.exists(jointpa.file)){
-      return(.loadJointpaGeneticLib(jointpa.file));
+      cache.key <- paste0(".enrichlib_cache_jointpa_", folderNm);
+      if (exists(cache.key, envir = .GlobalEnv)) {
+        return(get(cache.key, envir = .GlobalEnv));
+      }
+      res <- .loadJointpaGeneticLib(jointpa.file);
+      assign(cache.key, res, envir = .GlobalEnv);
+      return(res);
     }
+  }
+
+  # Check session-level in-memory cache before hitting disk
+  cache.key <- paste0(".enrichlib_cache_", fun.type, "_", folderNm);
+  if (exists(cache.key, envir = .GlobalEnv)) {
+    return(get(cache.key, envir = .GlobalEnv));
   }
 
   if(exists("api.lib.path")){
@@ -414,7 +364,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   my.lib$term <- my.lib$term[keep.inx]
   set.ids<- names(current.featureset);
   names(set.ids) <- names(current.featureset) <- my.lib$term;
-  
+
   if(substr(fun.type, 0, 2)=="go"){
     names(current.featureset) = firstup(names(current.featureset))
     names(current.featureset) = gsub("-", "_", names(current.featureset))
@@ -426,6 +376,8 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   res$current.setlink <- my.lib$link;
   res$current.setids <- set.ids;
   res$current.featureset <- current.featureset;
+
+  assign(cache.key, res, envir = .GlobalEnv);
   return(res);
 }
 
@@ -517,6 +469,52 @@ PlotGSViewNew <-function(cmpdNm, format="png", dpi=96, imgName){
 
 }
 
+
+.loadCompartmentEnrichLib <- function(paramSet) {
+  org <- paramSet$data.org
+  if (is.null(org) || !nzchar(org)) org <- "hsa"
+
+  cache.key <- paste0(".enrichlib_cache_compartment_", org)
+  if (exists(cache.key, envir = .GlobalEnv))
+    return(get(cache.key, envir = .GlobalEnv))
+
+  lib.path <- if (exists("api.lib.path")) api.lib.path else paramSet$lib.path
+  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
+  if (!file.exists(loc.path)) {
+    AddErrMsg(paste0("[CompartmentLib] Localization file not found: ", loc.path))
+    return(0)
+  }
+
+  loc <- tryCatch(ov_qs_read(loc.path), error = function(e) NULL)
+  if (is.null(loc) || !all(c("EntrezID", "Broad.category") %in% colnames(loc)))
+    return(0)
+
+  loc$Broad.category[is.na(loc$Broad.category) | loc$Broad.category == ""] <- "Unknown"
+  if (!"Main.location" %in% colnames(loc)) {
+    loc$Main.location <- "Unknown"
+  }
+  loc$Primary.category <- .paResolveCompartmentAnnotations(loc$Broad.category, loc$Main.location)$primary
+  loc <- loc[!is.na(loc$Primary.category) & loc$Primary.category != "Unknown", ]
+  comps <- sort(unique(as.character(loc$Primary.category)))
+
+  sets <- lapply(setNames(comps, comps), function(comp) {
+    unique(as.character(loc$EntrezID[loc$Primary.category == comp]))
+  })
+  sets <- sets[sapply(sets, length) > 0]
+  term <- setNames(names(sets), names(sets))
+
+  current.featureset <- sets
+  set.ids <- names(sets); names(set.ids) <- names(sets)
+  ov_qs_save(current.featureset, "current_featureset.qs")
+
+  res <- list(
+    current.setlink    = "",
+    current.setids     = set.ids,
+    current.featureset = current.featureset
+  )
+  assign(cache.key, res, envir = .GlobalEnv)
+  return(res)
+}
 
 .loadCustomEnrichLib <- function(fun.type, paramSet){
   
@@ -785,37 +783,36 @@ GetEnrResLibrary<-function(type){
 
 
 PerformNetEnrichment <- function(dataName="", file.nm, fun.type, IDs){
-  #dataName <<- dataName;
-  #file.nm <<- file.nm;
-  #fun.type <<- fun.type;
-  #IDs <<- IDs;
-  #save.image("PerformNetEnrichment.RData");
+  cat("[PerformNetEnrichment] dataName=", dataName, "| file.nm=", file.nm, "| fun.type=", fun.type, "\n");
+  cat("[PerformNetEnrichment] IDs (first 200 chars):", substr(IDs, 1, 200), "\n");
   dataSet <- readDataset(dataName);
   paramSet <- readSet(paramSet, "paramSet");
   data.org <- paramSet$data.org;
+  cat("[PerformNetEnrichment] data.org=", data.org, "\n");
   # prepare query
   ora.vec <- NULL;
   idtype <- "entrez";
-  
-    ora.vec <- unlist(strsplit(IDs, "; "));
+
+    ora.vec <- unlist(strsplit(IDs, ";\\s*"));
     names(ora.vec) <- as.character(ora.vec);
+    cat("[PerformNetEnrichment] ora.vec length=", length(ora.vec), "| sample:", paste(head(ora.vec, 5), collapse=", "), "\n");
 
 
   if(fun.type %in% c("trrust", "encode", "jaspar", "mirnet", "met", "drugbank", "disease")){
+    cat("[PerformNetEnrichment] branch: reg enrichment\n");
     res <- PerformRegEnrichAnalysis(dataSet, file.nm, fun.type, ora.vec, "inverse");
   }else{
     # Check if phospho data and use appropriate functions
     is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")
-
+    cat("[PerformNetEnrichment] branch: standard enrichment | is_phospho=", is_phospho, "\n");
     if (is_phospho) {
-      # For phospho data, ora.vec contains phosphosite IDs (uniprot+site)
       res <- .performEnrichAnalysisPhospho(dataSet, file.nm, fun.type, ora.vec, "coexp");
     } else {
-      # Regular data - use standard enrichment
       res <- .performEnrichAnalysis(dataSet, file.nm, fun.type, ora.vec, "coexp");
     }
   }
 
+  cat("[PerformNetEnrichment] result code=", res, "\n");
   return(res);
 }
 

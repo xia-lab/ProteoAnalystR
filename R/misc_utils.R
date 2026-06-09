@@ -1559,6 +1559,7 @@ makeReadable <- function(str){
                     "go_cc" = "GO:CC",
                     "panth" = "PANTHER Slim",
                     "motif_set" = "Motif",
+                    "compartment" = "Compartment",
                     "onedata" = "Protein expression analysis",
                     "proteinlist" = "Protein list analysis",
                     "metadata" = "Protein expression meta-analysis",

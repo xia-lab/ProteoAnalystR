@@ -943,29 +943,34 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     msg <- paste(msg, "Normalization to sample median.", collapse=" ");
   }else if(norm.opt=='abundance_corr'){
     # Protein abundance correction for phosphoproteomics
-    # Normalizes phosphosite intensity by dividing by protein abundance (log-ratio subtraction)
+    # Normalizes phosphosite intensity by dividing by protein abundance (log-ratio subtraction).
+    # The protein reference is already log2-transformed; ensure phospho data is also log2 first.
     paramSet <- readSet(paramSet, "paramSet");
 
     if (!is.null(paramSet$data.type) && paramSet$data.type == "phospho" &&
         !is.null(paramSet$has.protein.ref) && paramSet$has.protein.ref) {
 
-      #msg("[NormalizeData] Applying protein abundance correction for phosphoproteomics...")
-      protein_ref <- paramSet$protein.ref
+      # Log2-transform phospho intensities if still on linear scale (values > 100 indicate linear)
+      data_min <- min(data, na.rm = TRUE)
+      data_max <- max(data, na.rm = TRUE)
+      looks_linear <- data_min >= 0 && data_max > 100
+      if (looks_linear) {
+        data[data == 0] <- NA
+        data <- log2(data)
+        msg <- paste(msg, "Log2 transformation applied before protein abundance correction.", collapse=" ");
+      }
 
-      # Perform abundance correction
+      protein_ref <- paramSet$protein.ref
       corrected_data <- .correctPhosphoByProteinAbundance(data, protein_ref)
 
       if (!is.null(corrected_data)) {
         data <- corrected_data
         msg <- paste(msg, "Protein abundance correction applied (log-ratio subtraction).", collapse=" ");
-        #msg("[NormalizeData] Protein abundance correction complete.")
       } else {
         msg <- paste(msg, "Warning: Protein abundance correction failed; keeping original data.", collapse=" ");
-        #msg("[NormalizeData] Warning: Protein abundance correction failed.")
       }
     } else {
       msg <- paste(msg, "Warning: Protein abundance correction requires phospho data with protein reference.", collapse=" ");
-      #msg("[NormalizeData] Warning: abundance_corr selected but requirements not met.")
     }
   }
 
@@ -1044,7 +1049,8 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
 SummarizeProteomicsData <- function(dataName = "",
                                     method = "median_polish",
                                     top_n = 3,
-                                    min_peptides = 1) {
+                                    min_peptides = 1,
+                                    filter.unmapped = FALSE) {
   dataSet <- readDataset(dataName)
   msgSet  <- readSet(msgSet, "msgSet")
   paramSet <- readSet(paramSet, "paramSet")
@@ -1094,6 +1100,14 @@ SummarizeProteomicsData <- function(dataName = "",
 
   if (inherits(prot.mat, "try-error")) {
     msgSet$current.msg <- paste0("Peptide summarization error: ", prot.mat)
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+
+  if (is.null(prot.mat) || !is.matrix(prot.mat) || nrow(prot.mat) == 0) {
+    msgSet$current.msg <- paste0(
+      "Peptide summarization failed: no proteins remained after applying the minimum peptide ",
+      "count filter (", min_peptides, "). Try reducing 'Minimum Peptides per Protein'.")
     saveSet(msgSet, "msgSet")
     return(0)
   }
@@ -1152,6 +1166,39 @@ SummarizeProteomicsData <- function(dataName = "",
                                     lvlOpt = "mean")
   msgSet$current.msg <- c(msgSet$current.msg,
                           "Protein-level annotation completed (input IDs parsed to UniProt).")
+
+  if (isTRUE(filter.unmapped)) {
+    sym.map <- tryCatch(
+      readDataQs("symbol.map.qs", paramSet$anal.type, dataName),
+      error = function(e) NULL
+    )
+    if (!is.null(sym.map) && is.data.frame(sym.map) && nrow(sym.map) > 0 &&
+        "uniprot" %in% colnames(sym.map) && "symbol" %in% colnames(sym.map)) {
+      # symbol == uniprot means no real gene symbol was found (UniProt ID used as fallback)
+      real.sym.inx <- !is.na(sym.map$symbol) & nzchar(sym.map$symbol) &
+                      sym.map$symbol != sym.map$uniprot
+      ids.with.sym <- unique(sym.map$uniprot[real.sym.inx])
+      mat <- dataSet$data.norm
+      keep <- intersect(rownames(mat), ids.with.sym)
+      n.before <- nrow(mat)
+      if (length(keep) > 0 && length(keep) < n.before) {
+        mat <- mat[keep, , drop = FALSE]
+        dataSet$data.norm <- mat
+        ov_qs_save(mat, "int.mat.qs")
+        ov_qs_save(mat, "orig.data.anot.qs")
+        ov_qs_save(mat, "norm.input.anot.qs")
+        ov_qs_save(mat, "data.missed.qs")
+        ov_qs_save(mat, "data.raw.qs")
+        n.removed <- n.before - nrow(mat)
+        msgSet$current.msg <- c(msgSet$current.msg,
+          paste0("Removed ", n.removed, " unannotated protein(s) without a gene symbol; ",
+                 nrow(mat), " proteins retained."))
+      } else if (length(keep) == 0) {
+        msgSet$current.msg <- c(msgSet$current.msg,
+          "Warning: all proteins lack a gene symbol; skipping unannotated filter.")
+      }
+    }
+  }
 
   saveSet(msgSet, "msgSet")
 
@@ -2673,10 +2720,315 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
 }
 
 # Proteoform analysis: genes where the ratio of proteoform-specific peptide intensities
-# shifts between conditions while total protein abundance remains stable.
+# shifts between conditions while aggregate abundance remains stable.
 # Requires: diann_metadata.qs (Proteotypic + Gene columns), peptide_to_protein_map.qs,
-#           peptide_level_data.qs (post-summarization) or data.stat.qs (pre-summarization),
-#           >=2 conditions with >=2 replicates each.
+#           peptide_level_data.qs (post-summarization) or data.stat.qs (pre-summarization).
+.proteoform_meta_info <- function(dataSet) {
+  if (is.null(dataSet$meta.info)) return(NULL)
+  if (is.data.frame(dataSet$meta.info)) return(dataSet$meta.info)
+  if (!is.null(dataSet$meta.info$meta.info)) return(dataSet$meta.info$meta.info)
+  NULL
+}
+
+.proteoform_disc_inx <- function(dataSet) {
+  if (!is.null(dataSet$disc.inx)) return(dataSet$disc.inx)
+  if (!is.null(dataSet$meta.info$disc.inx)) return(dataSet$meta.info$disc.inx)
+  NULL
+}
+
+.proteoform_prepare_precursors <- function(meta, prot.map, pmat.ids) {
+  if (!"Protein.IDs" %in% names(meta))
+    return(list(error = "DIA-NN metadata does not contain Protein.IDs."))
+  if (!"Proteotypic" %in% names(meta))
+    return(list(error = "Proteotypic column missing from metadata. Re-upload the dataset."))
+  if (!all(c("Peptide", "Protein") %in% names(prot.map)))
+    return(list(error = "Peptide-to-protein map must contain Peptide and Protein columns."))
+
+  prec.df <- meta[meta$Protein.IDs %in% pmat.ids, , drop = FALSE]
+  if (nrow(prec.df) == 0) {
+    return(list(error = paste0("No precursors in diann_metadata.qs match the normalized matrix row names. ",
+                               "Re-upload the dataset to regenerate metadata.")))
+  }
+
+  prec.df$clean.prot <- prot.map$Protein[match(prec.df$Protein.IDs, prot.map$Peptide)]
+  prec.df <- prec.df[!is.na(prec.df$Proteotypic) & prec.df$Proteotypic == 1L, , drop = FALSE]
+  prec.df <- prec.df[!is.na(prec.df$clean.prot) & prec.df$clean.prot != "", , drop = FALSE]
+  if (nrow(prec.df) == 0)
+    return(list(error = "No proteotypic precursors with valid protein assignments found in the normalized matrix."))
+
+  # Auto-detect grouping strategy:
+  #   UniProt isoform FASTA: >=1% of protein IDs carry a -N suffix (Q09028-2) -> group by canonical base
+  #   Gene-name mode (OpenProt / standard without isoform FASTA): group by gene name.
+  frac.iso.suffix <- mean(grepl("-[0-9]+$", prec.df$clean.prot))
+  if (isTRUE(frac.iso.suffix >= 0.01)) {
+    prec.df$group.key <- sub("-[0-9]+$", "", prec.df$clean.prot)
+    group.mode <- "uniprot"
+  } else {
+    gene.col <- NA_character_
+    for (cand in c("GN", "Gene", "Genes")) {
+      if (cand %in% names(prec.df)) {
+        vals <- as.character(prec.df[[cand]])
+        if (mean(!is.na(vals) & vals != "") > 0.3) {
+          gene.col <- cand
+          break
+        }
+      }
+    }
+    if (is.na(gene.col))
+      return(list(error = "No UniProt isoform suffixes detected and no usable Gene/GN column. Cannot group proteoforms."))
+    prec.df$group.key <- as.character(prec.df[[gene.col]])
+    prec.df <- prec.df[!is.na(prec.df$group.key) & prec.df$group.key != "", , drop = FALSE]
+    if (nrow(prec.df) == 0)
+      return(list(error = "Gene column is empty for all proteotypic precursors. Cannot group by gene name."))
+    group.mode <- "gene"
+  }
+
+  list(prec.df = prec.df, group.mode = group.mode)
+}
+
+.proteoform_plot_group <- function(dataSet, meta.info, samples) {
+  if (!is.null(meta.info) && !is.null(rownames(meta.info))) {
+    analysis.var <- dataSet$analysisVar
+    if (!is.null(analysis.var) && analysis.var %in% colnames(meta.info)) {
+      vals <- as.character(meta.info[samples, analysis.var])
+      if (any(!is.na(vals) & vals != "")) return(factor(vals))
+    }
+    disc.inx <- .proteoform_disc_inx(dataSet)
+    if (!is.null(disc.inx) && any(disc.inx)) {
+      disc.cols <- names(which(disc.inx))
+      disc.cols <- disc.cols[disc.cols %in% colnames(meta.info)]
+      if (length(disc.cols) > 0) {
+        vals <- as.character(meta.info[samples, disc.cols[1]])
+        if (any(!is.na(vals) & vals != "")) return(factor(vals))
+      }
+    }
+  }
+  if (!is.null(dataSet$cls) && length(dataSet$cls) == length(samples)) return(factor(as.character(dataSet$cls)))
+  factor(samples, levels = samples)
+}
+
+.proteoform_build_context <- function(dataSet, pep.mat) {
+  meta.info <- .proteoform_meta_info(dataSet)
+  samples.all <- colnames(pep.mat)
+
+  design <- dataSet$design
+  contrast.matrix <- dataSet$contrast.matrix
+  if (!is.null(design)) {
+    design <- as.matrix(design)
+    if (!is.null(contrast.matrix)) {
+      contrast.matrix <- as.matrix(contrast.matrix)
+    } else {
+      coef.cands <- unique(as.character(unlist(c(dataSet$active.comp.nm,
+                                                 dataSet$par1,
+                                                 dataSet$analysis.var))))
+      coef.cands <- coef.cands[!is.na(coef.cands) & coef.cands != ""]
+      coef.name <- coef.cands[coef.cands %in% colnames(design)][1]
+      if (!is.na(coef.name)) {
+        contrast.matrix <- matrix(0, nrow = ncol(design), ncol = 1,
+                                  dimnames = list(colnames(design), coef.name))
+        contrast.matrix[coef.name, 1] <- 1
+      }
+    }
+  }
+  has.de.design <- !is.null(design) && !is.null(contrast.matrix) &&
+                   is.matrix(design) && is.matrix(contrast.matrix) &&
+                   nrow(design) > 1 && ncol(contrast.matrix) >= 1
+
+  if (has.de.design) {
+    samples <- NULL
+
+    if (!is.null(rownames(design)) && all(rownames(design) %in% samples.all)) {
+      samples <- rownames(design)
+    }
+    if (is.null(samples) && !is.null(dataSet$rmidx) && length(dataSet$rmidx) > 0 &&
+        length(samples.all) - length(dataSet$rmidx) == nrow(design)) {
+      samples <- samples.all[-dataSet$rmidx]
+    }
+    if (is.null(samples) && !is.null(meta.info) && !is.null(rownames(meta.info))) {
+      meta.samples <- intersect(rownames(meta.info), samples.all)
+      if (length(meta.samples) == nrow(design)) samples <- meta.samples
+    }
+    if (is.null(samples) && nrow(design) == length(samples.all)) {
+      samples <- samples.all
+    }
+
+    if (!is.null(samples) && length(samples) == nrow(design)) {
+      if (!is.null(rownames(design)) && all(samples %in% rownames(design))) {
+        design <- design[samples, , drop = FALSE]
+      } else {
+        rownames(design) <- samples
+      }
+
+      active <- dataSet$active.comp.nm
+      if (is.null(active) || length(active) == 0 || !(active %in% colnames(contrast.matrix))) {
+        active <- colnames(contrast.matrix)[1]
+      }
+      contrast <- contrast.matrix[, active, drop = FALSE]
+
+      block <- dataSet$block
+      if (!is.null(block) && length(block) > 0) {
+        if (length(block) == nrow(design)) {
+          names(block) <- rownames(design)
+        } else {
+          block <- NULL
+        }
+      }
+
+      plot.group <- .proteoform_plot_group(dataSet, meta.info, samples)
+      names(plot.group) <- samples
+
+      coef.vec <- as.numeric(contrast[, 1])
+      names(coef.vec) <- rownames(contrast)
+      pos.cols <- names(coef.vec)[coef.vec > 0]
+      neg.cols <- names(coef.vec)[coef.vec < 0]
+      summary.group <- NULL
+      cond1.label <- NA_character_
+      cond2.label <- NA_character_
+      if (length(pos.cols) == 1 && length(neg.cols) == 1 &&
+          all(c(pos.cols, neg.cols) %in% colnames(design))) {
+        summary.group <- rep(NA_character_, nrow(design))
+        summary.group[design[, neg.cols] > 0] <- neg.cols
+        summary.group[design[, pos.cols] > 0] <- pos.cols
+        names(summary.group) <- rownames(design)
+        cond1.label <- neg.cols
+        cond2.label <- pos.cols
+      }
+
+      return(list(
+        samples = samples,
+        design = design,
+        contrast = contrast,
+        contrast.name = active,
+        block = block,
+        plot.group = plot.group,
+        summary.group = summary.group,
+        cond1.label = cond1.label,
+        cond2.label = cond2.label,
+        mode = "differential-analysis design"
+      ))
+    }
+  }
+
+  disc.inx <- .proteoform_disc_inx(dataSet)
+  if (is.null(meta.info) || is.null(disc.inx) || sum(disc.inx) == 0)
+    return(list(error = "No differential-analysis design or categorical condition found for proteoform analysis."))
+
+  cond.col <- names(which(disc.inx))[1]
+  groups <- as.character(meta.info[[cond.col]])
+  names(groups) <- rownames(meta.info)
+  samples <- intersect(samples.all, names(groups))
+  groups <- groups[samples]
+  keep <- !is.na(groups) & groups != ""
+  samples <- samples[keep]
+  groups <- groups[keep]
+  unique.groups <- unique(groups)
+  if (length(unique.groups) < 2)
+    return(list(error = "At least two conditions are required for proteoform analysis."))
+
+  selected.groups <- unique.groups[1:2]
+  keep <- groups %in% selected.groups
+  samples <- samples[keep]
+  groups <- factor(groups[keep], levels = selected.groups)
+  if (any(table(groups) < 2))
+    return(list(error = "At least 2 replicates per condition are required."))
+
+  design <- model.matrix(~ 0 + groups)
+  colnames(design) <- make.names(levels(groups), unique = TRUE)
+  rownames(design) <- samples
+  contrast <- matrix(c(-1, 1), ncol = 1)
+  rownames(contrast) <- colnames(design)
+  colnames(contrast) <- paste0(colnames(design)[2], "-", colnames(design)[1])
+  summary.group <- setNames(ifelse(groups == selected.groups[1], colnames(design)[1], colnames(design)[2]), samples)
+  plot.group <- setNames(groups, samples)
+
+  list(
+    samples = samples,
+    design = design,
+    contrast = contrast,
+    contrast.name = colnames(contrast)[1],
+    block = NULL,
+    plot.group = plot.group,
+    summary.group = summary.group,
+    cond1.label = colnames(design)[1],
+    cond2.label = colnames(design)[2],
+    mode = paste0("fallback first-two-group design: ", selected.groups[2], " vs ", selected.groups[1])
+  )
+}
+
+.proteoform_limma <- function(mat, ctx, robustTrend = FALSE) {
+  require(limma)
+  mat <- mat[, ctx$samples, drop = FALSE]
+  if (nrow(mat) == 0 || ncol(mat) == 0) stop("Empty proteoform matrix.")
+  if (!is.fullrank(ctx$design)) stop("Proteoform design matrix is not full rank.")
+
+  fit <- if (is.null(ctx$block)) {
+    lmFit(mat, ctx$design)
+  } else {
+    corfit <- duplicateCorrelation(mat, ctx$design, block = ctx$block)
+    lmFit(mat, ctx$design, block = ctx$block, correlation = corfit$consensus)
+  }
+  if (all(fit$df.residual == 0))
+    stop("No residual degrees of freedom in the selected proteoform design.")
+
+  fit2 <- contrasts.fit(fit, ctx$contrast)
+  fit2 <- eBayes(fit2, trend = robustTrend, robust = robustTrend)
+  tbl <- topTable(fit2, coef = 1, number = Inf, adjust.method = "BH", sort.by = "none")
+  if (!is.null(tbl$ID)) {
+    rownames(tbl) <- tbl$ID
+    tbl$ID <- NULL
+  }
+  tbl
+}
+
+# Sample absorbs gene-level abundance; the interaction tests condition-specific isoform composition.
+.proteoform_omnibus_anova <- function(iso.mat, ctx) {
+  empty <- list(p.value = NA_real_, f.stat = NA_real_)
+  if (is.null(iso.mat) || nrow(iso.mat) < 2 || ncol(iso.mat) < 4) return(empty)
+  iso.mat <- iso.mat[, ctx$samples, drop = FALSE]
+
+  groups <- ctx$summary.group
+  if (is.null(groups) || !any(!is.na(groups) & groups != "")) {
+    groups <- ctx$plot.group
+  }
+  if (is.null(groups)) return(empty)
+  if (is.null(names(groups)) && length(groups) == length(ctx$samples)) names(groups) <- ctx$samples
+
+  groups <- as.character(groups[colnames(iso.mat)])
+  keep.samples <- !is.na(groups) & groups != ""
+  if (sum(keep.samples) < 4) return(empty)
+  iso.mat <- iso.mat[, keep.samples, drop = FALSE]
+  groups <- factor(groups[keep.samples])
+  if (nlevels(groups) < 2 || any(table(groups) < 2)) return(empty)
+
+  df <- data.frame(
+    Sample = rep(colnames(iso.mat), each = nrow(iso.mat)),
+    Condition = rep(as.character(groups), each = nrow(iso.mat)),
+    Isoform = rep(rownames(iso.mat), times = ncol(iso.mat)),
+    Value = as.vector(iso.mat),
+    stringsAsFactors = FALSE
+  )
+  df <- df[is.finite(df$Value) & !is.na(df$Condition) & df$Condition != "", , drop = FALSE]
+  if (nrow(df) == 0 || length(unique(df$Isoform)) < 2) return(empty)
+  sample.counts <- tapply(df$Sample, df$Condition, function(x) length(unique(x)))
+  if (length(sample.counts) < 2 || any(sample.counts < 2)) return(empty)
+
+  df$Sample <- factor(df$Sample)
+  df$Condition <- factor(df$Condition)
+  df$Isoform <- factor(df$Isoform)
+
+  tryCatch({
+    reduced <- lm(Value ~ Sample + Isoform, data = df)
+    full <- lm(Value ~ Sample + Isoform + Condition:Isoform, data = df)
+    tab <- anova(reduced, full)
+    if (nrow(tab) < 2) return(empty)
+    p.val <- as.numeric(tab[["Pr(>F)"]][2])
+    f.val <- as.numeric(tab[["F"]][2])
+    if (!is.finite(p.val)) p.val <- NA_real_
+    if (!is.finite(f.val)) f.val <- NA_real_
+    list(p.value = p.val, f.stat = f.val)
+  }, error = function(e) empty)
+}
+
 DetectProteoformAnalysis <- function(dataName) {
   msgSet  <- readSet(msgSet, "msgSet")
   dataSet <- readDataset(dataName)
@@ -2687,8 +3039,6 @@ DetectProteoformAnalysis <- function(dataName) {
     return(0L)
   }
 
-  # After SummarizeProteomicsData, data.stat.qs is overwritten with protein-level data.
-  # The peptide-level matrix is saved explicitly as peptide_level_data.qs at that step.
   pep.qs <- if (ov_qs_exists("peptide_level_data.qs")) "peptide_level_data.qs" else "data.stat.qs"
   if (!file.exists(pep.qs))
     return(fail("Peptide matrix not found. Run normalization (and summarization if applicable) first."))
@@ -2698,99 +3048,27 @@ DetectProteoformAnalysis <- function(dataName) {
     return(fail("Peptide-to-protein map not found."))
 
   meta <- ov_qs_read("diann_metadata.qs")
-  if (!"Proteotypic" %in% names(meta))
-    return(fail("Proteotypic column missing from metadata. Re-upload the dataset."))
-
-  pep.mat  <- ov_qs_read(pep.qs)
+  pep.mat <- ov_qs_read(pep.qs)
   prot.map <- ov_qs_read("peptide_to_protein_map.qs")
-
-  # disc.inx lives at dataSet$disc.inx after SetSelectedMetaInfo,
-  # or inside dataSet$meta.info$disc.inx before that step
-  if (!is.null(dataSet$disc.inx)) {
-    disc.inx  <- dataSet$disc.inx
-    meta.info <- if (is.data.frame(dataSet$meta.info)) dataSet$meta.info
-                 else dataSet$meta.info$meta.info
-  } else {
-    meta.info <- dataSet$meta.info$meta.info
-    disc.inx  <- dataSet$meta.info$disc.inx
-  }
-  if (is.null(meta.info) || is.null(disc.inx) || sum(disc.inx) == 0)
-    return(fail("No categorical condition found in dataset metadata."))
-
-  cond.col <- names(which(disc.inx))[1]
-  groups   <- as.character(meta.info[[cond.col]])
-  names(groups) <- rownames(meta.info)
-
-  samples <- intersect(colnames(pep.mat), names(groups))
-  pep.mat <- pep.mat[, samples, drop = FALSE]
-  groups  <- groups[samples]
-  unique.groups <- unique(groups)
-
-  if (length(unique.groups) < 2)
-    return(fail("At least two conditions are required for proteoform analysis."))
-
-  g1.idx <- groups == unique.groups[1]
-  g2.idx <- groups == unique.groups[2]
-  if (sum(g1.idx) < 2 || sum(g2.idx) < 2)
-    return(fail("At least 2 replicates per condition are required."))
-
-  # Build working table: precursors from diann_metadata that are present in the peptide matrix
   pmat.ids <- rownames(pep.mat)
-  prec.df  <- meta[meta$Protein.IDs %in% pmat.ids, , drop = FALSE]
 
-  if (nrow(prec.df) == 0)
-    return(fail(paste0("No precursors in diann_metadata.qs match the normalized matrix row names. ",
-                       "Re-upload the dataset to regenerate metadata.")))
+  prep <- .proteoform_prepare_precursors(meta, prot.map, pmat.ids)
+  if (!is.null(prep$error)) return(fail(prep$error))
+  prec.df <- prep$prec.df
+  group.mode <- prep$group.mode
 
-  # Join clean protein ID from prot.map
-  prec.df$clean.prot <- prot.map$Protein[match(prec.df$Protein.IDs, prot.map$Peptide)]
+  ctx <- .proteoform_build_context(dataSet, pep.mat)
+  if (!is.null(ctx$error)) return(fail(ctx$error))
 
-  # Restrict to proteotypic precursors with valid protein assignments
-  prec.df <- prec.df[!is.na(prec.df$Proteotypic) & prec.df$Proteotypic == 1L, ]
-  prec.df <- prec.df[!is.na(prec.df$clean.prot), ]
-
-  if (nrow(prec.df) == 0)
-    return(fail("No proteotypic precursors with valid protein assignments found in the normalized matrix."))
-
-  # Auto-detect grouping strategy:
-  #   UniProt isoform FASTA: ≥1% of protein IDs carry a -N suffix (Q09028-2) → group by canonical base
-  #   Gene-name mode (OpenProt / standard without isoform FASTA): group by gene name,
-  #     each distinct protein accession within a gene is treated as a separate proteoform.
-  #     GN column (parsed from Protein.Ids header) is preferred over Gene (from DIA-NN Genes column)
-  #     because OpenProt headers embed GN=, TA=, PA= tags reliably.
-  frac.iso.suffix <- mean(grepl("-[0-9]+$", prec.df$clean.prot))
-
-  if (frac.iso.suffix >= 0.01) {
-    prec.df$group.key <- sub("-[0-9]+$", "", prec.df$clean.prot)  # canonical base
-    group.mode <- "uniprot"
-  } else {
-    # Pick best gene name column: GN (OpenProt-parsed) > Gene > Genes
-    gene.col <- NA_character_
-    for (cand in c("GN", "Gene", "Genes")) {
-      if (cand %in% names(prec.df)) {
-        vals <- as.character(prec.df[[cand]])
-        if (mean(!is.na(vals) & vals != "") > 0.3) { gene.col <- cand; break }
-      }
-    }
-    if (is.na(gene.col))
-      return(fail("No UniProt isoform suffixes detected and no usable Gene/GN column. Cannot group proteoforms."))
-    prec.df$group.key <- as.character(prec.df[[gene.col]])
-    prec.df <- prec.df[!is.na(prec.df$group.key) & prec.df$group.key != "", ]
-    if (nrow(prec.df) == 0)
-      return(fail("Gene column is empty for all proteotypic precursors. Cannot group by gene name."))
-    group.mode <- "gene"
-  }
-
-  # Find groups (canonical base or gene) with ≥2 distinct protein IDs having proteotypic precursors
   group.isoforms <- tapply(prec.df$clean.prot, prec.df$group.key, function(x) unique(x))
-  multi.groups   <- names(group.isoforms)[sapply(group.isoforms, length) >= 2]
-
-  if (length(multi.groups) == 0)
+  multi.groups <- names(group.isoforms)[sapply(group.isoforms, length) >= 2]
+  if (length(multi.groups) == 0) {
     return(fail(paste0(
       "No ", if (group.mode == "uniprot") "canonical proteins" else "genes",
-      " with ≥2 distinct proteoforms having proteotypic peptides detected (",
+      " with >=2 distinct proteoforms having proteotypic peptides detected (",
       length(group.isoforms), " group(s) with any proteotypic coverage)."
     )))
+  }
 
   get.gene <- function(grp) {
     if (group.mode == "gene") return(grp)
@@ -2801,72 +3079,195 @@ DetectProteoformAnalysis <- function(dataName) {
     grp
   }
 
+  get.ta <- function(grp, iso) {
+    if (!"TA" %in% names(prec.df)) return(NA_character_)
+    idx <- which(prec.df$group.key == grp & prec.df$clean.prot == iso & !is.na(prec.df$TA) & prec.df$TA != "")
+    if (length(idx) > 0) prec.df$TA[idx[1]] else NA_character_
+  }
+
   get.abd <- function(peps) {
     peps <- intersect(peps, pmat.ids)
     if (length(peps) == 0) return(NULL)
-    if (length(peps) == 1) return(as.numeric(pep.mat[peps, ]))
-    colMeans(pep.mat[peps, , drop = FALSE], na.rm = TRUE)
+    mat <- pep.mat[peps, ctx$samples, drop = FALSE]
+    if (length(peps) == 1) as.numeric(mat) else colMeans(mat, na.rm = TRUE)
   }
 
-  results.list <- lapply(multi.groups, function(grp) {
+  mean_for <- function(x, label) {
+    if (is.null(ctx$summary.group) || is.na(label)) return(NA_real_)
+    idx <- ctx$summary.group == label
+    if (!any(idx, na.rm = TRUE)) return(NA_real_)
+    val <- mean(x[idx], na.rm = TRUE)
+    if (is.nan(val)) NA_real_ else val
+  }
+
+  records <- list()
+  ratio.rows <- list()
+  total.rows <- list()
+  min.peptides.per.isoform <- 2L
+
+  for (grp in multi.groups) {
     isoforms <- group.isoforms[[grp]]
-    # Pick top-2 by peptide count so we test the best-covered pair
     pep.counts <- sapply(isoforms, function(iso)
       sum(prec.df$group.key == grp & prec.df$clean.prot == iso))
     isoforms <- isoforms[order(pep.counts, decreasing = TRUE)]
-    isoA <- isoforms[1]; isoB <- isoforms[2]
+    eligible.isoforms <- isoforms[pep.counts[isoforms] >= min.peptides.per.isoform]
+    if (length(eligible.isoforms) < 2) next
 
-    abd.A <- get.abd(prec.df$Protein.IDs[prec.df$group.key == grp & prec.df$clean.prot == isoA])
-    abd.B <- get.abd(prec.df$Protein.IDs[prec.df$group.key == grp & prec.df$clean.prot == isoB])
-    if (is.null(abd.A) || is.null(abd.B)) return(NULL)
+    iso.abd <- lapply(eligible.isoforms, function(iso) {
+      peps <- prec.df$Protein.IDs[prec.df$group.key == grp & prec.df$clean.prot == iso]
+      get.abd(peps)
+    })
+    names(iso.abd) <- eligible.isoforms
+    valid.isoforms <- names(iso.abd)[vapply(iso.abd, function(x) {
+      !is.null(x) && sum(is.finite(x)) >= 3
+    }, logical(1))]
+    if (length(valid.isoforms) < 2) next
+    eligible.isoforms <- valid.isoforms
 
-    log.ratio <- abd.A - abd.B
-    if (sum(!is.na(log.ratio[g1.idx])) < 2 || sum(!is.na(log.ratio[g2.idx])) < 2) return(NULL)
+    iso.mat <- do.call(rbind, iso.abd[eligible.isoforms])
+    rownames(iso.mat) <- eligible.isoforms
+    colnames(iso.mat) <- ctx$samples
+    omnibus <- .proteoform_omnibus_anova(iso.mat, ctx)
 
-    tt.ratio <- tryCatch(t.test(log.ratio[g1.idx], log.ratio[g2.idx]), error = function(e) NULL)
-    if (is.null(tt.ratio)) return(NULL)
+    all.abd <- get.abd(prec.df$Protein.IDs[prec.df$group.key == grp])
+    if (is.null(all.abd)) next
 
-    all.abd  <- get.abd(prec.df$Protein.IDs[prec.df$group.key == grp])
-    tt.total <- tryCatch(t.test(all.abd[g1.idx], all.abd[g2.idx]), error = function(e) NULL)
+    for (i in seq_len(length(eligible.isoforms) - 1L)) {
+      for (j in seq.int(i + 1L, length(eligible.isoforms))) {
+        isoA <- eligible.isoforms[i]
+        isoB <- eligible.isoforms[j]
 
-    get.ta <- function(iso) {
-      if (!"TA" %in% names(prec.df)) return(NA_character_)
-      idx <- which(prec.df$group.key == grp & prec.df$clean.prot == iso & !is.na(prec.df$TA) & prec.df$TA != "")
-      if (length(idx) > 0) prec.df$TA[idx[1]] else NA_character_
+        abd.A <- iso.mat[isoA, ]
+        abd.B <- iso.mat[isoB, ]
+
+        log.ratio <- abd.A - abd.B
+        if (sum(is.finite(log.ratio)) < 3) next
+
+        pair.id <- make.unique(c(names(records), paste(grp, isoA, isoB, sep = "||")))
+        pair.id <- pair.id[length(pair.id)]
+        records[[pair.id]] <- list(
+          Gene = get.gene(grp),
+          Isoform.Group = grp,
+          Isoform.Count = length(eligible.isoforms),
+          Omnibus.F = omnibus$f.stat,
+          Omnibus.Pvalue = omnibus$p.value,
+          Proteoform.A = isoA,
+          Transcript.A = get.ta(grp, isoA),
+          Proteoform.B = isoB,
+          Transcript.B = get.ta(grp, isoB),
+          Peptides.A = unname(pep.counts[isoA]),
+          Peptides.B = unname(pep.counts[isoB]),
+          LogRatio.Cond1 = mean_for(log.ratio, ctx$cond1.label),
+          LogRatio.Cond2 = mean_for(log.ratio, ctx$cond2.label)
+        )
+        ratio.rows[[pair.id]] <- log.ratio
+        total.rows[[pair.id]] <- all.abd
+      }
     }
+  }
 
+  if (length(ratio.rows) == 0)
+    return(fail(paste0(
+      "Insufficient data for proteoform analysis after requiring >= ",
+      min.peptides.per.isoform, " proteotypic peptides per isoform."
+    )))
+
+  ratio.mat <- do.call(rbind, ratio.rows)
+  total.mat <- do.call(rbind, total.rows)
+  colnames(ratio.mat) <- ctx$samples
+  colnames(total.mat) <- ctx$samples
+
+  ratio.tbl <- tryCatch(.proteoform_limma(ratio.mat, ctx, robustTrend = isTRUE(dataSet$robustTrend)),
+                        error = function(e) e)
+  if (inherits(ratio.tbl, "error"))
+    return(fail(paste("Proteoform ratio model failed:", ratio.tbl$message)))
+
+  total.tbl <- tryCatch(.proteoform_limma(total.mat, ctx, robustTrend = isTRUE(dataSet$robustTrend)),
+                        error = function(e) NULL)
+
+  ids <- rownames(ratio.tbl)
+  results <- do.call(rbind, lapply(ids, function(id) {
+    rec <- records[[id]]
+    if (is.null(rec)) return(NULL)
+    total.p <- if (!is.null(total.tbl) && id %in% rownames(total.tbl)) total.tbl[id, "P.Value"] else NA_real_
+    total.fc <- if (!is.null(total.tbl) && id %in% rownames(total.tbl) && "logFC" %in% colnames(total.tbl)) total.tbl[id, "logFC"] else NA_real_
     data.frame(
-      Gene           = get.gene(grp),
-      Proteoform.A   = isoA,
-      Transcript.A   = get.ta(isoA),
-      Proteoform.B   = isoB,
-      Transcript.B   = get.ta(isoB),
-      Peptides.A     = pep.counts[isoA],
-      Peptides.B     = pep.counts[isoB],
-      LogRatio.Cond1 = round(mean(log.ratio[g1.idx], na.rm = TRUE), 3),
-      LogRatio.Cond2 = round(mean(log.ratio[g2.idx], na.rm = TRUE), 3),
-      Delta.LogRatio = round(mean(log.ratio[g2.idx], na.rm = TRUE) - mean(log.ratio[g1.idx], na.rm = TRUE), 3),
-      Ratio.Pvalue   = signif(tt.ratio$p.value, 3),
-      Total.Pvalue   = if (!is.null(tt.total)) signif(tt.total$p.value, 3) else NA_real_,
+      Gene = rec$Gene,
+      Comparison = ctx$contrast.name,
+      Isoform.Group = rec$Isoform.Group,
+      Isoform.Count = rec$Isoform.Count,
+      Omnibus.F = rec$Omnibus.F,
+      Omnibus.Pvalue = rec$Omnibus.Pvalue,
+      Proteoform.A = rec$Proteoform.A,
+      Transcript.A = rec$Transcript.A,
+      Proteoform.B = rec$Proteoform.B,
+      Transcript.B = rec$Transcript.B,
+      Peptides.A = rec$Peptides.A,
+      Peptides.B = rec$Peptides.B,
+      LogRatio.Cond1 = rec$LogRatio.Cond1,
+      LogRatio.Cond2 = rec$LogRatio.Cond2,
+      Delta.LogRatio = ratio.tbl[id, "logFC"],
+      Ratio.Pvalue = ratio.tbl[id, "P.Value"],
+      Ratio.FDR = ratio.tbl[id, "adj.P.Val"],
+      Total.LogFC = total.fc,
+      Total.Pvalue = total.p,
       stringsAsFactors = FALSE
     )
+  }))
+
+  results <- results[!is.na(results$Ratio.Pvalue), , drop = FALSE]
+  if (nrow(results) == 0)
+    return(fail("Proteoform ratio model produced no valid p-values."))
+
+  omnibus.p <- tapply(results$Omnibus.Pvalue, results$Isoform.Group, function(x) {
+    x <- x[is.finite(x)]
+    if (length(x) == 0) NA_real_ else x[1]
   })
+  omnibus.fdr <- setNames(rep(NA_real_, length(omnibus.p)), names(omnibus.p))
+  valid.omnibus <- is.finite(omnibus.p)
+  if (any(valid.omnibus)) {
+    omnibus.fdr[valid.omnibus] <- p.adjust(omnibus.p[valid.omnibus], method = "BH")
+  }
+  results$Omnibus.FDR <- unname(omnibus.fdr[results$Isoform.Group])
 
-  results <- do.call(rbind, Filter(Negate(is.null), results.list))
-  if (is.null(results) || nrow(results) == 0)
-    return(fail("Insufficient data per condition for proteoform analysis (need >=2 non-NA values per group)."))
-
-  results$Ratio.FDR <- signif(p.adjust(results$Ratio.Pvalue, method = "BH"), 3)
-  results$Is.Switch <- results$Ratio.FDR < 0.05 &
-                       results$Peptides.A >= 2 & results$Peptides.B >= 2 &
+  results$Is.Switch <- !is.na(results$Omnibus.FDR) &
+                       results$Omnibus.FDR < 0.05 &
+                       !is.na(results$Ratio.FDR) &
+                       results$Ratio.FDR < 0.05 &
+                       results$Peptides.A >= min.peptides.per.isoform &
+                       results$Peptides.B >= min.peptides.per.isoform &
                        (is.na(results$Total.Pvalue) | results$Total.Pvalue > 0.1)
-  results <- results[order(results$Ratio.Pvalue), ]
+  results <- results[order(results$Omnibus.Pvalue, results$Ratio.Pvalue, na.last = TRUE), ]
+
+  results$Omnibus.F <- round(results$Omnibus.F, 3)
+  results$Omnibus.Pvalue <- signif(results$Omnibus.Pvalue, 3)
+  results$Omnibus.FDR <- signif(results$Omnibus.FDR, 3)
+  results$LogRatio.Cond1 <- round(results$LogRatio.Cond1, 3)
+  results$LogRatio.Cond2 <- round(results$LogRatio.Cond2, 3)
+  results$Delta.LogRatio <- round(results$Delta.LogRatio, 3)
+  results$Ratio.Pvalue <- signif(results$Ratio.Pvalue, 3)
+  results$Ratio.FDR <- signif(results$Ratio.FDR, 3)
+  results$Total.LogFC <- round(results$Total.LogFC, 3)
+  results$Total.Pvalue <- signif(results$Total.Pvalue, 3)
+
+  result.cols <- c("Gene", "Comparison", "Isoform.Group", "Isoform.Count",
+                   "Omnibus.F", "Omnibus.Pvalue", "Omnibus.FDR",
+                   "Proteoform.A", "Transcript.A", "Proteoform.B", "Transcript.B",
+                   "Peptides.A", "Peptides.B", "LogRatio.Cond1", "LogRatio.Cond2",
+                   "Delta.LogRatio", "Ratio.Pvalue", "Ratio.FDR",
+                   "Total.LogFC", "Total.Pvalue", "Is.Switch")
+  results <- results[, result.cols[result.cols %in% names(results)], drop = FALSE]
 
   ov_qs_save(results, "proteoform_analysis_results.qs")
-  fast.write(results, "proteoform_analysis_results.csv")
+  ov_qs_save(list(mode = ctx$mode, contrast = ctx$contrast.name, samples = ctx$samples),
+             "proteoform_analysis_context.qs")
+  fast.write(results, "proteoform_analysis_results.csv", row.names = FALSE)
 
   msgSet$current.msg <- paste0(
-    "Detected ", nrow(results), " proteoform pair(s) with proteotypic peptide coverage."
+    "Detected ", nrow(results), " isoform pair(s) across ",
+    length(unique(results$Isoform.Group)), " gene/protein group(s) with >= ",
+    min.peptides.per.isoform, " proteotypic peptides per isoform. ANOVA tests gene-level isoform usage; pairwise contrasts are post-hoc. Design: ",
+    ctx$mode, " (", ctx$contrast.name, ")."
   )
   saveSet(msgSet, "msgSet")
   return(as.integer(nrow(results)))
@@ -2874,106 +3275,387 @@ DetectProteoformAnalysis <- function(dataName) {
 
 PlotProteoformIntensityProfile <- function(dataName, imageName, isoA, isoB,
                                         format = "png", dpi = 96, paletteOpt = "default",
-                                        plotType = "violin") {
+                                        plotType = "boxplot") {
   require(ggplot2)
+  require(Cairo)
+  require(grid)
 
   dataSet  <- readDataset(dataName)
   prot.map <- if (ov_qs_exists("peptide_to_protein_map.qs")) ov_qs_read("peptide_to_protein_map.qs") else NULL
   pep.qs   <- if (ov_qs_exists("peptide_level_data.qs")) "peptide_level_data.qs" else "data.stat.qs"
   if (!file.exists(pep.qs) || is.null(prot.map)) return(invisible(0))
+  if (!ov_qs_exists("diann_metadata.qs")) return(invisible(0))
 
   pep.mat <- ov_qs_read(pep.qs)
   pmat.ids <- rownames(pep.mat)
+  meta <- ov_qs_read("diann_metadata.qs")
 
-  # Use the same derivation as DetectIsoformSwitching: clean.prot from prot.map,
-  # restrict to rows that are actually in the peptide matrix.
-  # This guarantees we find precursors for isoA/isoB even when non-proteotypic
-  # precursors were filtered out of the matrix by the proteotypic filter.
-  map.in.mat <- prot.map[prot.map$Peptide %in% pmat.ids & !is.na(prot.map$Protein), ]
+  prep <- .proteoform_prepare_precursors(meta, prot.map, pmat.ids)
+  if (!is.null(prep$error)) return(invisible(0))
+  prec.df <- prep$prec.df
 
-  peps.A <- map.in.mat$Peptide[map.in.mat$Protein == isoA]
-  peps.B <- map.in.mat$Peptide[map.in.mat$Protein == isoB]
+  ctx <- .proteoform_build_context(dataSet, pep.mat)
+  if (!is.null(ctx$error)) return(invisible(0))
 
+  grp.idx <- which(prec.df$clean.prot %in% c(isoA, isoB))
+  if (length(grp.idx) == 0) return(invisible(0))
+  grp <- prec.df$group.key[grp.idx[1]]
+
+  peps.A <- prec.df$Protein.IDs[prec.df$group.key == grp & prec.df$clean.prot == isoA]
+  peps.B <- prec.df$Protein.IDs[prec.df$group.key == grp & prec.df$clean.prot == isoB]
+  peps.all <- prec.df$Protein.IDs[prec.df$group.key == grp]
   if (length(peps.A) == 0 && length(peps.B) == 0) return(invisible(0))
 
-  # Condition vector
-  if (!is.null(dataSet$disc.inx)) {
-    disc.inx  <- dataSet$disc.inx
-    meta.info <- if (is.data.frame(dataSet$meta.info)) dataSet$meta.info else dataSet$meta.info$meta.info
-  } else {
-    meta.info <- dataSet$meta.info$meta.info
-    disc.inx  <- dataSet$meta.info$disc.inx
-  }
-  cond.col <- names(which(disc.inx))[1]
-  groups   <- as.character(meta.info[[cond.col]])
-  names(groups) <- rownames(meta.info)
-  samples  <- intersect(colnames(pep.mat), names(groups))
+  samples <- ctx$samples
+  plot.group <- ctx$plot.group[samples]
+  if (all(is.na(plot.group))) plot.group <- factor(samples, levels = samples)
+  plot.group <- factor(as.character(plot.group), levels = unique(as.character(plot.group)))
 
-  # Average precursor intensities per sample for each isoform
-  avg_isoform <- function(peps) {
+  avg_signal <- function(peps) {
     peps <- intersect(peps, pmat.ids)
     if (length(peps) == 0) return(NULL)
     mat <- pep.mat[peps, samples, drop = FALSE]
     if (length(peps) == 1) as.numeric(mat) else colMeans(mat, na.rm = TRUE)
   }
 
-  # Build long-format data frame — keep NaN rows so both isoform facets always appear
-  make_rows <- function(abd, iso_label) {
+  abd.A <- avg_signal(peps.A)
+  abd.B <- avg_signal(peps.B)
+  abd.total <- avg_signal(peps.all)
+  if (is.null(abd.A) || is.null(abd.B) || is.null(abd.total)) return(invisible(0))
+  log.ratio <- abd.A - abd.B
+
+  trunc_label <- function(x, n = 26) ifelse(nchar(x) > n, paste0(substr(x, 1, n), "..."), x)
+
+  make_rows <- function(abd, label, panel) {
     if (is.null(abd)) return(NULL)
     abd <- as.numeric(abd)
     data.frame(
       Sample    = samples,
-      Condition = groups[samples],
-      Isoform   = iso_label,
-      Intensity = abd,
+      Condition = plot.group,
+      Feature   = label,
+      Panel     = panel,
+      Value     = abd,
       stringsAsFactors = FALSE
     )
   }
 
-  df <- rbind(make_rows(avg_isoform(peps.A), isoA),
-              make_rows(avg_isoform(peps.B), isoB))
-  if (is.null(df) || nrow(df) == 0) return(invisible(0))
+  df.intensity <- rbind(make_rows(abd.A, paste0("A: ", trunc_label(isoA, 20)), "Proteoform A/B intensity"),
+                        make_rows(abd.B, paste0("B: ", trunc_label(isoB, 20)), "Proteoform A/B intensity"))
+  df.ratio <- make_rows(log.ratio, "A - B score", "Proteoform A - B")
+  df.total <- make_rows(abd.total, "Aggregate signal", "Aggregate signal")
+  if (is.null(df.intensity) || is.null(df.ratio) || is.null(df.total)) return(invisible(0))
 
-  # Facet labels: truncate long protein IDs
-  trunc_label <- function(x, n = 18) ifelse(nchar(x) > n, paste0(substr(x, 1, n), "…"), x)
-  df$IsoformLabel <- trunc_label(df$Isoform)
-  # Preserve facet order: isoA first, isoB second
-  df$IsoformLabel <- factor(df$IsoformLabel,
-                            levels = unique(trunc_label(c(isoA, isoB))))
+  clean_plot_df <- function(df) {
+    df <- df[is.finite(df$Value) & !is.na(df$Condition), , drop = FALSE]
+    df$Condition <- factor(as.character(df$Condition), levels = levels(plot.group))
+    df
+  }
+  df.intensity <- clean_plot_df(df.intensity)
+  df.ratio <- clean_plot_df(df.ratio)
+  df.total <- clean_plot_df(df.total)
+  if (nrow(df.intensity) == 0 || nrow(df.ratio) == 0 || nrow(df.total) == 0) return(invisible(0))
+  df.intensity$Feature <- factor(df.intensity$Feature, levels = unique(df.intensity$Feature))
 
-  col <- GetGroupPalette(df$Condition, paletteOpt)
-
-  plotType <- tolower(trimws(plotType))
-  if (!(plotType %in% c("violin", "boxplot"))) plotType <- "violin"
-  use.violin <- plotType == "violin"
-
-  plot.geom <- if (use.violin) {
-    geom_violin(trim = FALSE, aes(color = Condition), show.legend = FALSE)
-  } else {
-    geom_boxplot(aes(color = Condition), outlier.shape = NA, width = 0.5, show.legend = FALSE)
+  abundance.ylim <- range(c(df.intensity$Value, df.total$Value), na.rm = TRUE)
+  if (!all(is.finite(abundance.ylim))) abundance.ylim <- NULL
+  if (!is.null(abundance.ylim)) {
+    pad <- diff(abundance.ylim) * 0.06
+    if (!is.finite(pad) || pad == 0) pad <- max(0.5, abs(abundance.ylim[1]) * 0.05)
+    abundance.ylim <- abundance.ylim + c(-pad, pad)
   }
 
-  myplot <- ggplot(df, aes(x = Condition, y = Intensity, fill = Condition)) +
-    plot.geom +
-    geom_jitter(width = 0.08, height = 0, size = 2, na.rm = TRUE, show.legend = FALSE) +
+  group.cols <- GetGroupPalette(plot.group, paletteOpt)
+
+  plotType <- tolower(trimws(plotType))
+  if (!(plotType %in% c("violin", "boxplot"))) plotType <- "boxplot"
+  use.violin <- plotType == "violin"
+
+  p1.geom <- if (use.violin) {
+    geom_violin(trim = FALSE, position = position_dodge(width = 0.72),
+                aes(color = Condition), show.legend = TRUE)
+  } else {
+    geom_boxplot(position = position_dodge(width = 0.72), outlier.shape = NA,
+                 width = 0.58, aes(color = Condition), show.legend = TRUE)
+  }
+
+  n.feat.p1 <- length(levels(df.intensity$Feature))
+  band.df.p1 <- data.frame(
+    xmin = c(-Inf, seq_len(n.feat.p1 - 1) + 0.5),
+    xmax = c(seq_len(n.feat.p1 - 1) + 0.5, Inf),
+    ymin = -Inf, ymax = Inf,
+    Fill = rep(c("#d9d9d9", "#ececec"), length.out = n.feat.p1),
+    stringsAsFactors = FALSE
+  )
+
+  p1 <- ggplot(df.intensity, aes(x = Feature, y = Value, fill = Condition)) +
+    geom_rect(data = band.df.p1,
+              aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+              inherit.aes = FALSE, fill = band.df.p1$Fill, alpha = 0.7) +
+    p1.geom +
+    geom_point(position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.72),
+               color = "black", size = 1.25, alpha = 0.65, na.rm = TRUE, show.legend = FALSE) +
     stat_summary(fun = mean, colour = "yellow", geom = "point",
-                 shape = 18, size = 3, na.rm = TRUE, show.legend = FALSE) +
-    scale_fill_manual(values = col) +
-    scale_color_manual(values = col) +
-    facet_wrap(~ IsoformLabel, ncol = 2) +
-    theme_bw(base_size = 10) +
-    theme(axis.title.x   = element_blank(),
-          legend.position = "none",
-          panel.grid      = element_blank(),
-          strip.text      = element_text(size = 8),
-          plot.title      = element_text(size = 11, hjust = 0.5)) +
-    ylab("Log2 Intensity") +
-    ggtitle(paste0(trunc_label(isoA, 25), " vs ", trunc_label(isoB, 25)))
+                 shape = 18, size = 2.4, na.rm = TRUE, show.legend = FALSE,
+                 position = position_dodge(width = 0.72)) +
+    scale_fill_manual(values = group.cols) +
+    scale_color_manual(values = group.cols) +
+    theme_gray(base_size = 10) +
+    theme(axis.title.x = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 8),
+          axis.ticks.x = element_line(colour = "#555555"),
+          legend.position = "right",
+          legend.title = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.grid.major.y = element_line(color = "white", linewidth = 0.35),
+          panel.background = element_rect(fill = "#e5e5e5", color = NA),
+          plot.background = element_rect(fill = "white", color = NA),
+          plot.title = element_blank()) +
+    ylab("Normalized abundance")
+  if (!is.null(abundance.ylim)) {
+    p1 <- p1 + coord_cartesian(ylim = abundance.ylim)
+  }
+
+  make_group_plot <- function(df, ylab, title, ylims = NULL) {
+    plot.geom <- if (use.violin) {
+      geom_violin(trim = FALSE, aes(color = Condition), show.legend = FALSE)
+    } else {
+      geom_boxplot(aes(color = Condition), outlier.shape = NA, width = 0.55, show.legend = FALSE)
+    }
+    plot <- ggplot(df, aes(x = Condition, y = Value, fill = Condition)) +
+      plot.geom +
+      geom_jitter(width = 0.08, height = 0, color = "black", size = 1.25,
+                  alpha = 0.65, na.rm = TRUE, show.legend = FALSE) +
+      stat_summary(fun = mean, colour = "yellow", geom = "point",
+                   shape = 18, size = 2.4, na.rm = TRUE, show.legend = FALSE) +
+      scale_fill_manual(values = group.cols) +
+      scale_color_manual(values = group.cols) +
+      theme_gray(base_size = 10) +
+      theme(axis.title.x = element_blank(),
+            axis.text.x = element_text(size = 8),
+            axis.ticks.x = element_line(colour = "#555555"),
+            legend.position = "none",
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor = element_blank(),
+            panel.grid.major.y = element_line(color = "white", linewidth = 0.35),
+            panel.background = element_rect(fill = "#e5e5e5", color = NA),
+            plot.background = element_rect(fill = "white", color = NA),
+            plot.title = element_text(size = 10, hjust = 0.5, color = "#444444")) +
+      ylab(ylab) +
+      ggtitle(title)
+    if (!is.null(ylims)) plot <- plot + coord_cartesian(ylim = ylims)
+    plot
+  }
+
+  extract_legend <- function(plot) {
+    grob <- ggplotGrob(plot + theme(legend.position = "right"))
+    idx <- which(vapply(grob$grobs, function(x) x$name, character(1)) == "guide-box")
+    if (length(idx) == 0) return(NULL)
+    grob$grobs[[idx[1]]]
+  }
+
+  legend.grob <- extract_legend(p1)
+  p1 <- p1 + theme(legend.position = "none")
+  p2 <- make_group_plot(df.ratio, "A - B abundance score", "Proteoform A - B")
+  p3 <- make_group_plot(df.total, "Normalized abundance", "Aggregate signal", abundance.ylim)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = 7, height = 4.5, unit = "in",
+  Cairo(file = imgName, width = 12.8, height = 5.2, unit = "in",
         dpi = dpi, bg = "white", type = format)
-  invisible(print(myplot))
+  grid.newpage()
+  pushViewport(viewport(layout = grid.layout(1, 4, widths = unit(c(1.35, 1, 1, 0.45), "null"))))
+  print(p1, vp = viewport(layout.pos.row = 1, layout.pos.col = 1))
+  print(p2, vp = viewport(layout.pos.row = 1, layout.pos.col = 2))
+  print(p3, vp = viewport(layout.pos.row = 1, layout.pos.col = 3))
+  if (!is.null(legend.grob)) {
+    grid.draw(editGrob(legend.grob, vp = viewport(layout.pos.row = 1, layout.pos.col = 4)))
+  }
+  invisible(dev.off())
+  return(invisible(1))
+}
+
+PlotProteoformOverview <- function(dataName, isoformGroup, imageName,
+                                   format = "png", dpi = 96, paletteOpt = "default",
+                                   plotType = "boxplot") {
+  require(ggplot2)
+  require(Cairo)
+  require(grid)
+
+  dataSet  <- readDataset(dataName)
+  prot.map <- if (ov_qs_exists("peptide_to_protein_map.qs")) ov_qs_read("peptide_to_protein_map.qs") else NULL
+  pep.qs   <- if (ov_qs_exists("peptide_level_data.qs")) "peptide_level_data.qs" else "data.stat.qs"
+  if (!file.exists(pep.qs) || is.null(prot.map)) return(invisible(0))
+  if (!ov_qs_exists("diann_metadata.qs")) return(invisible(0))
+
+  pep.mat  <- ov_qs_read(pep.qs)
+  pmat.ids <- rownames(pep.mat)
+  meta     <- ov_qs_read("diann_metadata.qs")
+
+  prep <- .proteoform_prepare_precursors(meta, prot.map, pmat.ids)
+  if (!is.null(prep$error)) return(invisible(0))
+  prec.df <- prep$prec.df
+
+  ctx <- .proteoform_build_context(dataSet, pep.mat)
+  if (!is.null(ctx$error)) return(invisible(0))
+
+  grp.inx <- prec.df$group.key == isoformGroup
+  if (!any(grp.inx)) return(invisible(0))
+  isoforms <- unique(prec.df$clean.prot[grp.inx])
+
+  samples    <- ctx$samples
+  plot.group <- ctx$plot.group[samples]
+  if (all(is.na(plot.group))) plot.group <- factor(samples, levels = samples)
+  plot.group <- factor(as.character(plot.group), levels = unique(as.character(plot.group)))
+
+  avg_signal <- function(peps) {
+    peps <- intersect(peps, pmat.ids)
+    if (length(peps) == 0) return(NULL)
+    mat <- pep.mat[peps, samples, drop = FALSE]
+    if (length(peps) == 1) as.numeric(mat) else colMeans(mat, na.rm = TRUE)
+  }
+
+  trunc_label <- function(x, n = 24) ifelse(nchar(x) > n, paste0(substr(x, 1, n), "..."), x)
+
+  df.list <- lapply(isoforms, function(iso) {
+    peps <- prec.df$Protein.IDs[prec.df$group.key == isoformGroup & prec.df$clean.prot == iso]
+    abd  <- avg_signal(peps)
+    if (is.null(abd)) return(NULL)
+    data.frame(Sample = samples, Condition = plot.group, Isoform = trunc_label(iso),
+               Value = as.numeric(abd), stringsAsFactors = FALSE)
+  })
+  df.intensity <- do.call(rbind, Filter(Negate(is.null), df.list))
+  if (is.null(df.intensity) || nrow(df.intensity) == 0) return(invisible(0))
+  df.intensity <- df.intensity[is.finite(df.intensity$Value) & !is.na(df.intensity$Condition), ]
+  if (nrow(df.intensity) == 0) return(invisible(0))
+  df.intensity$Condition <- factor(as.character(df.intensity$Condition), levels = levels(plot.group))
+  df.intensity$Isoform   <- factor(df.intensity$Isoform, levels = unique(df.intensity$Isoform))
+
+  peps.all  <- prec.df$Protein.IDs[prec.df$group.key == isoformGroup]
+  abd.total <- avg_signal(peps.all)
+  df.total  <- if (!is.null(abd.total)) {
+    df <- data.frame(Sample = samples, Condition = plot.group,
+                     Value = as.numeric(abd.total), stringsAsFactors = FALSE)
+    df <- df[is.finite(df$Value) & !is.na(df$Condition), ]
+    df$Condition <- factor(as.character(df$Condition), levels = levels(plot.group))
+    df
+  } else NULL
+
+  ylim.all <- range(c(df.intensity$Value, if (!is.null(df.total)) df.total$Value else NULL), na.rm = TRUE)
+  if (all(is.finite(ylim.all))) {
+    pad <- diff(ylim.all) * 0.06
+    if (!is.finite(pad) || pad == 0) pad <- max(0.5, abs(ylim.all[1]) * 0.05)
+    ylim.all <- ylim.all + c(-pad, pad)
+  } else ylim.all <- NULL
+
+  group.cols <- GetGroupPalette(plot.group, paletteOpt)
+  plotType   <- tolower(trimws(plotType))
+  if (!(plotType %in% c("violin", "boxplot"))) plotType <- "boxplot"
+  use.violin <- plotType == "violin"
+  n.iso      <- nlevels(df.intensity$Isoform)
+
+  make_multi_geom <- function(show.legend = TRUE) {
+    if (use.violin)
+      geom_violin(trim = FALSE, position = position_dodge(width = 0.72),
+                  aes(color = Condition), show.legend = show.legend)
+    else
+      geom_boxplot(position = position_dodge(width = 0.72), outlier.shape = NA,
+                   width = 0.58, aes(color = Condition), show.legend = show.legend)
+  }
+
+  n.feat.ov <- nlevels(df.intensity$Isoform)
+  band.df.ov <- data.frame(
+    xmin = c(-Inf, seq_len(n.feat.ov - 1) + 0.5),
+    xmax = c(seq_len(n.feat.ov - 1) + 0.5, Inf),
+    ymin = -Inf, ymax = Inf,
+    Fill = rep(c("#d9d9d9", "#ececec"), length.out = n.feat.ov),
+    stringsAsFactors = FALSE
+  )
+
+  p1 <- ggplot(df.intensity, aes(x = Isoform, y = Value, fill = Condition)) +
+    geom_rect(data = band.df.ov,
+              aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+              inherit.aes = FALSE, fill = band.df.ov$Fill, alpha = 0.7) +
+    make_multi_geom(show.legend = FALSE) +
+    geom_point(position = position_jitterdodge(jitter.width = 0.08, dodge.width = 0.72),
+               color = "black", size = 1.25, alpha = 0.65, na.rm = TRUE, show.legend = FALSE) +
+    stat_summary(fun = mean, colour = "yellow", geom = "point",
+                 shape = 18, size = 2.4, na.rm = TRUE, show.legend = FALSE,
+                 position = position_dodge(width = 0.72)) +
+    scale_fill_manual(values = group.cols) +
+    scale_color_manual(values = group.cols) +
+    theme_gray(base_size = 10) +
+    theme(axis.title.x = element_blank(),
+          axis.text.x  = element_text(size = 8, angle = 45, hjust = 1, vjust = 1),
+          axis.ticks.x = element_line(colour = "#555555"),
+          legend.position = "none",
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.grid.major.y = element_line(color = "white", linewidth = 0.35),
+          panel.background = element_rect(fill = "#e5e5e5", color = NA),
+          plot.background = element_rect(fill = "white", color = NA),
+          plot.title = element_blank()) +
+    ylab("Normalized abundance")
+  if (!is.null(ylim.all)) p1 <- p1 + coord_cartesian(ylim = ylim.all)
+
+  extract_legend <- function(plot) {
+    grob <- ggplotGrob(plot + theme(legend.position = "right", legend.title = element_blank()))
+    idx  <- which(vapply(grob$grobs, function(x) x$name, character(1)) == "guide-box")
+    if (length(idx) == 0) return(NULL)
+    grob$grobs[[idx[1]]]
+  }
+  p1_leg <- ggplot(df.intensity, aes(x = Isoform, y = Value, fill = Condition)) +
+    make_multi_geom(show.legend = TRUE) +
+    scale_fill_manual(values = group.cols) + scale_color_manual(values = group.cols) +
+    theme_gray(base_size = 10) + theme(legend.title = element_blank())
+  legend.grob <- extract_legend(p1_leg)
+
+  panels <- list(p1)
+  widths  <- c(max(1, n.iso))
+
+  if (!is.null(df.total) && nrow(df.total) > 0) {
+    make_single_geom <- function() {
+      if (use.violin) geom_violin(trim = FALSE, aes(color = Condition), show.legend = FALSE)
+      else geom_boxplot(aes(color = Condition), outlier.shape = NA, width = 0.55, show.legend = FALSE)
+    }
+    p2 <- ggplot(df.total, aes(x = Condition, y = Value, fill = Condition)) +
+      make_single_geom() +
+      geom_jitter(width = 0.08, height = 0, color = "black", size = 1.25, alpha = 0.65,
+                  na.rm = TRUE, show.legend = FALSE) +
+      stat_summary(fun = mean, colour = "yellow", geom = "point",
+                   shape = 18, size = 2.4, na.rm = TRUE, show.legend = FALSE) +
+      scale_fill_manual(values = group.cols) + scale_color_manual(values = group.cols) +
+      theme_gray(base_size = 10) +
+      theme(axis.title.x = element_blank(),
+            axis.text.x = element_text(size = 8),
+            axis.ticks.x = element_line(colour = "#555555"),
+            legend.position = "none",
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor = element_blank(),
+            panel.grid.major.y = element_line(color = "white", linewidth = 0.35),
+            panel.background = element_rect(fill = "#e5e5e5", color = NA),
+            plot.background = element_rect(fill = "white", color = NA),
+            plot.title = element_text(size = 10, hjust = 0.5, color = "#444444")) +
+      ylab("Normalized abundance") +
+      ggtitle("Aggregate signal")
+    if (!is.null(ylim.all)) p2 <- p2 + coord_cartesian(ylim = ylim.all)
+    panels <- c(panels, list(p2))
+    widths  <- c(widths, 1)
+  }
+  widths <- c(widths, 0.45)
+
+  img.width <- max(8, 2.5 * n.iso + 2.5)
+  imgName   <- paste0(imageName, "dpi", dpi, ".", format)
+  Cairo(file = imgName, width = img.width, height = 5.2, unit = "in",
+        dpi = dpi, bg = "white", type = format)
+  grid.newpage()
+  n.cols <- length(panels) + 1L
+  pushViewport(viewport(layout = grid.layout(1, n.cols, widths = unit(widths, "null"))))
+  for (i in seq_along(panels)) {
+    print(panels[[i]], vp = viewport(layout.pos.row = 1, layout.pos.col = i))
+  }
+  if (!is.null(legend.grob)) {
+    grid.draw(editGrob(legend.grob, vp = viewport(layout.pos.row = 1, layout.pos.col = n.cols)))
+  }
   invisible(dev.off())
   return(invisible(1))
 }
@@ -3000,6 +3682,67 @@ ptm.format.mod.name <- function(unimods) {
 ptm.extract.bio.mods <- function(seq) {
   all.mods <- regmatches(seq, gregexpr("UniMod:[0-9]+", seq, perl = TRUE))[[1]]
   setdiff(all.mods, PTM_FIXED_MODS)
+}
+
+.ptmAnnotateOccupancyCompartments <- function(results, org, lib.path) {
+  if (is.null(results) || nrow(results) == 0 || !"Gene" %in% names(results)) return(results)
+
+  results$Parent.Compartment <- "Unknown"
+  results$Parent.All.Compartments <- "Unknown"
+  results$Landscape.Group <- "Unknown"
+
+  entrez.db <- try(queryGeneDB("entrez", org), silent = TRUE)
+  if (inherits(entrez.db, "try-error") || is.null(entrez.db) ||
+      !all(c("gene_id", "symbol") %in% colnames(entrez.db))) {
+    return(results)
+  }
+  entrez.db[] <- lapply(entrez.db, as.character)
+  sym.to.entrez <- setNames(as.character(entrez.db$gene_id), toupper(as.character(entrez.db$symbol)))
+
+  genes <- as.character(results$Gene)
+  gene.entrez <- vector("list", length(genes))
+  for (i in seq_along(genes)) {
+    gene.tokens <- unlist(strsplit(genes[i], "[;, ]+", perl = TRUE), use.names = FALSE)
+    gene.tokens <- gene.tokens[nzchar(gene.tokens)]
+    gene.entrez[[i]] <- unique(na.omit(sym.to.entrez[toupper(gene.tokens)]))
+  }
+
+  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
+  if (!file.exists(loc.path)) loc.path <- paste0(lib.path, org, "/localization.qs")
+  if (!file.exists(loc.path)) {
+    results$Landscape.Group <- results$Parent.Compartment
+    return(results)
+  }
+
+  loc <- try(ov_qs_read(loc.path), silent = TRUE)
+  if (inherits(loc, "try-error") || is.null(loc) ||
+      !all(c("EntrezID", "Broad.category") %in% colnames(loc))) {
+    results$Landscape.Group <- results$Parent.Compartment
+    return(results)
+  }
+  if (!"Main.location" %in% colnames(loc)) loc$Main.location <- "Unknown"
+  primary <- rep("Unknown", length(genes))
+  all.comp <- rep("Unknown", length(genes))
+  loc.entrez <- as.character(loc$EntrezID)
+
+  for (i in seq_along(genes)) {
+    entrez.ids <- gene.entrez[[i]]
+    if (length(entrez.ids) == 0) next
+
+    loc.rows <- loc[loc.entrez %in% entrez.ids, , drop = FALSE]
+    if (nrow(loc.rows) == 0) next
+
+    broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
+    main <- paste(unique(as.character(loc.rows$Main.location)), collapse = "; ")
+    resolved <- .paPrimaryCompartment(broad, main)
+    primary[i] <- resolved$primary
+    all.comp[i] <- resolved$all_categories
+  }
+
+  results$Parent.Compartment <- primary
+  results$Parent.All.Compartments <- all.comp
+  results$Landscape.Group <- primary
+  results
 }
 
 # For each gene with peptides detected in both modified and unmodified forms,
@@ -3169,6 +3912,7 @@ DetectPTMOccupancy <- function(dataName) {
         Delta.Occupancy  = round(mean(valid.g2) - mean(valid.g1), 3),
         Occ.Pvalue       = signif(tt.occ$p.value, 3),
         Total.Pvalue     = if (!is.null(tt.total)) signif(tt.total$p.value, 3) else NA_real_,
+        Total.LogFC      = round(mean(total.log[g2.idx]) - mean(total.log[g1.idx]), 3),
         stringsAsFactors = FALSE
       )
     })
@@ -3184,6 +3928,10 @@ DetectPTMOccupancy <- function(dataName) {
 
   results$Occ.FDR <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
   results <- results[order(results$Occ.Pvalue), ]
+  results$Cond1.Label <- unique.groups[1]
+  results$Cond2.Label <- unique.groups[2]
+  paramSet <- readSet(paramSet, "paramSet")
+  results <- .ptmAnnotateOccupancyCompartments(results, paramSet$data.org, paramSet$lib.path)
 
   message("[PTMOccupancy] Final results: ", nrow(results), " pairs")
   ov_qs_save(results, "ptm_occupancy_results.qs")
@@ -3267,21 +4015,25 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
   mod.label <- ptm.format.mod.name(strsplit(modSig, "+", fixed = TRUE)[[1]])
   trunc.seq <- if (nchar(peptide) > 28) paste0(substr(peptide, 1, 28), "…") else peptide
 
+  df$Condition <- factor(df$Condition, levels = names(col))
+
   myplot <- ggplot(df, aes(x = Condition, y = Occupancy, fill = Condition)) +
-    geom_boxplot(aes(color = Condition), outlier.shape = NA, show.legend = FALSE) +
-    geom_jitter(width = 0.05, height = 0, show.legend = FALSE) +
-    stat_summary(fun = mean, colour = "yellow", geom = "point",
-                 shape = 18, size = 3, show.legend = FALSE) +
-    scale_fill_manual(values = col) +
-    scale_color_manual(values = col) +
-    scale_y_continuous(limits = c(0, 1),
-                       labels = function(x) paste0(round(x * 100), "%")) +
+    geom_boxplot(outlier.shape = NA, width = 0.5, alpha = 0.8) +
+    geom_jitter(width = 0.15, size = 1.5, alpha = 0.7, color = "#555555") +
+    scale_fill_manual(values = col, guide = "none") +
+    scale_y_continuous(
+      limits = c(0, 1), expand = expansion(mult = c(0.02, 0.05)),
+      labels = function(x) paste0(round(x * 100), "%")
+    ) +
     theme_bw(base_size = 10) +
-    theme(axis.title.x   = element_blank(),
-          legend.position = "none",
-          panel.grid      = element_blank(),
-          plot.title      = element_text(size = 11, hjust = 0.5),
-          plot.subtitle   = element_text(size = 9,  hjust = 0.5, color = "#666666")) +
+    theme(
+      axis.title.x     = element_blank(),
+      axis.text.x      = element_text(size = 9),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor   = element_blank(),
+      plot.title       = element_text(size = 11, hjust = 0.5),
+      plot.subtitle    = element_text(size = 9,  hjust = 0.5, color = "#666666")
+    ) +
     ylab("Modification Occupancy") +
     ggtitle(trunc.seq, subtitle = mod.label)
 
@@ -3290,6 +4042,92 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
   invisible(print(myplot))
   invisible(dev.off())
   return(invisible(1))
+}
+
+PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
+  require(ggplot2)
+
+  res <- ov_qs_read("ptm_occupancy_results.qs")
+  if (is.null(res) || nrow(res) == 0) return(invisible(0))
+
+  cond1.lbl <- if ("Cond1.Label" %in% names(res)) res$Cond1.Label[1] else "Cond1"
+  cond2.lbl <- if ("Cond2.Label" %in% names(res)) res$Cond2.Label[1] else "Cond2"
+
+  # Per-modification summary for ordering and significance
+  mods <- unique(res$Modification)
+  summary_df <- do.call(rbind, lapply(mods, function(mod) {
+    sub <- res[res$Modification == mod, , drop = FALSE]
+    data.frame(
+      Modification = mod,
+      Tested       = nrow(sub),
+      Median.Occ   = median(c(as.numeric(sub$Occupancy.Cond1),
+                               as.numeric(sub$Occupancy.Cond2)), na.rm = TRUE),
+      Best.FDR     = min(as.numeric(sub$Occ.FDR), na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+  }))
+  summary_df <- summary_df[order(summary_df$Median.Occ), ]
+  summary_df$Label <- paste0(summary_df$Modification, "  (n=", summary_df$Tested, ")")
+  summary_df$Asterisk <- ifelse(summary_df$Best.FDR <= 0.01, "**",
+                         ifelse(summary_df$Best.FDR <= 0.05, "*", ""))
+
+  # Long form: one row per feature per condition
+  df_long <- rbind(
+    data.frame(Modification = res$Modification,
+               Occupancy    = as.numeric(res$Occupancy.Cond1),
+               Condition    = cond1.lbl,
+               stringsAsFactors = FALSE),
+    data.frame(Modification = res$Modification,
+               Occupancy    = as.numeric(res$Occupancy.Cond2),
+               Condition    = cond2.lbl,
+               stringsAsFactors = FALSE)
+  )
+  df_long <- df_long[!is.na(df_long$Occupancy), ]
+  df_long$Label     <- summary_df$Label[match(df_long$Modification, summary_df$Modification)]
+  df_long$Label     <- factor(df_long$Label, levels = summary_df$Label)
+  df_long$Condition <- factor(df_long$Condition, levels = c(cond1.lbl, cond2.lbl))
+
+  cond_colors <- c(setNames("#3182bd", cond1.lbl), setNames("#e6550d", cond2.lbl))
+
+  # Significance annotation: place at top of y scale per modification
+  sig_df <- summary_df[summary_df$Asterisk != "", , drop = FALSE]
+  sig_df$Label <- factor(sig_df$Label, levels = summary_df$Label)
+
+  p <- ggplot(df_long, aes(x = Label, y = Occupancy, fill = Condition)) +
+    geom_violin(position = position_dodge(0.8), width = 0.7,
+                scale = "width", alpha = 0.75, trim = TRUE) +
+    stat_summary(aes(group = Condition),
+                 fun = median, geom = "point", shape = 18, size = 2.5,
+                 position = position_dodge(0.8), color = "white") +
+    geom_text(data = sig_df,
+              aes(x = Label, y = 1.02, label = Asterisk),
+              inherit.aes = FALSE,
+              size = 4, color = "#c0392b", fontface = "bold", vjust = 0) +
+    scale_fill_manual(values = cond_colors, name = "Condition") +
+    scale_y_continuous(labels = function(x) sprintf("%.0f%%", x * 100),
+                       limits = c(0, 1.08), expand = c(0, 0)) +
+    coord_flip() +
+    labs(x = NULL, y = "Occupancy",
+         caption = "◆ median   * FDR ≤ 0.05   ** FDR ≤ 0.01") +
+    theme_bw(base_size = 10) +
+    theme(
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      axis.text.y        = element_text(size = 9),
+      plot.caption       = element_text(size = 8, color = "#666666", hjust = 0),
+      legend.position    = "right",
+      legend.title       = element_text(size = 9),
+      legend.text        = element_text(size = 8)
+    )
+
+  imgNm <- paste0(imageName, "dpi", dpi, ".", format)
+  h <- max(3, nrow(summary_df) * 1.1 + 1.5)
+  require(Cairo)
+  Cairo(file = imgNm, width = 6.5, height = h, unit = "in", dpi = dpi, bg = "white",
+        type = if (format == "pdf") "pdf" else "png")
+  print(p)
+  dev.off()
+  return(imgNm)
 }
 
 PrepPTMOccupancyVolcano <- function(dataName, fileNm) {

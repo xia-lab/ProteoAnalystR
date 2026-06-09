@@ -32,9 +32,22 @@
   return(uniprot.ids)
 }
 
+.isEntrezLikeForPhosphoEnrichment <- function(ids) {
+  ids <- trimws(as.character(ids))
+  ids <- ids[!is.na(ids) & nzchar(ids)]
+  length(ids) > 0 && mean(grepl("^[0-9]+$", ids)) >= 0.8
+}
+
 .mapUniprotToEntrezForEnrichment <- function(uniprot.ids, paramSet) {
   org <- paramSet$data.org
   normalized.ids <- trimws(as.character(uniprot.ids))
+
+  if (.isEntrezLikeForPhosphoEnrichment(normalized.ids)) {
+    entrez.ids <- normalized.ids
+    names(entrez.ids) <- names(uniprot.ids)
+    return(entrez.ids)
+  }
+
   db.map <- queryGeneDB("entrez_uniprot", org)
 
   if (is.null(db.map) || !is.data.frame(db.map) || nrow(db.map) == 0 ||
@@ -62,17 +75,24 @@
 #' @param paramSet Parameter set containing organism info
 #' @return List with entrez IDs and mapping from entrez to original phosphosites
 .collapsePhosphositesToGenes <- function(phosphosite.ids, paramSet) {
-  org <- paramSet$data.org
+  uniprot.ids <- NULL
 
-  # Strip to UniProt IDs
-  uniprot.ids <- .stripPhosphositeToUniprot(phosphosite.ids)
+  if (.isEntrezLikeForPhosphoEnrichment(phosphosite.ids)) {
+    entrez.ids <- trimws(as.character(phosphosite.ids))
+    mapped.inx <- !is.na(entrez.ids) & nzchar(entrez.ids)
+    cat(sprintf("[Phospho Enrichment] Input IDs are already Entrez-like; preserving %d/%d entries\n",
+                sum(mapped.inx), length(entrez.ids)))
+  } else {
+    # Strip to UniProt IDs
+    uniprot.ids <- .stripPhosphositeToUniprot(phosphosite.ids)
 
-  # Convert UniProt to Entrez using existing mapping
-  entrez.ids <- .mapUniprotToEntrezForEnrichment(uniprot.ids, paramSet)
+    # Convert UniProt to Entrez using existing mapping
+    entrez.ids <- .mapUniprotToEntrezForEnrichment(uniprot.ids, paramSet)
 
-  mapped.inx <- !is.na(entrez.ids) & nzchar(as.character(entrez.ids))
-  cat(sprintf("[Phospho Enrichment] UniProt->Entrez mapped %d/%d phosphosite entries (%.1f%%)\n",
-              sum(mapped.inx), length(entrez.ids), 100 * sum(mapped.inx) / max(1, length(entrez.ids))))
+    mapped.inx <- !is.na(entrez.ids) & nzchar(as.character(entrez.ids))
+    cat(sprintf("[Phospho Enrichment] UniProt->Entrez mapped %d/%d phosphosite entries (%.1f%%)\n",
+                sum(mapped.inx), length(entrez.ids), 100 * sum(mapped.inx) / max(1, length(entrez.ids))))
+  }
 
 
   # Build gene-level representation from existing mappings
@@ -94,7 +114,7 @@
     entrez.ids = unique.entrez,
     phospho.to.entrez = phospho.to.entrez,
     entrez.to.phospho = entrez.to.phospho,
-    uniprot.ids = uniprot.ids,
+    uniprot.ids = if (is.null(uniprot.ids)) entrez.ids else uniprot.ids,
     mapped.inx = mapped.inx
   ))
 }
@@ -106,6 +126,10 @@
 #' @return Character vector of gene symbols
 doEntrez2SymbolMappingPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
   if (.isPhosphoData()) {
+    if (.isEntrezLikeForPhosphoEnrichment(id.vec)) {
+      return(doEntrez2SymbolMapping(id.vec, data.org, "entrez"))
+    }
+
     # For phospho data, strip to UniProt, convert to Entrez, then to Symbol
     paramSet <- readSet(paramSet, "paramSet")
     uniprot.ids <- .stripPhosphositeToUniprot(id.vec)
@@ -133,6 +157,10 @@ doEntrez2SymbolMappingPhospho <- function(id.vec, data.org = "NA", data.idType =
 #' @return Data frame with gene_id, symbol, name
 doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
   if (.isPhosphoData()) {
+    if (.isEntrezLikeForPhosphoEnrichment(id.vec)) {
+      return(doEntrezIDAnot(id.vec, data.org, "entrez"))
+    }
+
     # For phospho data, strip to UniProt, convert to Entrez, then annotate
     paramSet <- readSet(paramSet, "paramSet")
     uniprot.ids <- .stripPhosphositeToUniprot(id.vec)
@@ -395,9 +423,9 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
 
     imp.inx <- res.mat[, 4] <= 0.05
     imp.inx[is.na(imp.inx)] <- F
-    if (sum(imp.inx) < 10) {
+    if (sum(imp.inx) < 20) {
       # too little left, give the top ones
-      topn <- ifelse(nrow(res.mat) > 10, 10, nrow(res.mat))
+      topn <- ifelse(nrow(res.mat) > 20, 20, nrow(res.mat))
       res.mat <- res.mat[1:topn, ]
       hits.query <- hits.query[1:topn]
     } else {

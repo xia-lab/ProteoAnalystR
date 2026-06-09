@@ -78,7 +78,7 @@ MapListIds <- function(listNm, geneIDs, org, idType){
     
     # Prepare dataSet for the current list
     prot.mat <- prot.mat[rownames(prot.mat) %in% mapped$orig, , drop = F];
-    rownames(prot.mat) <- mapped$gene_id[rownames(prot.mat) %in% mapped$orig]
+    rownames(prot.mat) <- mapped$gene_id[match(rownames(prot.mat), mapped$orig)]
     res <- RemoveDuplicates(prot.mat, "mean", quiet = T, paramSet, msgSet);
     prot.mat <- res[[1]];
     msgSet <- res[[2]];
@@ -184,12 +184,14 @@ MapMultiListIds <- function(listNm, org, geneIDs, type){
   listNms <- multiFileNamesU; # Assigned from Java
   paramSet$numOfLists <- length(listNms);
   all.mapping <- list(); # Collect all mapping results
+  all.prot.mat <- vector("list", length(listNms)); # Accumulate per-list prot.mat
+  list.num.vec <- numeric(length(listNms));
   for(i in seq_along(listNms)){
     dataSet <- readDataset(listNms[i]);
     dataSet$name <- listNms[i];
     gene.mat <- prot.mat <- dataSet$prot.mat;
     GeneAnotDB <- .doGeneIDMapping(rownames(gene.mat), type, paramSet, "table", F);
-    
+
     # Identify unmapped IDs
     na.inx <- is.na(GeneAnotDB[,1]) | is.na(GeneAnotDB[,2]);
     unmapped <- rownames(gene.mat)[na.inx]; # Unmapped IDs
@@ -201,7 +203,7 @@ MapMultiListIds <- function(listNm, org, geneIDs, type){
     }
     rownames(prot.mat) <- GeneAnotDB[,2];
     prot.mat <- prot.mat[!na.inx, , drop=F];
-    
+
     # Merge duplicates
     res <- RemoveDuplicates(prot.mat, "mean", quiet=F, paramSet, msgSet);
     prot.mat <- res[[1]];
@@ -217,20 +219,24 @@ MapMultiListIds <- function(listNm, org, geneIDs, type){
         unmapped.df <- data.frame(accession = unmapped, gene_id = rep("NA", n_unmapped), symbol = rep("NA", n_unmapped), stringsAsFactors = F);
         combined.mapping <- rbind(mapped, unmapped.df);
     } else {
-        #unmapped.df <- data.frame(accession = character(0), gene_id = character(0),symbol=character(0), stringsAsFactors = F);
         combined.mapping <- mapped;
     }
 
     all.mapping[[i]] <- combined.mapping; # Store the combined mapping
+    all.prot.mat[[i]] <- prot.mat;       # Accumulate for expression mapping
 
     # Prepare dataSet
     seed.proteins <- rownames(prot.mat);
+    list.num.vec[i] <- length(seed.proteins);
     dataSet$GeneAnotDB <- GeneAnotDB;
     dataSet$sig.mat <- gene.mat;
     dataSet$prot.mat <- prot.mat;
     dataSet$seeds.proteins <- seed.proteins;
-    RegisterData(dataSet); 
+    RegisterData(dataSet);
   }
+
+  list.num <- paste(list.num.vec, collapse = "; ");
+  all.prot.mat <- do.call(rbind, all.prot.mat);
 
   # Merge all mapping results into one data frame
   merged.mapping <- do.call(rbind, all.mapping);
@@ -260,6 +266,9 @@ MapMultiListIds <- function(listNm, org, geneIDs, type){
 
   # Update paramSet
   paramSet$all.ent.mat <- all.prot.mat;
+  cat(sprintf("[MapMultiListIds] saving all.ent.mat: %d rows, sample rownames: %s, sample values: %s\n",
+              nrow(all.prot.mat), paste(head(rownames(all.prot.mat), 3), collapse=","),
+              paste(head(suppressWarnings(as.numeric(all.prot.mat[,1])), 3), collapse=",")))
   rownames(all.prot.mat) <- doEntrez2SymbolMapping(rownames(all.prot.mat), paramSet$data.org, paramSet$data.idType);
   all.prot.mat <- data.frame(as.numeric(all.prot.mat[,1]), rownames(all.prot.mat));
   paramSet$all.prot.mat <- all.prot.mat;

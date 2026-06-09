@@ -119,64 +119,138 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
   idx <- unlist(sapply(V(bg)$name, function(x) which(x == id)));
   cols <- color_scale("red", "#E5C494");
   
-  V(bg)$color[V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(-log(pvalue), "black", F, F);
-  V(bg)$colorw[V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(-log(pvalue), "white", F, F);
+  # Reorder pvalue to match the vertex order in bg (graph_from_data_frame may not preserve enr.mat order)
+  pathway.nms.in.bg <- V(bg)$name[V(bg)$name %in% rownames(enr.mat)]
+  pvalue.ordered <- pvalue[pathway.nms.in.bg]
+  V(bg)$color[V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(-log(pvalue.ordered), "black", F, F);
+  V(bg)$colorw[V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(-log(pvalue.ordered), "white", F, F);
   node.nms <- V(bg)$name;
 
-  # convert.uniprot.to.symbols() lives at the top level of enrich_utils.R now —
-  # heatmap viewer + ridgeline reuse the same mapping.
+  # Build feature-ID → gene-symbol map once here; reused by Strategy 4 and proteinlist export.
+  # names(initsbls) = feature IDs (phosphosite IDs for phospho data, UniProt for regular),
+  # values = gene symbols. This mirrors what JS builds as symbol2entrez.
+  initsbls <- convert.uniprot.to.symbols(analSet$list.features, paramSet$data.org)
+  names(initsbls) <- analSet$list.features
 
   # Initialize expvals as empty named vector (will be populated in conditionals below)
   expvals <- setNames(rep(0, length(node.nms)), node.nms)
 
   if(anal.type == "onedata"){
     tbl <- dataSet$comp.res
-    # Gene node names in bg are UniProt IDs (or Entrez IDs from enrichment conversion)
-    # Match directly using rownames(tbl) against V(bg)$name
     gene.node.nms <- V(bg)$name[!V(bg)$name %in% rownames(enr.mat)]
+    cat(sprintf("[EnrichNet] onedata: %d gene nodes, %d comp.res rows\n",
+                length(gene.node.nms), nrow(tbl)))
+    if(length(gene.node.nms) > 0 && nrow(tbl) > 0) {
+      cat(sprintf("[EnrichNet] gene node sample: %s\n", paste(head(gene.node.nms, 3), collapse=", ")))
+      cat(sprintf("[EnrichNet] comp.res rowname sample: %s\n", paste(head(rownames(tbl), 3), collapse=", ")))
+    }
 
-    # Try direct match first (rownames are UniProt IDs matching node names)
+    strategy4.done <- FALSE
+
+    # Strategy 1: direct match (works when node IDs and comp.res rownames share the same space)
     keep.inx <- which(rownames(tbl) %in% gene.node.nms)
+    cat(sprintf("[EnrichNet] Strategy 1 matches: %d\n", length(keep.inx)))
 
+    # Strategy 2: strip phosphosite / isoform suffixes from both sides
     if(length(keep.inx) == 0) {
-      # Fallback: normalize both sides (remove phosphosite/isoform suffixes)
-      norm.tbl.ids <- sub("_[A-Z]_\\d+$", "", rownames(tbl))
-      norm.tbl.ids <- sub("-\\d+$", "", norm.tbl.ids)
-      norm.node.nms <- sub("_[A-Z]_\\d+$", "", gene.node.nms)
-      norm.node.nms <- sub("-\\d+$", "", norm.node.nms)
+      norm.tbl.ids  <- sub("-\\d+$", "", sub("_[A-Z]_\\d+$", "", rownames(tbl)))
+      norm.node.nms <- sub("-\\d+$", "", sub("_[A-Z]_\\d+$", "", gene.node.nms))
       keep.inx <- which(norm.tbl.ids %in% norm.node.nms)
+      cat(sprintf("[EnrichNet] Strategy 2 matches: %d\n", length(keep.inx)))
+    }
+
+    # Strategy 3: Entrez → UniProt lookup (handles typical enrichment-library ID conversion)
+    entrez.to.uniprot <- NULL
+    if(length(keep.inx) == 0) {
+      org <- paramSet$data.org
+      up.db <- try(queryGeneDB("entrez_uniprot", org), silent = TRUE)
+      if(!inherits(up.db, "try-error") && !is.null(up.db) && nrow(up.db) > 0) {
+        entrez.to.uniprot <- setNames(as.character(up.db$accession), as.character(up.db$gene_id))
+        node.as.uniprot <- entrez.to.uniprot[as.character(gene.node.nms)]
+        keep.inx <- which(rownames(tbl) %in% node.as.uniprot[!is.na(node.as.uniprot)])
+      }
+    }
+
+    # Strategy 4: gene nodes are gene symbols but comp.res rows are phosphosite IDs.
+    # Use initsbls (same map JS uses for symbol2entrez) to resolve feature ID → symbol,
+    # then pick the highest-|logFC| phosphosite per gene-node symbol.
+    if(length(keep.inx) == 0 && length(gene.node.nms) > 0 &&
+       !is.null(initsbls) && length(initsbls) > 0) {
+      feat.ids  <- names(initsbls)         # phosphosite IDs (or UniProt for regular data)
+      feat.syms <- unname(initsbls)        # gene symbols — same values JS puts in symbol2entrez
+      feat.syms[is.na(feat.syms)] <- ""
+      # Only use phosphosite entries whose symbols appear in the gene nodes
+      sym.match <- which(feat.syms %in% gene.node.nms)
+      cat(sprintf("[EnrichNet] Strategy 4 (list.features→symbol) matches: %d features → %d symbols\n",
+                  length(sym.match), length(unique(feat.syms[sym.match]))))
+      if(length(sym.match) > 0) {
+        matched.feat.ids <- feat.ids[sym.match]
+        matched.feat.syms <- feat.syms[sym.match]
+        # For each gene-node symbol, pull all matching phosphosites from comp.res
+        # and pick the one with largest |logFC|
+        comp.inx <- which(rownames(tbl) %in% matched.feat.ids)
+        if(length(comp.inx) > 0) {
+          tbl.sub4 <- tbl[comp.inx, , drop=FALSE]
+          fc.vals4 <- as.numeric(tbl.sub4[, paramSet$selectedFactorInx])
+          # Symbol for each row (via matched.feat.syms lookup)
+          row.syms <- feat.syms[match(rownames(tbl.sub4), feat.ids)]
+          row.syms[is.na(row.syms)] <- ""
+          valid <- row.syms %in% gene.node.nms
+          fc.vals4 <- fc.vals4[valid]
+          row.syms <- row.syms[valid]
+          if(length(fc.vals4) > 0) {
+            fc.by.sym <- tapply(fc.vals4, row.syms, function(x) x[which.max(abs(x))])
+            matched.syms <- names(fc.by.sym)[names(fc.by.sym) %in% gene.node.nms]
+            expvals[matched.syms] <- as.numeric(fc.by.sym[matched.syms])
+            cat(sprintf("[EnrichNet] Strategy 4 populated %d gene nodes with logFC\n",
+                        length(matched.syms)))
+            keep.inx <- comp.inx    # non-empty to trigger gradient path below
+            strategy4.done <- TRUE
+          }
+        }
+      }
     }
 
     if(length(keep.inx) > 0) {
-      tbl.sub <- tbl[keep.inx, , drop=FALSE]
-      expr.val <- as.numeric(tbl.sub[,paramSet$selectedFactorInx])
-      # Key by the matching node names (UniProt IDs)
-      matched.node.ids <- gene.node.nms[match(rownames(tbl.sub), gene.node.nms)]
-      if(all(is.na(matched.node.ids))) {
-        # Use normalized matching
-        norm.tbl.ids <- sub("_[A-Z]_\\d+$", "", rownames(tbl.sub))
-        norm.tbl.ids <- sub("-\\d+$", "", norm.tbl.ids)
-        norm.node.nms <- sub("_[A-Z]_\\d+$", "", gene.node.nms)
-        norm.node.nms <- sub("-\\d+$", "", norm.node.nms)
-        matched.node.ids <- gene.node.nms[match(norm.tbl.ids, norm.node.nms)]
-      }
-      names(expr.val) <- matched.node.ids
-      expr.val <- expr.val[!is.na(names(expr.val))]
-      # Merge into expvals (keyed by node names)
-      expvals[names(expr.val)] <- expr.val
+      if(!strategy4.done) {
+        # Strategies 1–3: use tbl.sub to populate expvals
+        tbl.sub <- tbl[keep.inx, , drop=FALSE]
+        expr.val <- as.numeric(tbl.sub[, paramSet$selectedFactorInx])
 
-      if(length(expr.val) > 0) {
-        # Color gene nodes by expression values (fold change)
-        gene.expvals <- expvals[gene.node.nms]
-        gene.expvals <- gene.expvals[!is.na(gene.expvals)]
-        V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
-        V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
+        if(!is.null(entrez.to.uniprot)) {
+          uniprot.to.entrez <- setNames(names(entrez.to.uniprot), entrez.to.uniprot)
+          matched.node.ids <- uniprot.to.entrez[rownames(tbl.sub)]
+        } else {
+          matched.node.ids <- gene.node.nms[match(rownames(tbl.sub), gene.node.nms)]
+          if(all(is.na(matched.node.ids))) {
+            norm.tbl.ids  <- sub("-\\d+$", "", sub("_[A-Z]_\\d+$", "", rownames(tbl.sub)))
+            norm.node.nms <- sub("-\\d+$", "", sub("_[A-Z]_\\d+$", "", gene.node.nms))
+            matched.node.ids <- gene.node.nms[match(norm.tbl.ids, norm.node.nms)]
+          }
+        }
+        names(expr.val) <- matched.node.ids
+        expr.val <- expr.val[!is.na(names(expr.val))]
+        expvals[names(expr.val)] <- expr.val
+        cat(sprintf("[EnrichNet] expr.val length: %d, range: [%.3f, %.3f]\n",
+                    length(expr.val), min(expr.val, na.rm=TRUE), max(expr.val, na.rm=TRUE)))
+      }
+
+      gene.expvals <- expvals[gene.node.nms]
+      gene.expvals <- gene.expvals[!is.na(gene.expvals)]
+      if(length(gene.expvals) > 0 && sum(gene.expvals != 0) > 0) {
+        gene.colors <- ComputeColorGradient(unname(gene.expvals), "black", T, T)
+        cat(sprintf("[EnrichNet] Assigning gradient colors to %d gene nodes (sample: %s)\n",
+                    length(gene.colors), paste(head(gene.colors, 3), collapse=", ")))
+        V(bg)$color[!V(bg)$name %in% rownames(enr.mat)]  <- gene.colors
+        V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "white", T, T)
       } else {
-        V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- "#00FFFF";
+        cat("[EnrichNet] expvals all zero — assigning cyan to gene nodes\n")
+        V(bg)$color[!V(bg)$name %in% rownames(enr.mat)]  <- "#00FFFF"
         V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- "#668B8B"
       }
     } else {
-      V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- "#00FFFF";
+      cat("[EnrichNet] No keep.inx match — assigning cyan to gene nodes\n")
+      V(bg)$color[!V(bg)$name %in% rownames(enr.mat)]  <- "#00FFFF"
       V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- "#668B8B"
     }
   }else if(anal.type == "proteinlist" && sum(as.numeric(paramSet$all.prot.mat[,1])) != 0){
@@ -205,7 +279,7 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
         gene.expvals <- expvals[gene.node.nms]
         gene.expvals <- gene.expvals[!is.na(gene.expvals)]
         V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
-        V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
+        V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "white", T, T);
       } else {
         V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- "#00FFFF";
         V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- "#668B8B"
@@ -246,7 +320,7 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
           gene.expvals <- expvals[gene.node.nms]
           gene.expvals <- gene.expvals[!is.na(gene.expvals)]
           V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
-          V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
+          V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "white", T, T);
         } else {
           V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- "#00FFFF";
           V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- "#668B8B"
@@ -286,7 +360,7 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
           gene.expvals <- gene.expvals[!is.na(gene.expvals)]
           inx <- !V(bg)$name %in% rownames(enr.mat);
           V(bg)$color[inx] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
-          V(bg)$colorw[inx] <- ComputeColorGradient(unname(gene.expvals), "black", T, T);
+          V(bg)$colorw[inx] <- ComputeColorGradient(unname(gene.expvals), "white", T, T);
         } else {
           V(bg)$color[!V(bg)$name %in% rownames(enr.mat)] <- "#00FFFF";
           V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- "#668B8B"
@@ -358,6 +432,8 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
     gene.symbols <- character(0)
   }
 
+  gene.broad.category <- rep("Unknown", length(node.nms))
+
   # Build node labels vector
   node.lbls <- character(length(node.nms))
   node.lbls[pathway.inx] <- node.nms[pathway.inx]  # Pathways keep their names
@@ -365,13 +441,14 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
   for(i in 1:length(node.sizes)){
     bnodes[[i]] <- list(
       id = node.nms[i],
-      label=node.lbls[i], 
-      size=node.sizes[i], 
+      label=node.lbls[i],
+      size=node.sizes[i],
       colorb=node.cols[i],
       colorw=node.colsw[i],
-      true_size=node.sizes[i], 
+      true_size=node.sizes[i],
       molType=shapes[i],
       exp= unname(expvals[node.nms[i]]),
+      broad_category = gene.broad.category[i],
       posx = pos.xy[i,1],
       posy = pos.xy[i,2]
     );
@@ -384,9 +461,7 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
   
   bedge.mat <- as_edgelist(bg);
   bedge.mat <- cbind(id=paste0("b", 1:nrow(bedge.mat)), source=bedge.mat[,1], target=bedge.mat[,2]);
-  # analSet$list.features contains gene IDs (Entrez or UniProt), convert to symbols
-  initsbls <- convert.uniprot.to.symbols(analSet$list.features, paramSet$data.org)
-  names(initsbls) <- analSet$list.features
+  # initsbls was already computed above and reused by Strategy 4
   
   #for rjson generation
   edge.mat <- apply(edge.mat, 1, as.list)

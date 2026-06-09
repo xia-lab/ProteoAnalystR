@@ -13,6 +13,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   msgSet <- readSet(msgSet, "msgSet");
   analSet <- readSet(analSet, "analSet");
   imageName <- paste0(imgNm, "dpi" , dpi, ".", format);
+  jsonNm <- paste0(imgNm, ".json");
   anal.type <- paramSet$anal.type;
   require("dplyr");
   require("fgsea");
@@ -211,7 +212,13 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     sym.vec <- doEntrez2SymbolMapping(entrez.vec, paramSet$data.org, "entrez")
     names(rankedVec) <- sym.vec
     # Remove NAs
-    rankedVec <- rankedVec[!is.na(names(rankedVec))]
+    rankedVec <- rankedVec[!is.na(names(rankedVec)) & nzchar(names(rankedVec))]
+    # Deduplicate: multiple isoforms/UniProt IDs can map to the same symbol;
+    # keep the entry with the largest absolute value (strongest signal)
+    if (any(duplicated(names(rankedVec)))) {
+      rankedVec <- rankedVec[order(-abs(rankedVec))]
+      rankedVec <- rankedVec[!duplicated(names(rankedVec))]
+    }
 
 
     if(fun.type %in% c("go_bp", "go_mf", "go_cc")){
@@ -246,6 +253,14 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       res.sig <- res.sig[1:pwNum, ]
     }
   }
+
+  ridge.pathway.compartments <- .getRidgePathwayCompartments(
+    pathways = as.character(resTable$pathway),
+    fun.type = fun.type,
+    current.featureset = current.featureset,
+    current.setids = setres$current.setids,
+    paramSet = paramSet
+  )
   # Get hits per pathway early (needed for gs.plot creation)
   # For ORA, use the saved hits.query from enrichment analysis (contains UniProt IDs)
   # For GSEA, compute from current.featureset and convert to UniProt
@@ -305,48 +320,59 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   }
 
 
-  # For protein lists, sigmat rownames may be Entrez (older pipeline) or
-  # already UniProt (current upstream writes UniProt directly to dataSet$prot.mat).
-  # hits.query always uses UniProt IDs, so degs.plot needs UniProt for the merge
-  # at line ~390 to find any matches.
-  #
-  # Detect the current format and convert only if the IDs look numeric (Entrez).
-  # Skipping this check caused every UniProt-rowname deploy to zero-out
-  # degs.plot (keys don't match an Entrez→UniProt lookup, all NAs, all dropped).
-  if(anal.type == "proteinlist" && paramSet$data.idType == "uniprot") {
-    sample_ids <- as.character(head(degs.plot$entrez, 20))
-    already_uniprot <- any(nzchar(sample_ids) & !grepl("^[0-9]+$", sample_ids))
-    if(already_uniprot) {
-      msg("[Ridgeline] degs.plot IDs already look like UniProt; skipping Entrez→UniProt conversion")
-    } else {
-      symbol.map <- readSet(symbol.map, "symbol.map")
-      if("uniprot" %in% colnames(symbol.map)) {
-        # Create Entrez -> UniProt mapping
-        entrez.to.uniprot <- setNames(symbol.map$uniprot, as.character(symbol.map$gene_id))
-        # Convert degs.plot$entrez from Entrez to UniProt
-        degs.plot$entrez <- entrez.to.uniprot[as.character(degs.plot$entrez)]
-        # Remove NAs (genes that couldn't be mapped back)
-        degs.plot <- degs.plot[!is.na(degs.plot$entrez), ]
-        msg("[Ridgeline] Converted degs.plot IDs from Entrez to UniProt for matching")
-        msg("[Ridgeline] After conversion - degs.plot has ", nrow(degs.plot), " rows")
-        msg("[Ridgeline] After conversion - degs.plot$entrez (first 5): ", paste(head(degs.plot$entrez, 5), collapse=", "))
-      } else {
-        msg("[Ridgeline] WARNING: symbol.map does not have uniprot column, cannot convert IDs")
-      }
+  # Build a separate Entrez-based merge key. The saved hits_query.qs is a
+  # display list of gene symbols, so it must not be used as the merge key.
+  degs.plot$merge_id <- as.character(degs.plot$entrez);
+  sample_ids <- degs.plot$merge_id[!is.na(degs.plot$merge_id) & nzchar(degs.plot$merge_id)];
+  sample_ids <- head(sample_ids, 20);
+  degs_are_entrez <- length(sample_ids) > 0 && mean(grepl("^[0-9]+$", sample_ids)) >= 0.8;
+
+  if (!is_phospho && !degs_are_entrez) {
+    normalized.ids <- sub("_[A-Z]_\\d+$", "", degs.plot$merge_id);
+    normalized.ids <- sub("-\\d+$", "", normalized.ids);
+    uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org);
+    hit.inx <- match(normalized.ids, uniprot.map[, "accession"]);
+    degs.plot$merge_id <- as.character(uniprot.map[hit.inx, "gene_id"]);
+    degs.plot <- degs.plot[!is.na(degs.plot$merge_id), ];
+    msg("[Ridgeline] Converted degs.plot IDs to Entrez merge IDs")
+  } else if (!is_phospho) {
+    msg("[Ridgeline] degs.plot IDs look like Entrez; using them directly for merge")
+  }
+
+  if (ridgeType == "ora" && !is_phospho) {
+    hits.merge <- lapply(current.featureset, function(x) {
+      ids <- as.character(x);
+      ids[ids %in% degs.plot$merge_id];
+    });
+    hits.merge <- hits.merge[resTable$pathway];
+    gs.plot <- reshape::melt(hits.merge);
+    colnames(gs.plot) <- c("merge_id", "name");
+  } else {
+    gs.plot <- reshape::melt(hits.query);
+    colnames(gs.plot) <- c("merge_id", "name");
+  }
+
+  if (!is_phospho) {
+    gs.sample.ids <- as.character(gs.plot$merge_id);
+    gs.sample.ids <- gs.sample.ids[!is.na(gs.sample.ids) & nzchar(gs.sample.ids)];
+    gs.sample.ids <- head(gs.sample.ids, 20);
+    gs.are.entrez <- length(gs.sample.ids) > 0 && mean(grepl("^[0-9]+$", gs.sample.ids)) >= 0.8;
+    if (!gs.are.entrez) {
+      normalized.gs.ids <- sub("_[A-Z]_\\d+$", "", as.character(gs.plot$merge_id));
+      normalized.gs.ids <- sub("-\\d+$", "", normalized.gs.ids);
+      uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org);
+      hit.inx <- match(normalized.gs.ids, uniprot.map[, "accession"]);
+      gs.plot$merge_id <- as.character(uniprot.map[hit.inx, "gene_id"]);
+      gs.plot <- gs.plot[!is.na(gs.plot$merge_id), ];
     }
   }
 
-  # Use hits.query (which has UniProt IDs for both ORA and GSEA) instead of current.featureset (which has Entrez IDs)
-  # This ensures gs.plot matches with degs.plot
-  gs.plot <- reshape::melt(hits.query);
-  colnames(gs.plot) <- c("entrez", "name");
-
-  # For phospho data in ORA mode, gs.plot$entrez contains phosphosite IDs
+  # For phospho data in ORA mode, gs.plot$merge_id contains phosphosite IDs
   # Need to convert to Entrez IDs to match degs.plot
   if (is_phospho && ridgeType == "ora") {
 
     # Strip phosphosite IDs to UniProt IDs and remove isoforms
-    uniprot_ids <- sapply(strsplit(as.character(gs.plot$entrez), "_"), function(x) x[1])
+    uniprot_ids <- sapply(strsplit(as.character(gs.plot$merge_id), "_"), function(x) x[1])
     uniprot_ids <- sub("-\\d+$", "", uniprot_ids)
 
     # Convert UniProt to Entrez
@@ -355,15 +381,34 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     entrez.ids <- uniprot.map[hit.inx, "gene_id"]
 
     # Update gs.plot with Entrez IDs
-    gs.plot$entrez <- as.character(entrez.ids)
+    gs.plot$merge_id <- as.character(entrez.ids)
 
     # Remove rows with NA Entrez IDs
-    gs.plot <- gs.plot[!is.na(gs.plot$entrez), ]
+    gs.plot <- gs.plot[!is.na(gs.plot$merge_id), ]
 
   }
 
+  # For phospho data in GSEA mode, gs.plot$merge_id has UniProt IDs (converted from Entrez
+  # at lines 283-288), but degs.plot$merge_id has Entrez IDs (from phospho.mapping) or
+  # phosphosite IDs (else branch). Align them.
+  if (is_phospho && ridgeType == "gsea") {
+    if (!is.null(paramSet$phospho.mapping)) {
+      # degs.plot$merge_id = Entrez IDs; convert gs.plot UniProt → Entrez to match
+      uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
+      gs.uniprot <- sub("-\\d+$", "", as.character(gs.plot$merge_id))
+      hit.inx <- match(gs.uniprot, uniprot.map[, "accession"])
+      gs.plot$merge_id <- as.character(uniprot.map[hit.inx, "gene_id"])
+      gs.plot <- gs.plot[!is.na(gs.plot$merge_id), ]
+    } else {
+      # degs.plot$merge_id = phosphosite IDs; normalize to plain UniProt IDs to match gs.plot
+      degs.plot$merge_id <- sub("_[A-Z]_\\d+$", "", degs.plot$merge_id)
+      degs.plot$merge_id <- sub("-\\d+$", "", degs.plot$merge_id)
+      gs.plot$merge_id <- sub("-\\d+$", "", as.character(gs.plot$merge_id))
+    }
+  }
+
   df <- merge(res.sig, gs.plot, by = "name", all.x = TRUE, all.y = FALSE);
-  df <- merge(df, degs.plot, by = "entrez", all.x = TRUE, all.y = FALSE);
+  df <- merge(df, degs.plot, by = "merge_id", all.x = TRUE, all.y = FALSE);
   df <- na.omit(df)
 
   if(nrow(df) > 0) {
@@ -374,6 +419,9 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     msgSet <- readSet(msgSet, "msgSet");
     msgSet$current.msg <- "No data available for ridgeline plot. Enrichment results may not have overlapping genes with expression data.";
     saveSet(msgSet, "msgSet");
+    if(file.exists(jsonNm)) {
+      unlink(jsonNm);
+    }
     return(0);
   }
 
@@ -402,43 +450,68 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
           axis.text.x = element_text(color = "black"),
           axis.text.y = element_text(size=12,color = "black"))
   
+  msg("[Ridge] printing plot")
   Cairo::Cairo(file=imageName, width=10, height=8, type=format, bg="white", dpi=dpi, unit="in");
   print(rp);
   dev.off();
-  
+  msg("[Ridge] plot done")
+
   ##interative ridge json data
   ridge_bw <- rp$layers[[1]]$computed_stat_params$bandwidth;
-  jsonNm <- paste0(imgNm, ".json");
+  msg("[Ridge] ridge_bw=", if(is.null(ridge_bw)) "NULL" else as.character(ridge_bw))
 
-  # Map IDs to symbols. df$entrez carries UniProt accessions for proteomics
-  # (already-converted upstream). convert.uniprot.to.symbols handles both the
-  # numeric-Entrez case AND UniProts with phosphosite (`_S_123`) / isoform
-  # (`-2`) suffixes that the plain doEntrez2SymbolMapping(..., "uniprot") call
-  # would otherwise miss. Keep the original ID when the lookup misses.
-  symb <- convert.uniprot.to.symbols(df$entrez, paramSet$data.org);
+  # Map IDs to symbols. Prefer Entrez merge IDs where available, while keeping
+  # the original UniProt/phosphosite fallback for legacy rows.
+  msg("[Ridge] df cols=", paste(colnames(df), collapse=","), " nrow=", nrow(df))
+  msg("[Ridge] df$merge_id sample=", paste(head(as.character(df$merge_id), 5), collapse=","))
+  if(all(grepl("^[0-9]+$", as.character(df$merge_id)))) {
+    msg("[Ridge] symbol mapping via Entrez")
+    symb <- doEntrez2SymbolMapping(as.character(df$merge_id), paramSet$data.org, "entrez");
+  } else {
+    msg("[Ridge] symbol mapping via UniProt")
+    symb <- convert.uniprot.to.symbols(df$entrez, paramSet$data.org);
+  }
   symb[is.na(symb)] <- df$entrez[is.na(symb)];
   df$symbol <- symb;
-  
+  msg("[Ridge] symbols done; NA count=", sum(is.na(symb)))
+
+  # Add compartment annotation per gene-pathway row
+  msg("[Ridge] computing compartments")
+  df$compartment <- .getRidgeCompartments(df$merge_id, paramSet)
+  df$pathway_compartment <- unname(ridge.pathway.compartments$primary[as.character(df$name)])
+  df$pathway_compartment[is.na(df$pathway_compartment) | !nzchar(df$pathway_compartment)] <- "Unknown"
+  msg("[Ridge] compartments done")
+
   data.list <- list();
   gene.list <- list();
   pval.list <- list();
   col.list <- list();
-  
+  pathway.compartment.list <- list();
+  pathway.compartment.tooltip.list <- list();
+
+  msg("[Ridge] building per-pathway lists; n levels=", length(levels(df$name)))
   for(i in 1:length(levels(df$name))){
     nm <- as.character(levels(df$name)[i]);
     data.list[[ nm ]] <- as.vector(unlist(df[which(df$name == nm), "value"]));
     gene.list[[ nm ]] <- as.vector(unlist(df[which(df$name == nm), "symbol"]));
     pval.list[[ nm ]] <- unname(unlist(res[which(res$name == nm), "pval"]));
+    pathway.compartment.list[[ nm ]] <- unname(ridge.pathway.compartments$primary[nm]);
+    pathway.compartment.tooltip.list[[ nm ]] <- unname(ridge.pathway.compartments$tooltip[nm]);
   }
-
+  msg("[Ridge] per-pathway lists done")
 
   minFc <- min(df$value);
   maxFc <- max(df$value);
   minPval <- min(df$pval);
   maxPval <- max(df$pval);
+  msg("[Ridge] minFc=", minFc, " maxFc=", maxFc, " minPval=", minPval, " maxPval=", maxPval)
 
   # enr result for table display (hits.query already assigned earlier)
-  fun.anot <- hits.query
+  msg("[Ridge] building enr.res; ridgeType=", ridgeType)
+  msg("[Ridge] resTable class=", class(resTable)[1], " ncol=", ncol(resTable), " nrow=", nrow(resTable))
+  msg("[Ridge] resTable colnames=", paste(colnames(resTable), collapse=","))
+  fun.anot <- if(ridgeType == "ora" && exists("saved.hits.query")) saved.hits.query[resTable$pathway] else hits.query
+  msg("[Ridge] fun.anot length=", length(fun.anot))
   if(ridgeType == "ora"){
     total <- resTable[,5]; if(length(total) ==1) { total <- matrix(total) };
     fun.pval <- resTable[,"pval"]; if(length(fun.pval) ==1) { fun.pval <- matrix(fun.pval) };
@@ -447,7 +520,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       hit.num <- resTable[,4]; if(length(hit.num) ==1) { hit.num <- matrix(hit.num) };
     }else{
       hit.num <- resTable[,"size"]; if(length(hit.num) ==1) { hit.num <- matrix(hit.num) };
-    }  
+    }
   }else{
     total <- as.list(resTable[,5])[[1]]; if(length(total) ==1) { total <- matrix(total) };
     fun.pval <- as.list(resTable[,"pval"])[[1]]; if(length(fun.pval) ==1) { fun.pval <- matrix(fun.pval) };
@@ -456,11 +529,15 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       hit.num <- as.list(resTable[,4])[[1]]; if(length(hit.num) ==1) { hit.num <- matrix(hit.num) };
     }else{
       hit.num <- as.list(resTable[,"size"])[[1]]; if(length(hit.num) ==1) { hit.num <- matrix(hit.num) };
-    }  
-    
+    }
+
   }
+  msg("[Ridge] fun.pval class=", class(fun.pval), " length=", length(fun.pval))
+  msg("[Ridge] fun.padj class=", class(fun.padj), " length=", length(fun.padj))
+  msg("[Ridge] hit.num class=", class(hit.num), " length=", length(hit.num))
 
   # Get pathway IDs - handle NULL cases
+  msg("[Ridge] building fun.ids")
   if(!is.null(setres$current.setids) && length(names(fun.anot)) > 0) {
     fun.ids <- as.vector(setres$current.setids[names(fun.anot)]);
     # Replace NAs with empty strings
@@ -470,25 +547,41 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     fun.ids <- names(fun.anot)
   }
   if(length(fun.ids) ==1) { fun.ids <- matrix(fun.ids) };
+  msg("[Ridge] fun.ids length=", length(fun.ids))
 
-
+  msg("[Ridge] building enr.res list")
   enr.res <- list(
     fun.anot = fun.anot,
     fun.ids = fun.ids,
     fun.pval = fun.pval,
     fun.padj = fun.padj,
     hit.num = hit.num,
-    total= total
+    total= total,
+    pathway.compartments = unname(ridge.pathway.compartments$primary[as.character(resTable$pathway)]),
+    pathway.compartment.method = unname(ridge.pathway.compartments$method[as.character(resTable$pathway)]),
+    pathway.compartment.score = unname(ridge.pathway.compartments$score[as.character(resTable$pathway)])
   );
-  
+  msg("[Ridge] enr.res built")
+
   if(ridgeType == "gsea"){
+    msg("[Ridge] adding ES to enr.res")
     enr.res[["ES"]] <- unname(unlist(resTable[,"ES"]));
+    msg("[Ridge] ES added; length=", length(enr.res[["ES"]]))
   }
 
-
+  msg("[Ridge] building res.list")
+  msg("[Ridge] df subset cols check: name=", "name" %in% colnames(df),
+      " entrez=", "entrez" %in% colnames(df),
+      " merge_id=", "merge_id" %in% colnames(df),
+      " value=", "value" %in% colnames(df),
+      " pval=", "pval" %in% colnames(df),
+      " symbol=", "symbol" %in% colnames(df),
+      " compartment=", "compartment" %in% colnames(df),
+      " pathway_compartment=", "pathway_compartment" %in% colnames(df))
   res.list <- list(data=data.list,
                    proteinlist=gene.list,
-                   df=df, minPval=minPval,
+                   df=df[, c("name","entrez","merge_id","value","pval","symbol","compartment","pathway_compartment"), drop=FALSE],
+                   minPval=minPval,
                    maxPval=maxPval,
                    min=minFc,
                    max=maxFc,
@@ -497,24 +590,33 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
                    bandwidth=ridge_bw,
                    pathwayPvals = pval.list,
                    pathwayCols = col.list,
+                   pathwayCompartments = pathway.compartment.list,
+                   pathwayCompartmentTooltips = pathway.compartment.tooltip.list,
                    enrRes = enr.res,
                    dat.opt = paramSet$selDataNm,
                    naviString="ridge");
-
+  msg("[Ridge] res.list built")
 
   if(ridgeType == "gsea"){
-  csv.nm <- paste0(imgNm, ".csv");
-  fast.write(resTable, file=csv.nm);
+    msg("[Ridge] writing GSEA CSV; resTable leadingEdge class=", class(resTable$leadingEdge))
+    resTable_csv <- resTable[, setdiff(colnames(resTable), "leadingEdge"), drop=FALSE]
+    csv.nm <- paste0(imgNm, ".csv");
+    fast.write(resTable_csv, file=csv.nm);
+    msg("[Ridge] CSV written")
   }
 
+  msg("[Ridge] saving analSet")
   analSet$ridgeline <- res.list;
   saveSet(analSet, "analSet");
+  msg("[Ridge] analSet saved")
 
-
+  msg("[Ridge] converting to JSON")
   json.obj <- rjson::toJSON(res.list);
+  msg("[Ridge] JSON done; writing to", jsonNm)
   sink(jsonNm);
   cat(json.obj);
   sink();
+  msg("[Ridge] JSON written")
 
   
   #for link sharing
@@ -528,5 +630,115 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   imgSet$compute.ridgeline <- imageName;
     saveSet(imgSet, "imgSet");
   
-  return(totalSigPws)
+  # Return the number of displayed pathways so Java gets a positive value on success
+  # even when no pathways reach the significance threshold (totalSigPws == 0).
+  return(max(totalSigPws, nrow(res.sig)))
+}
+
+# Look up compartment for each gene in a ridgeline df.
+# merge_id is either all-numeric Entrez IDs or UniProt/phosphosite IDs.
+.getRidgeCompartments <- function(merge.ids, paramSet) {
+  n <- length(merge.ids)
+  comp.vec <- rep("Unknown", n)
+  org <- paramSet$data.org
+  if (is.null(org) || org == "omk" || org == "NA") return(comp.vec)
+
+  lib.path <- if (exists("api.lib.path")) api.lib.path else paramSet$lib.path
+  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
+  if (!file.exists(loc.path)) loc.path <- paste0(lib.path, org, "/localization.qs")
+  if (!file.exists(loc.path)) return(comp.vec)
+
+  loc.data <- try(ov_qs_read(loc.path), silent = TRUE)
+  if (inherits(loc.data, "try-error") || is.null(loc.data)) return(comp.vec)
+  if (!all(c("EntrezID", "Broad.category") %in% colnames(loc.data))) return(comp.vec)
+
+  ids <- as.character(merge.ids)
+  if (all(grepl("^[0-9]+$", ids))) {
+    # Already Entrez IDs
+    entrez.ids <- ids
+  } else {
+    # UniProt or phosphosite IDs — bridge via entrez_uniprot table
+    uniprot.db <- try(queryGeneDB("entrez_uniprot", org), silent = TRUE)
+    if (!inherits(uniprot.db, "try-error") && !is.null(uniprot.db) &&
+        "accession" %in% colnames(uniprot.db) && "gene_id" %in% colnames(uniprot.db)) {
+      up2entrez <- setNames(as.character(uniprot.db$gene_id), as.character(uniprot.db$accession))
+      clean.ids <- sub("_.*$", "", ids)
+      entrez.ids <- up2entrez[clean.ids]
+    } else {
+      return(comp.vec)
+    }
+  }
+
+  loc.entrez <- as.character(loc.data$EntrezID)
+  hits <- which(!is.na(entrez.ids) & entrez.ids %in% loc.entrez)
+  for (i in hits) {
+    loc.rows <- loc.data[loc.entrez == as.character(entrez.ids[i]), , drop = FALSE]
+    broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
+    main <- if ("Main.location" %in% colnames(loc.rows)) paste(unique(as.character(loc.rows$Main.location)), collapse = "; ") else NA_character_
+    comp.vec[i] <- .paPrimaryCompartment(broad, main)$primary
+  }
+  comp.vec
+}
+
+.getRidgePathwayCompartments <- function(pathways, fun.type, current.featureset, current.setids, paramSet) {
+  pathways <- as.character(pathways)
+  empty <- list(
+    primary = setNames(rep("Unknown", length(pathways)), pathways),
+    tooltip = setNames(rep("Compartment: Unknown", length(pathways)), pathways),
+    method = setNames(rep("inferred", length(pathways)), pathways),
+    score = setNames(rep(0, length(pathways)), pathways)
+  )
+  if (length(pathways) == 0 || is.null(current.featureset) || length(current.featureset) == 0) return(empty)
+
+  lib.path <- if (exists("api.lib.path")) api.lib.path else paramSet$lib.path
+  org <- paramSet$data.org
+  kegg.ids <- rep("", length(pathways))
+  if (!is.null(current.setids) && length(current.setids) > 0) {
+    kegg.ids <- as.vector(current.setids[pathways])
+    kegg.ids[is.na(kegg.ids)] <- ""
+  }
+
+  if (identical(fun.type, "kegg") && exists(".annotateKeggPathwayCompartments", mode = "function")) {
+    ann <- try(.annotateKeggPathwayCompartments(pathways, kegg.ids, current.featureset, org, lib.path), silent = TRUE)
+    if (!inherits(ann, "try-error") && !is.null(ann) && nrow(ann) == length(pathways)) {
+      primary <- setNames(as.character(ann$Primary.Compartment), pathways)
+      tooltip <- setNames(paste0(
+        "Compartment: ", ann$Primary.Compartment,
+        "; method: ", ann$Compartment.Method,
+        "; score: ", ann$Compartment.Score,
+        "; distribution: ", ann$Compartment.Distribution
+      ), pathways)
+      return(list(
+        primary = primary,
+        tooltip = tooltip,
+        method = setNames(as.character(ann$Compartment.Method), pathways),
+        score = setNames(as.numeric(ann$Compartment.Score), pathways)
+      ))
+    }
+  }
+
+  loc.data <- NULL
+  if (exists(".loadPathwayLocalization", mode = "function")) {
+    loc.data <- .loadPathwayLocalization(org, lib.path)
+  }
+  if (is.null(loc.data)) return(empty)
+
+  rows <- lapply(pathways, function(pw) {
+    genes <- if (pw %in% names(current.featureset)) current.featureset[[pw]] else character(0)
+    ann <- if (exists(".inferKeggPathwayCompartment", mode = "function")) {
+      .inferKeggPathwayCompartment(genes, loc.data)
+    } else {
+      list(primary = "Unknown", all = "Unknown", method = "inferred", score = 0, distribution = "Unknown")
+    }
+    ann
+  })
+  primary <- setNames(vapply(rows, `[[`, character(1), "primary"), pathways)
+  method <- setNames(vapply(rows, `[[`, character(1), "method"), pathways)
+  score <- setNames(vapply(rows, function(x) as.numeric(x$score), numeric(1)), pathways)
+  tooltip <- setNames(vapply(rows, function(x) {
+    paste0("Compartment: ", x$primary, "; method: ", x$method,
+           "; score: ", round(as.numeric(x$score), 3),
+           "; distribution: ", x$distribution)
+  }, character(1)), pathways)
+  list(primary = primary, tooltip = tooltip, method = method, score = score)
 }

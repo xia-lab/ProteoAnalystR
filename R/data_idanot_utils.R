@@ -389,16 +389,21 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
 
   # Step 1: UniProt → Entrez (via entrez_uniprot table)
   uniprot.map <- queryGeneDB("entrez_uniprot", org);
+  .paProteinDiagLog("[UniProtFallback] symbol map requested for ", length(uniprot.vec),
+                    " accession(s); org=", org, "; entrez_uniprot available=",
+                    is.data.frame(uniprot.map), "; rows=",
+                    ifelse(is.data.frame(uniprot.map), nrow(uniprot.map), 0))
 
   if (is.null(uniprot.map) || !is.data.frame(uniprot.map) || nrow(uniprot.map) == 0) {
     # Return minimal map if table not available
-    return(data.frame(
+    result <- data.frame(
       uniprot = uniprot.vec,
       gene_id = uniprot.vec,
       symbol = uniprot.vec,
       name = rep("NA", length(uniprot.vec)),
       stringsAsFactors = FALSE
-    ))
+    )
+    return(.augmentUniprotSymbolMapFromUniProt(result, uniprot.vec, org))
   }
 
   # Match UniProt to get Entrez IDs
@@ -426,7 +431,173 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
   na.inx <- is.na(result$name);
   result$name[na.inx] <- "NA";
 
+  result <- .augmentUniprotSymbolMapFromUniProt(result, uniprot.vec, org)
+
   return(result)
+}
+
+.normalizeUniProtAccessionsForLookup <- function(ids) {
+  if (length(ids) == 0) return(ids)
+  cleaned <- trimws(as.character(ids))
+  cleaned <- sub("^.*\\|([^|]+)\\|.*$", "\\1", cleaned)
+  cleaned <- sub("^([^;]+);.*$", "\\1", cleaned)
+  cleaned <- sub("^([^,]+),.*$", "\\1", cleaned)
+  cleaned <- sub("-\\d+$", "", cleaned)
+  cleaned <- sub("_[A-Z]_\\d+$", "", cleaned)
+  cleaned
+}
+
+.looksLikeUniProtAccessionsForLookup <- function(ids) {
+  ids <- .normalizeUniProtAccessionsForLookup(ids)
+  grepl("^([OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9][A-Z][A-Z0-9]{2}[0-9]|A0A[A-Z0-9]{7})$", ids)
+}
+
+.paProteinDiagLog <- function(...) {
+  txt <- paste0(...)
+  line <- paste0(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " ", txt)
+  try(message(line), silent = TRUE)
+  try(cat(line, "\n", file = "protein_localization_diagnostics.log", append = TRUE), silent = TRUE)
+}
+
+.fetchUniprotPrimarySymbols <- function(uniprot.vec, chunk.size = 20) {
+  ids <- unique(.normalizeUniProtAccessionsForLookup(uniprot.vec))
+  ids <- ids[!is.na(ids) & nzchar(ids)]
+  invalid.ids <- ids[!.looksLikeUniProtAccessionsForLookup(ids)]
+  ids <- ids[.looksLikeUniProtAccessionsForLookup(ids)]
+  if (length(invalid.ids) > 0) {
+    .paProteinDiagLog("[UniProtFallback] skipped non-UniProt-like IDs: ",
+                      length(invalid.ids), "; sample=", paste(head(invalid.ids, 5), collapse = ","))
+  }
+  if (length(ids) == 0) return(character(0))
+
+  .paProteinDiagLog("[UniProtFallback] querying UniProt primary symbols for ",
+                    length(ids), " accession(s); sample=", paste(head(ids, 5), collapse = ","))
+
+  result <- rep(NA_character_, length(ids))
+  names(result) <- ids
+
+  old.timeout <- getOption("timeout")
+  options(timeout = max(10, old.timeout))
+  on.exit(options(timeout = old.timeout), add = TRUE)
+
+  for (start in seq(1, length(ids), by = chunk.size)) {
+    chunk <- ids[start:min(start + chunk.size - 1, length(ids))]
+    query <- paste0("(", paste(paste0("accession:", chunk), collapse = " OR "), ")")
+    url <- paste0(
+      "https://rest.uniprot.org/uniprotkb/search?query=",
+      utils::URLencode(query, reserved = TRUE),
+      "&fields=accession,gene_primary&format=tsv&size=",
+      length(chunk)
+    )
+
+    tab <- try(
+      utils::read.delim(url, sep = "\t", header = TRUE, stringsAsFactors = FALSE,
+                        quote = "", comment.char = "", check.names = TRUE),
+      silent = TRUE
+    )
+    if (inherits(tab, "try-error") || is.null(tab) || nrow(tab) == 0) {
+      err.txt <- if (inherits(tab, "try-error")) {
+        conditionMessage(attr(tab, "condition"))
+      } else {
+        "empty"
+      }
+      .paProteinDiagLog("[UniProtFallback] UniProt query failed or returned no rows for chunk sample=",
+                        paste(head(chunk, 5), collapse = ","),
+                        "; error=", substr(err.txt, 1, 240))
+      next
+    }
+
+    entry.col <- which(colnames(tab) == "Entry")
+    gene.col <- grep("Gene.*primary", colnames(tab), ignore.case = TRUE)
+    if (length(entry.col) == 0 || length(gene.col) == 0) {
+      .paProteinDiagLog("[UniProtFallback] UniProt response missing expected columns; columns=",
+                        paste(colnames(tab), collapse = ","))
+      next
+    }
+
+    entries <- as.character(tab[[entry.col[1]]])
+    genes <- trimws(as.character(tab[[gene.col[1]]]))
+    genes[is.na(genes) | !nzchar(genes)] <- NA_character_
+    result[entries] <- genes
+    .paProteinDiagLog("[UniProtFallback] UniProt chunk returned ", nrow(tab),
+                      " row(s); mapped primary symbols=",
+                      sum(!is.na(genes) & nzchar(genes)))
+  }
+
+  .paProteinDiagLog("[UniProtFallback] UniProt primary-symbol lookup complete; mapped ",
+                    sum(!is.na(result) & nzchar(result)), "/", length(result))
+  result
+}
+
+.augmentUniprotSymbolMapFromUniProt <- function(symbol.map, uniprot.vec, org) {
+  max.rest.fallback <- if (exists("pa.uniprot.rest.max.ids", envir = .GlobalEnv)) {
+    get("pa.uniprot.rest.max.ids", envir = .GlobalEnv)
+  } else {
+    50
+  }
+
+  if (is.null(org) || org %in% c("NA", "na", "custom") || nrow(symbol.map) == 0) {
+    return(symbol.map)
+  }
+
+  symbols <- as.character(symbol.map$symbol)
+  gene.ids <- as.character(symbol.map$gene_id)
+  uniprot.ids <- .normalizeUniProtAccessionsForLookup(uniprot.vec)
+  missing.inx <- which(is.na(symbols) | !nzchar(symbols) | symbols == uniprot.vec |
+                         is.na(gene.ids) | !nzchar(gene.ids) | gene.ids == uniprot.vec)
+  if (length(missing.inx) == 0) return(symbol.map)
+
+  .paProteinDiagLog("[UniProtFallback] unresolved symbol/gene rows before UniProt fallback: ",
+                    length(missing.inx), "/", nrow(symbol.map),
+                    "; sample accession(s)=",
+                    paste(head(.normalizeUniProtAccessionsForLookup(uniprot.vec[missing.inx]), 5), collapse = ","))
+
+  if (length(missing.inx) > max.rest.fallback) {
+    .paProteinDiagLog("[UniProtFallback] skipped REST fallback because unresolved batch is too large: ",
+                      length(missing.inx), " > ", max.rest.fallback,
+                      ". Refresh entrez_uniprot SQLite instead.")
+    return(symbol.map)
+  }
+
+  fetched.symbols <- .fetchUniprotPrimarySymbols(uniprot.ids[missing.inx])
+  if (length(fetched.symbols) == 0) return(symbol.map)
+
+  entrez.db <- try(queryGeneDB("entrez", org), silent = TRUE)
+  if (!inherits(entrez.db, "try-error") && is.data.frame(entrez.db) &&
+      all(c("gene_id", "symbol") %in% colnames(entrez.db))) {
+    valid <- !is.na(entrez.db$symbol) & nzchar(as.character(entrez.db$symbol))
+    entrez.db <- entrez.db[valid, , drop = FALSE]
+    sym.key <- toupper(as.character(entrez.db$symbol))
+    sym2gene <- setNames(as.character(entrez.db$gene_id), sym.key)
+    sym2name <- if ("name" %in% colnames(entrez.db)) {
+      setNames(as.character(entrez.db$name), sym.key)
+    } else {
+      character(0)
+    }
+  } else {
+    sym2gene <- character(0)
+    sym2name <- character(0)
+  }
+
+  for (i in missing.inx) {
+    fetched <- fetched.symbols[uniprot.ids[i]]
+    if (is.na(fetched) || !nzchar(fetched)) next
+    symbol.map$symbol[i] <- fetched
+    entrez <- sym2gene[toupper(fetched)]
+    if (!is.na(entrez) && nzchar(entrez)) {
+      symbol.map$gene_id[i] <- entrez
+      nm <- sym2name[toupper(fetched)]
+      if (!is.na(nm) && nzchar(nm)) symbol.map$name[i] <- nm
+    }
+  }
+
+  resolved <- sum(!is.na(symbol.map$gene_id[missing.inx]) &
+                    nzchar(as.character(symbol.map$gene_id[missing.inx])) &
+                    as.character(symbol.map$gene_id[missing.inx]) != as.character(uniprot.vec[missing.inx]))
+  .paProteinDiagLog("[UniProtFallback] unresolved rows recovered to local Entrez after fallback: ",
+                    resolved, "/", length(missing.inx))
+
+  symbol.map
 }
 
 #Convert a vector of ids to vector of entrez ids (LEGACY - kept for backward compatibility)
@@ -721,12 +892,17 @@ queryGeneDB <- function(db.nm, org){
       print("Not available when organism is not specified");
       return(0);
   }
-  paramSet <- readSet(paramSet, "paramSet");    
+  # Session-level cache: SQLite gene tables are constant within a session
+  cache.key <- paste0(".genedb_cache_", db.nm, "_", org);
+  if (exists(cache.key, envir = .GlobalEnv)) {
+    return(get(cache.key, envir = .GlobalEnv));
+  }
+  paramSet <- readSet(paramSet, "paramSet");
   if(db.nm == "custom" || org == "custom"){
     db.map <- ov_qs_read("anot_table.qs");
   }else{
     require('RSQLite');
-    
+
     db.path <- paste(paramSet$sqlite.path, org, "_genes.sqlite", sep="")
     if(!PrepareSqliteDB(db.path, paramSet$on.public.web)){
       AddErrMsg("Sqlite database is missing, please check your internet connection!");
@@ -740,7 +916,10 @@ queryGeneDB <- function(db.nm, org){
     db.map <- dbReadTable(conv.db, db.nm);
     dbDisconnect(conv.db); cleanMem();
   }
-  
+  # Don't cache custom tables (user-specific) or failed lookups
+  if (!identical(db.map, 0) && db.nm != "custom" && org != "custom") {
+    assign(cache.key, db.map, envir = .GlobalEnv);
+  }
   return(db.map)
 }
 

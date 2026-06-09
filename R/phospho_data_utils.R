@@ -214,7 +214,11 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
 
   if (proteinRefFile != "" && file.exists(proteinRefFile)) {
     #msg("[ReadPhosphoData] Loading global proteome reference file: ", proteinRefFile)
-    protein_data <- .readMaxQuantProteome(proteinRefFile, colnames(int.mat))
+    protein_data <- if (identical(dataFormat, "diann")) {
+      .readDIANNProteome(proteinRefFile, colnames(int.mat))
+    } else {
+      .readMaxQuantProteome(proteinRefFile, colnames(int.mat))
+    }
 
     if (!is.null(protein_data) && nrow(protein_data) > 0) {
       paramSet$protein.ref <- protein_data
@@ -607,6 +611,69 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
 
   #msg("[.readMaxQuantProteome] Returning protein abundance matrix: ",
   #        nrow(intensity_mat), " proteins × ", ncol(intensity_mat), " samples.")
+
+  return(intensity_mat)
+}
+
+#' Read DIA-NN protein group matrix for phosphoproteomics normalization
+#'
+#' @param proteinFile Path to DIA-NN pg_matrix.tsv file
+#' @param phospho_samples Character vector of sample names from phospho data
+#' @return Matrix of log2 protein abundances with proteins as rows, samples as columns
+.readDIANNProteome <- function(proteinFile, phospho_samples) {
+
+  if (!file.exists(proteinFile)) {
+    return(NULL)
+  }
+
+  dat <- try(data.table::fread(
+    proteinFile,
+    header = TRUE,
+    check.names = FALSE,
+    data.table = FALSE,
+    integer64 = "double"
+  ))
+  if (inherits(dat, "try-error")) {
+    return(NULL)
+  }
+
+  meta_cols <- c(
+    "Protein.Group", "Protein.Ids", "Protein.Names", "Genes",
+    "First.Protein.Description"
+  )
+  intensity_cols <- setdiff(colnames(dat), meta_cols)
+  if (length(intensity_cols) == 0) {
+    return(NULL)
+  }
+
+  intensity_mat <- .coerceNumericDF(dat[, intensity_cols, drop = FALSE])
+  keep_cols <- colnames(intensity_mat)[colSums(!is.na(intensity_mat)) > 0]
+  if (length(keep_cols) == 0) {
+    return(NULL)
+  }
+  intensity_mat <- intensity_mat[, keep_cols, drop = FALSE]
+
+  common_samples <- intersect(colnames(intensity_mat), phospho_samples)
+  if (length(common_samples) == 0) {
+    return(NULL)
+  }
+
+  phospho_order <- phospho_samples[phospho_samples %in% common_samples]
+  intensity_mat <- intensity_mat[, phospho_order, drop = FALSE]
+  intensity_mat[intensity_mat == 0] <- NA
+  intensity_mat <- log2(intensity_mat)
+
+  if ("Protein.Group" %in% colnames(dat)) {
+    protein_ids <- dat$Protein.Group
+  } else if ("Protein.Ids" %in% colnames(dat)) {
+    protein_ids <- dat$Protein.Ids
+  } else {
+    protein_ids <- paste0("Protein_", seq_len(nrow(dat)))
+  }
+
+  rownames(intensity_mat) <- protein_ids
+  valid_rows <- rowSums(!is.na(intensity_mat)) > 0
+  intensity_mat <- intensity_mat[valid_rows, , drop = FALSE]
 
   return(intensity_mat)
 }
@@ -1395,6 +1462,80 @@ MapPhosphositeUniprotToSymbol <- function() {
 
   msg("[.readDIANNPhospho] After filtering: ", nrow(dat), " precursors")
 
+  # DIA-NN pr_matrix.tsv is already wide: one precursor per row, samples in columns.
+  # Convert phospho-modified precursors to phosphosite rows by summing precursor
+  # quantities for the same inferred site.
+  meta_cols <- c(
+    "Protein.Group", "Protein.Ids", "Protein.Names", "Genes",
+    "First.Protein.Description", "Proteotypic", "Stripped.Sequence",
+    "Modified.Sequence", "Precursor.Charge", "Precursor.Id"
+  )
+  candidate_sample_cols <- setdiff(colnames(dat), meta_cols)
+  if ("Modified.Sequence" %in% colnames(dat) && !"Run" %in% colnames(dat) && length(candidate_sample_cols) >= 2) {
+    sample_df <- .coerceNumericDF(dat[, candidate_sample_cols, drop = FALSE])
+    keep_sample_cols <- colnames(sample_df)[colSums(!is.na(sample_df)) > 0]
+
+    if (length(keep_sample_cols) >= 2) {
+      msg("[.readDIANNPhospho] Detected DIA-NN wide precursor matrix")
+      sample_df <- sample_df[, keep_sample_cols, drop = FALSE]
+      keep_rows <- grepl("UniMod:21|Phospho", dat$Modified.Sequence)
+      dat <- dat[keep_rows, , drop = FALSE]
+      sample_df <- sample_df[keep_rows, , drop = FALSE]
+
+      phospho_sites <- .parseDIANNModifiedSequence(
+        dat$Modified.Sequence,
+        dat$Protein.Group,
+        dat$Stripped.Sequence
+      )
+
+      if (is.null(phospho_sites) || nrow(phospho_sites) == 0) {
+        msg("[.readDIANNPhospho] Error: Could not parse phosphosites from DIA-NN precursor matrix.")
+        return(NULL)
+      }
+
+      expanded_mat <- sample_df[phospho_sites$row_idx, , drop = FALSE]
+      expanded_mat[expanded_mat == 0] <- NA
+      split_idx <- split(seq_len(nrow(expanded_mat)), phospho_sites$site_id)
+      int.mat <- do.call(rbind, lapply(split_idx, function(idx) {
+        colSums(expanded_mat[idx, , drop = FALSE], na.rm = TRUE)
+      }))
+      int.mat[int.mat == 0] <- NA
+      rownames(int.mat) <- names(split_idx)
+
+      site_first_idx <- match(rownames(int.mat), phospho_sites$site_id)
+      source_rows <- phospho_sites$row_idx[site_first_idx]
+      feature_info <- data.frame(
+        id = rownames(int.mat),
+        Proteins = phospho_sites$protein_id[site_first_idx],
+        "Amino acid" = phospho_sites$residue[site_first_idx],
+        Position = phospho_sites$position[site_first_idx],
+        "Gene names" = if ("Genes" %in% colnames(dat)) as.character(dat$Genes[source_rows]) else NA,
+        "Modified.Sequence" = as.character(dat$Modified.Sequence[source_rows]),
+        "Stripped.Sequence" = if ("Stripped.Sequence" %in% colnames(dat)) as.character(dat$Stripped.Sequence[source_rows]) else NA,
+        "Localization prob" = NA,
+        check.names = FALSE,
+        stringsAsFactors = FALSE
+      )
+      rownames(feature_info) <- feature_info$id
+
+      data_orig_df <- cbind(
+        data.frame(SiteID = rownames(int.mat), stringsAsFactors = FALSE),
+        as.data.frame(int.mat, check.names = FALSE)
+      )
+
+      msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites × ", ncol(int.mat), " samples")
+
+      return(list(
+        data = int.mat,
+        data_orig = data_orig_df,
+        type = "phospho",
+        format = "diann",
+        meta.info = NULL,
+        feature.info = feature_info
+      ))
+    }
+  }
+
   # Support matrix-like phosphosite tables derived from DIA-NN, where rows are already
   # phosphosites and sample intensities are stored directly in columns.
   sample_cols <- colnames(dat)[grepl("^(CTL|DRUG|CON|TRT|KO|WT|[A-Za-z]+[0-9]+)$", colnames(dat))]
@@ -1415,6 +1556,8 @@ MapPhosphositeUniprotToSymbol <- function() {
     gene_col <- if ("Gene" %in% colnames(dat)) "Gene" else if ("Mapped Genes" %in% colnames(dat)) "Mapped Genes" else NULL
     prot_col <- if ("ProteinID" %in% colnames(dat)) "ProteinID" else if ("Protein" %in% colnames(dat)) "Protein" else NULL
     loc_col <- if ("Probability" %in% colnames(dat)) "Probability" else if ("Best Localization" %in% colnames(dat)) "Best Localization" else NULL
+    seqwin_col <- if ("SequenceWindow" %in% colnames(dat)) "SequenceWindow" else if ("Sequence window" %in% colnames(dat)) "Sequence window" else NULL
+    peptide_col <- if ("Peptide" %in% colnames(dat)) "Peptide" else NULL
 
     feature_info <- data.frame(
       id = as.character(dat$Index),
@@ -1422,6 +1565,8 @@ MapPhosphositeUniprotToSymbol <- function() {
       "Amino acid" = ifelse(is.na(site_parts$residue), NA, site_parts$residue),
       Position = ifelse(is.na(site_parts$position), NA, site_parts$position),
       "Gene names" = if (!is.null(gene_col)) as.character(dat[[gene_col]]) else NA,
+      "Sequence window" = if (!is.null(seqwin_col)) as.character(dat[[seqwin_col]]) else NA,
+      Peptide = if (!is.null(peptide_col)) as.character(dat[[peptide_col]]) else NA,
       "Localization prob" = if (!is.null(loc_col)) suppressWarnings(as.numeric(dat[[loc_col]])) else NA,
       check.names = FALSE,
       stringsAsFactors = FALSE
@@ -1463,6 +1608,8 @@ MapPhosphositeUniprotToSymbol <- function() {
       gene_col <- if ("Gene" %in% colnames(dat)) "Gene" else if ("Mapped Genes" %in% colnames(dat)) "Mapped Genes" else NULL
       prot_col <- if ("ProteinID" %in% colnames(dat)) "ProteinID" else if ("Protein" %in% colnames(dat)) "Protein" else NULL
       loc_col <- if ("Probability" %in% colnames(dat)) "Probability" else if ("Best Localization" %in% colnames(dat)) "Best Localization" else NULL
+      seqwin_col <- if ("SequenceWindow" %in% colnames(dat)) "SequenceWindow" else if ("Sequence window" %in% colnames(dat)) "Sequence window" else NULL
+      peptide_col <- if ("Peptide" %in% colnames(dat)) "Peptide" else NULL
 
       feature_info <- data.frame(
         id = as.character(dat$Index),
@@ -1470,6 +1617,8 @@ MapPhosphositeUniprotToSymbol <- function() {
         "Amino acid" = site_parts$residue,
         Position = site_parts$position,
         "Gene names" = if (!is.null(gene_col)) as.character(dat[[gene_col]]) else NA,
+        "Sequence window" = if (!is.null(seqwin_col)) as.character(dat[[seqwin_col]]) else NA,
+        Peptide = if (!is.null(peptide_col)) as.character(dat[[peptide_col]]) else NA,
         "Localization prob" = if (!is.null(loc_col)) suppressWarnings(as.numeric(dat[[loc_col]])) else NA,
         check.names = FALSE,
         stringsAsFactors = FALSE
@@ -1609,6 +1758,8 @@ MapPhosphositeUniprotToSymbol <- function() {
     "Amino acid" = site_info$residue,
     Position = site_info$position,
     "Gene names" = site_info$gene_name,
+    "Modified.Sequence" = if ("Modified.Sequence" %in% colnames(dat_expanded)) as.character(dat_expanded$Modified.Sequence[match(site_info$site_id, dat_expanded$site_id)]) else NA,
+    "Stripped.Sequence" = if ("Stripped.Sequence" %in% colnames(dat_expanded)) as.character(dat_expanded$Stripped.Sequence[match(site_info$site_id, dat_expanded$site_id)]) else NA,
     "Localization prob" = if ("localization_prob" %in% colnames(site_info)) site_info$localization_prob else NA,
     check.names = FALSE
   )

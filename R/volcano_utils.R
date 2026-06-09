@@ -153,7 +153,11 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
   sink();
   fast.write(signif (sig.var,5),file=fileName);
   colnames(gene.anot)[1] <- "anot.id"
-  
+
+  comp.result <- .getVolcanoCompartments(gene.anot$anot.id, rownames(data), paramSet, gene.anot$symbol)
+  comp.vec <- comp.result$compartment
+  comp.raw.vec <- comp.result$raw
+
   volcano <- list (
     raw.threshx = fcthresh,
     raw.threshy = threshp,
@@ -169,6 +173,8 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
     inx.p = inx.p,
     sig.mat = sig.var,
     conv = gene.anot,
+    compartment = as.list(comp.vec),
+    compartmentRaw = as.list(comp.raw.vec),
     analType = anal.type,
     org=paramSet$data.org,
     dat.opt = paramSet$selDataNm,
@@ -261,6 +267,164 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
   return(1);
 }
 
+
+.getVolcanoCompartments <- function(anot.ids, raw.ids, paramSet, symbols = NULL) {
+  comp.map <- rep("Unknown", length(raw.ids))
+  raw.map  <- rep("", length(raw.ids))
+  names(comp.map) <- raw.ids
+  names(raw.map)  <- raw.ids
+  diag.log <- if (exists(".paProteinDiagLog")) {
+    .paProteinDiagLog
+  } else {
+    function(...) {
+      txt <- paste0(...)
+      try(message(txt), silent = TRUE)
+      try(cat(paste0(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " ", txt, "\n"),
+              file = "protein_localization_diagnostics.log", append = TRUE), silent = TRUE)
+    }
+  }
+  max.rest.fallback <- if (exists("pa.uniprot.rest.max.ids", envir = .GlobalEnv)) {
+    get("pa.uniprot.rest.max.ids", envir = .GlobalEnv)
+  } else {
+    50
+  }
+
+  if (is.null(symbols) || length(symbols) != length(raw.ids)) {
+    diag.log("[VolcanoCompartment] symbols unavailable or length mismatch; raw.ids=",
+             length(raw.ids), "; symbols=", ifelse(is.null(symbols), "NULL", length(symbols)))
+    symbols <- rep(NA_character_, length(raw.ids))
+  }
+
+  org <- paramSet$data.org
+  diag.log("[VolcanoCompartment] lookup start; org=", org, "; features=", length(raw.ids),
+           "; sample raw=", paste(head(raw.ids, 5), collapse = ","),
+           "; sample anot=", paste(head(anot.ids, 5), collapse = ","),
+           "; sample symbols=", paste(head(symbols, 5), collapse = ","))
+
+  if (is.null(org) || org == "omk" || org == "NA") {
+    diag.log("[VolcanoCompartment] skipped because organism is unavailable: ", org)
+    return(list(compartment=comp.map, raw=raw.map))
+  }
+
+  lib.path <- if (exists("api.lib.path")) api.lib.path else paramSet$lib.path
+
+  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
+  if (!file.exists(loc.path)) loc.path <- paste0(lib.path, org, "/localization.qs")
+  if (!file.exists(loc.path)) {
+    diag.log("[VolcanoCompartment] localization file missing for org=", org, "; lib.path=", lib.path)
+    return(list(compartment=comp.map, raw=raw.map))
+  }
+
+  loc.data <- try(ov_qs_read(loc.path), silent = TRUE)
+  if (inherits(loc.data, "try-error") || is.null(loc.data)) {
+    diag.log("[VolcanoCompartment] failed to read localization file: ", loc.path,
+             "; error=", ifelse(inherits(loc.data, "try-error"), as.character(loc.data), "NULL"))
+    return(list(compartment=comp.map, raw=raw.map))
+  }
+  if (!all(c("EntrezID", "Broad.category") %in% colnames(loc.data))) {
+    diag.log("[VolcanoCompartment] localization file missing required columns; columns=",
+             paste(colnames(loc.data), collapse = ","))
+    return(list(compartment=comp.map, raw=raw.map))
+  }
+  diag.log("[VolcanoCompartment] localization loaded; rows=", nrow(loc.data),
+           "; path=", loc.path)
+
+  # anot.ids are UniProt IDs (doEntrezIDAnot/doUniprotIDAnot returns UniProt as gene_id).
+  # Map UniProt -> Entrez before hitting the localization table. Some accessions
+  # can be missing from stale entrez_uniprot tables, so recover through symbols
+  # and a small UniProt primary-gene fallback where possible.
+  clean.ids <- if (exists(".normalizeUniProtAccessionsForLookup")) {
+    .normalizeUniProtAccessionsForLookup(anot.ids)
+  } else if (exists(".paNormalizeUniprotIds")) {
+    .paNormalizeUniprotIds(anot.ids)
+  } else {
+    sub("_.*$", "", as.character(anot.ids))
+  }
+  uniprot.db <- try(queryGeneDB("entrez_uniprot", org), silent = TRUE)
+  if (!inherits(uniprot.db, "try-error") && !is.null(uniprot.db) &&
+      "accession" %in% colnames(uniprot.db) && "gene_id" %in% colnames(uniprot.db)) {
+    up2entrez <- setNames(as.character(uniprot.db$gene_id), as.character(uniprot.db$accession))
+    entrez.ids <- up2entrez[clean.ids]
+    diag.log("[VolcanoCompartment] entrez_uniprot lookup complete; table rows=", nrow(uniprot.db),
+             "; mapped=", sum(!is.na(entrez.ids) & nzchar(as.character(entrez.ids))), "/", length(entrez.ids),
+             "; missing sample=", paste(head(clean.ids[is.na(entrez.ids) | !nzchar(as.character(entrez.ids))], 5), collapse = ","))
+  } else {
+    entrez.ids <- as.character(anot.ids)
+    diag.log("[VolcanoCompartment] entrez_uniprot unavailable; using annotation IDs directly; error=",
+             ifelse(inherits(uniprot.db, "try-error"), as.character(uniprot.db), "not a valid table"))
+  }
+
+  loc.symbols <- if ("Gene.name" %in% colnames(loc.data)) {
+    valid <- !is.na(loc.data$Gene.name) & nzchar(as.character(loc.data$Gene.name))
+    setNames(as.character(loc.data$EntrezID[valid]), toupper(as.character(loc.data$Gene.name[valid])))
+  } else {
+    character(0)
+  }
+
+  missing <- which(is.na(entrez.ids) | !nzchar(as.character(entrez.ids)) |
+                     !(as.character(entrez.ids) %in% as.character(loc.data$EntrezID)))
+  if (length(missing) > 0 && length(loc.symbols) > 0) {
+    clean.symbols <- toupper(trimws(as.character(symbols)))
+    by.symbol <- loc.symbols[clean.symbols[missing]]
+    fill <- !is.na(by.symbol) & nzchar(by.symbol)
+    if (any(fill)) {
+      entrez.ids[missing[fill]] <- by.symbol[fill]
+    }
+    diag.log("[VolcanoCompartment] symbol fallback using existing annotation symbols: ",
+             sum(fill), "/", length(missing),
+             "; sample symbols=", paste(head(clean.symbols[missing], 5), collapse = ","))
+  } else if (length(missing) > 0) {
+    diag.log("[VolcanoCompartment] symbol fallback skipped; missing=", length(missing),
+             "; loc.symbols=", length(loc.symbols))
+  }
+
+  missing <- which(is.na(entrez.ids) | !nzchar(as.character(entrez.ids)) |
+                     !(as.character(entrez.ids) %in% as.character(loc.data$EntrezID)))
+  if (length(missing) > max.rest.fallback) {
+    diag.log("[VolcanoCompartment] UniProt primary-symbol fallback skipped because unresolved batch is too large: ",
+             length(missing), " > ", max.rest.fallback,
+             ". Refresh entrez_uniprot SQLite instead.")
+  } else if (length(missing) > 0 && length(loc.symbols) > 0 && exists(".fetchUniprotPrimarySymbols")) {
+    fetched.symbols <- try(.fetchUniprotPrimarySymbols(clean.ids[missing]), silent = TRUE)
+    if (!inherits(fetched.symbols, "try-error") && length(fetched.symbols) > 0) {
+      fetched <- toupper(trimws(as.character(fetched.symbols[clean.ids[missing]])))
+      by.symbol <- loc.symbols[fetched]
+      fill <- !is.na(by.symbol) & nzchar(by.symbol)
+      if (any(fill)) {
+        entrez.ids[missing[fill]] <- by.symbol[fill]
+      }
+      diag.log("[VolcanoCompartment] UniProt primary-symbol fallback: ",
+               sum(fill), "/", length(missing),
+               "; sample fetched symbols=", paste(head(fetched, 5), collapse = ","))
+    } else {
+      diag.log("[VolcanoCompartment] UniProt primary-symbol fallback failed; missing=", length(missing),
+               "; error=", ifelse(inherits(fetched.symbols, "try-error"), as.character(fetched.symbols), "empty"))
+    }
+  } else if (length(missing) > 0) {
+    diag.log("[VolcanoCompartment] UniProt primary-symbol fallback skipped; missing=", length(missing),
+             "; helper.exists=", exists(".fetchUniprotPrimarySymbols"),
+             "; loc.symbols=", length(loc.symbols))
+  }
+
+  loc.entrez <- as.character(loc.data$EntrezID)
+  hits <- which(!is.na(entrez.ids) & entrez.ids %in% loc.entrez)
+  diag.log("[VolcanoCompartment] final localization hits=", length(hits), "/", length(raw.ids),
+           "; still missing=", length(raw.ids) - length(hits),
+           "; hit sample=", paste(head(raw.ids[hits], 5), collapse = ","))
+  if (length(hits) > 0) {
+    for (i in hits) {
+      loc.rows <- loc.data[as.character(loc.data$EntrezID) == as.character(entrez.ids[i]), , drop = FALSE]
+      broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
+      main <- if ("Main.location" %in% colnames(loc.rows)) paste(unique(as.character(loc.rows$Main.location)), collapse = "; ") else NA_character_
+      resolved <- .paPrimaryCompartment(broad, main)
+      comp.map[i] <- resolved$primary
+      raw.map[i] <- resolved$all_categories
+    }
+  }
+  diag.log("[VolcanoCompartment] assigned compartment counts: ",
+           paste(names(table(comp.map)), as.integer(table(comp.map)), sep = "=", collapse = "; "))
+  list(compartment=comp.map, raw=raw.map)
+}
 
 GetVolcanoDnMat <- function(){
   analSet <- readSet(analSet, "analSet");
@@ -530,8 +694,8 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
     hits.query <- hits.query[ord.inx];
     
     imp.inx <- res.mat[,4] <= 0.05;
-    if(sum(imp.inx) < 10){ # too little left, give the top ones
-      topn <- ifelse(nrow(res.mat) > 10, 10, nrow(res.mat));
+    if(sum(imp.inx) < 20){ # too little left, give the top ones
+      topn <- ifelse(nrow(res.mat) > 20, 20, nrow(res.mat));
       res.mat <- res.mat[1:topn,];
       hits.query <- hits.query[1:topn];
     }else{
@@ -597,4 +761,127 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
   
   saveSet(msgSet, "msgSet");
   return(1);
+}
+
+GetVolcanoPathwayHeatmapJSON <- function(dataName="", IDs=""){
+  dataSet <- readDataset(dataName);
+  analSet <- readSet(analSet, "analSet");
+
+  ids <- trimws(unlist(strsplit(IDs, ";", fixed = TRUE)));
+  ids <- ids[ids != "" & !is.na(ids)];
+  if (length(ids) == 0 || is.null(dataSet$data.norm)) {
+    return(rjson::toJSON(list(status = "empty", rows = list(), cols = list(), values = list())));
+  }
+
+  dat <- dataSet$data.norm;
+  if (!is.null(dataSet$rmidx) && length(dataSet$rmidx) > 0 && ncol(dat) >= max(dataSet$rmidx)) {
+    dat <- dat[, -dataSet$rmidx, drop = FALSE];
+  }
+  dat <- as.matrix(dat);
+
+  hit.ids <- ids[ids %in% rownames(dat)];
+  if (length(hit.ids) == 0 && !is.null(analSet$volcano$conv)) {
+    conv <- analSet$volcano$conv;
+    if ("symbol" %in% colnames(conv) && "anot.id" %in% colnames(conv)) {
+      hit.inx <- match(ids, as.character(conv$symbol));
+      hit.ids <- as.character(conv$anot.id[hit.inx]);
+      hit.ids <- hit.ids[!is.na(hit.ids) & hit.ids %in% rownames(dat)];
+    }
+  }
+  hit.ids <- unique(hit.ids);
+  if (length(hit.ids) == 0) {
+    return(rjson::toJSON(list(status = "empty", rows = list(), cols = colnames(dat), values = list())));
+  }
+
+  mat <- dat[hit.ids, , drop = FALSE];
+  row.labels <- hit.ids;
+  if (!is.null(analSet$volcano$conv)) {
+    conv <- analSet$volcano$conv;
+    if ("symbol" %in% colnames(conv) && "anot.id" %in% colnames(conv)) {
+      hit.inx <- match(hit.ids, as.character(conv$anot.id));
+      labels <- as.character(conv$symbol[hit.inx]);
+      ok <- !is.na(labels) & labels != "" & labels != "NA";
+      row.labels[ok] <- labels[ok];
+    }
+  }
+
+  values <- lapply(seq_len(nrow(mat)), function(i) {
+    vals <- suppressWarnings(as.numeric(mat[i, ]));
+    vals[is.infinite(vals)] <- NA;
+    vals
+  });
+
+  annotations <- list();
+  if (!is.null(dataSet$meta.info) && ncol(dataSet$meta.info) > 0) {
+    meta <- data.frame(dataSet$meta.info, check.names = FALSE);
+    smp.inx <- match(colnames(mat), rownames(meta));
+    keep.cols <- seq_len(min(4, ncol(meta)));
+    annotations <- lapply(keep.cols, function(j) {
+      vals <- as.character(meta[smp.inx, j]);
+      vals[is.na(vals)] <- "NA";
+      meta.nm <- colnames(meta)[j];
+      meta.type <- "discrete";
+      if (!is.null(dataSet$disc.inx) && meta.nm %in% names(dataSet$disc.inx) && !isTRUE(dataSet$disc.inx[meta.nm])) {
+        meta.type <- "continuous";
+      }
+      list(
+        name = meta.nm,
+        type = meta.type,
+        values = vals
+      )
+    });
+  }
+
+  row.rank <- .getVolcanoHeatmapClusterRanks(mat, "row");
+  col.rank <- .getVolcanoHeatmapClusterRanks(mat, "col");
+
+  rjson::toJSON(list(
+    status = "ok",
+    rows = as.vector(row.labels),
+    ids = as.vector(hit.ids),
+    cols = as.vector(colnames(mat)),
+    values = values,
+    annotations = annotations,
+    feature.cluster = row.rank,
+    sample.cluster = col.rank
+  ));
+}
+
+.getVolcanoHeatmapClusterRanks <- function(mat, margin = "row") {
+  n <- if (margin == "row") nrow(mat) else ncol(mat);
+  base <- seq_len(n);
+  res <- list(pval = base, ward = base, average = base, single = base, complete = base);
+  if (n <= 1) {
+    return(res);
+  }
+
+  dat <- if (margin == "row") mat else t(mat);
+  dat <- t(apply(dat, 1, function(x) {
+    x <- suppressWarnings(as.numeric(x));
+    if (all(is.na(x))) {
+      return(rep(0, length(x)));
+    }
+    x[is.na(x)] <- median(x, na.rm = TRUE);
+    sx <- stats::sd(x);
+    if (is.na(sx) || sx == 0) {
+      return(rep(0, length(x)));
+    }
+    as.numeric(scale(x));
+  }));
+
+  dist.obj <- try(stats::dist(dat), silent = TRUE);
+  if (inherits(dist.obj, "try-error")) {
+    return(res);
+  }
+
+  methods <- c(ward = "ward.D", average = "average", single = "single", complete = "complete");
+  for (nm in names(methods)) {
+    hc <- try(stats::hclust(dist.obj, method = methods[[nm]]), silent = TRUE);
+    if (!inherits(hc, "try-error")) {
+      ord <- hc$order;
+      rk <- match(seq_len(n), ord);
+      res[[nm]] <- rk;
+    }
+  }
+  res;
 }

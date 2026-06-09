@@ -149,7 +149,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   }
 
   #msg("[GetSigfeatures] DEBUG: About to filter NA rows...")
-  resTable <- resTable[!is.na(resTable[,1]),]
+  resTable <- resTable[!is.na(resTable[,1]), , drop = FALSE]
   #msg("[GetSigfeatures] DEBUG: After NA filter, nrow=", nrow(resTable))
   orig.resTable <- resTable;
   # select based on p-value
@@ -161,7 +161,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   }
   #msg("[GetSigfeatures] DEBUG: hit.inx.p: class=", class(hit.inx.p), " length=", length(hit.inx.p), " sum=", sum(hit.inx.p, na.rm=TRUE))
 
-  resTable<-resTable[hit.inx.p,];
+  resTable <- resTable[hit.inx.p, , drop = FALSE];
   #msg("[GetSigfeatures] DEBUG: After p-value filter, nrow=", nrow(resTable))
   
   if (is.na(hit.inx) || hit.inx < 2) {
@@ -182,7 +182,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     pos.mat <- abs(logfc.mat);
     fc.vec <- apply(pos.mat, 1, max);   # for > comparisons - in this case, use the largest logFC among all comparisons
     hit.inx.fc <- fc.vec >= fc.lvl;
-    resTable <- resTable[hit.inx.fc,];
+    resTable <- resTable[hit.inx.fc, , drop = FALSE];
   } else if (dataSet$de.method=="deseq2" || dataSet$de.method=="edger" || dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt"){
     #msg("[GetSigfeatures] DEBUG: Using limma/deqms/wtt FC filter...")
     pos.mat <- abs(logfc.mat);
@@ -190,12 +190,12 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     #msg("[GetSigfeatures] DEBUG: fc.vec: class=", class(fc.vec), " length=", length(fc.vec))
     hit.inx.fc <- fc.vec >= fc.lvl;
     #msg("[GetSigfeatures] DEBUG: hit.inx.fc: class=", class(hit.inx.fc), " length=", length(hit.inx.fc), " sum=", sum(hit.inx.fc, na.rm=TRUE))
-    resTable <- resTable[hit.inx.fc,];
+    resTable <- resTable[hit.inx.fc, , drop = FALSE];
   }else {
     pos.mat <- abs(logfc.mat[,inx]);
     fc.vec <- pos.mat;
     hit.inx.fc <- fc.vec >= fc.lvl;
-    resTable <- resTable[hit.inx.fc,];
+    resTable <- resTable[hit.inx.fc, , drop = FALSE];
   }
   #msg("[GetSigfeatures] DEBUG: After FC filter, nrow=", nrow(resTable))
   
@@ -233,8 +233,8 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     msgSet$current.msg <- paste(msgSet$current.msg, "Only groups selected for comparisons: ", paste(grp.nms, collapse=", "), "are included.");
     cls <- factor(cls[hit.inx]);
     cls.lvls <- levels(cls);
-    data <- data[,hit.inx];
-    meta.info <- dataSet$meta.info[hit.inx,];
+    data <- data[, hit.inx, drop = FALSE];
+    meta.info <- dataSet$meta.info[hit.inx, , drop = FALSE];
   }
   #msg("[GetSigfeatures] DEBUG: About to save data.stat.qs...")
   ov_qs_save(data, file="data.stat.qs");
@@ -282,7 +282,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     # For phospho data, write results without Entrez annotation
     #msg("[GetSigfeatures] PHOSPHO DATA: Exporting phosphosite results without Entrez annotation")
     gene.anot <- NULL;
-    fast.write(signif(resTable,5), file=filename);
+    fast.write(cbind(PhosphositeID=rownames(resTable), signif(resTable,5)), row.names=F, file=filename);
   } else if (dataSet$annotated){ # annotated to entrez
     #msg("[GetSigfeatures] DEBUG: Annotated path - extracting rownames from comp.res...")
     anot.id <- rownames(dataSet$comp.res);
@@ -306,8 +306,11 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     gene.anot <- doEntrezIDAnot(feature.vec, paramSet$data.org, paramSet$data.idType);
 
     #msg("[GetSigfeatures] DEBUG: About to cbind for fast.write...")
-    # entrez.vec is already flattened from lines 296-297
-    fast.write(signif(dataSet$comp.res,5), row.names=T, file=filename);
+    if (!is.null(gene.anot) && !is.null(gene.anot$symbol)) {
+      fast.write(cbind(FeatureID=feature.vec, signif(dataSet$comp.res,5), Symbol=gene.anot$symbol, Name=gene.anot$name), row.names=F, file=filename);
+    } else {
+      fast.write(cbind(FeatureID=feature.vec, signif(dataSet$comp.res,5)), row.names=F, file=filename);
+    }
     #msg("[GetSigfeatures] DEBUG: fast.write completed.")
 
     #msg("[GetSigfeatures] DEBUG: About to assign rownames to gene.anot...")
@@ -326,7 +329,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   } else {
     #msg("[GetSigfeatures] DEBUG: No annotation - writing plain results...")
     gene.anot <- NULL;
-    fast.write(signif(resTable,5), file=filename);
+    fast.write(cbind(FeatureID=rownames(resTable), signif(resTable,5)), row.names=F, file=filename);
   }
   #msg("[GetSigfeatures] DEBUG: Annotation section complete.")
   if (is_phospho) {
@@ -373,8 +376,8 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   
   logFC <- unname(logfc.mat[,1]);
   geneList <- paste(gene, logFC, collapse="\n");
-  up <- nrow(resTable[which(logfc.mat[,paramSet$selectedFactorInx]> fc.lvl),])
-  down <- nrow(resTable[which(logfc.mat[,paramSet$selectedFactorInx]< -fc.lvl),])
+  up <- nrow(resTable[which(logfc.mat[, paramSet$selectedFactorInx] > fc.lvl), , drop = FALSE])
+  down <- nrow(resTable[which(logfc.mat[, paramSet$selectedFactorInx] < -fc.lvl), , drop = FALSE])
   saveSet(msgSet, "msgSet");
   
   data.norm <- dataSet$data.norm
@@ -391,7 +394,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
 
     resTable <- dataSet$comp.res.list[[inx]]
 
-    resTable <- resTable[!is.na(resTable[, 1]), ]
+    resTable <- resTable[!is.na(resTable[, 1]), , drop = FALSE]
 
     deg.pass <- if (FDR == "true")  resTable$adj.P.Val <= p.lvl
                 else                resTable$P.Value   <= p.lvl
@@ -404,7 +407,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
       next
     }
 
-    sig <- resTable[all_pass, ]
+    sig <- resTable[all_pass, , drop = FALSE]
     sig$GeneID      <- rownames(sig)                # preserve raw ID
     sig$Comparison  <- names(dataSet$comp.res.list)[[inx]]
 
@@ -429,8 +432,9 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
                         "_Significant_features.csv")
 
   if (nrow(final_table) > 0) {
-    write.csv(final_table[ , setdiff(names(final_table), "GeneID")],
-              file = output_file, row.names = FALSE)
+    col_order <- c("GeneID", "Symbol", "Name", "Comparison",
+                   setdiff(names(final_table), c("GeneID", "Symbol", "Name", "Comparison")))
+    write.csv(final_table[, col_order], file = output_file, row.names = FALSE)
 
     all_significant_features <- unique(final_table$GeneID)  # de-duplicate here
     de.Num.total          <- length(all_significant_features)
@@ -586,8 +590,21 @@ dataSet$comp.res <- rbind(resTable, other)
 
   output_file <- paste0(dataName, "_logFC_",format(as.numeric(fc.lvl), digits = 2, nsmall = 0, trim = TRUE, scientific = FALSE),
                         "_Significant_features.csv")
-    write.csv(dataSet$comp.res,
-              file = output_file, row.names = FALSE)
+  {
+    feat_ids <- rownames(dataSet$comp.res)
+    if (is_phospho) {
+      write.csv(cbind(FeatureID = feat_ids, dataSet$comp.res),
+                file = output_file, row.names = FALSE)
+    } else {
+      anot <- tryCatch(
+        doEntrezIDAnot(feat_ids, paramSet$data.org, paramSet$data.idType),
+        error = function(e) data.frame(symbol = rep(NA_character_, length(feat_ids)),
+                                       name   = rep(NA_character_, length(feat_ids)))
+      )
+      write.csv(cbind(FeatureID = feat_ids, Symbol = anot$symbol, Name = anot$name, dataSet$comp.res),
+                file = output_file, row.names = FALSE)
+    }
+  }
 
   analSet$sig.gene.count <- de.Num;
   saveSet(analSet, "analSet");

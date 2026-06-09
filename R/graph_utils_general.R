@@ -72,10 +72,113 @@ rescale2NewRange <- function(qvec, a, b){
     "Cytoskeleton" = "#4daf4a",
     "Endomembrane" = "#984ea3",
     "Mitochondria & metabolic organelles" = "#ff7f00",
-    "Mitochondrial & metabolic organelles" = "#17becf",
     "Cytosol" = "#a65628",
     "Extracellular" = "#f781bf",
     "Unknown" = "#999999"
+  )
+}
+
+# Map raw Broad.category values to the standard compartment names used in .paCompartmentColors().
+.normalizeBroadCategory <- function(categories) {
+  known <- c(
+    "Nucleus", "Cell surface & adhesion", "Cytoskeleton", "Endomembrane",
+    "Mitochondria & metabolic organelles",
+    "Cytosol", "Extracellular", "Unknown"
+  )
+  sapply(categories, function(cat) {
+    if (is.na(cat) || !nzchar(trimws(cat))) return("Unknown")
+    if (cat %in% known) return(cat)
+    # keyword scan on the raw string (case-insensitive)
+    lc <- tolower(cat)
+    if (grepl("nucleus|nuclear|chromatin|chromosome|nucleolus|nucleoplasm", lc))
+      return("Nucleus")
+    if (grepl("cell membrane|plasma membrane|cell surface|cell junction|adherens|focal adhesion|tight junction|gap junction|synapt|postsynaptic|presynaptic", lc))
+      return("Cell surface & adhesion")
+    if (grepl("cytoskeleton|microtubule|actin|intermediate filament|spindle|centrosome|centriole", lc))
+      return("Cytoskeleton")
+    if (grepl("endoplasmic reticulum|golgi|lysosome|endosome|phagosome|autophagosom|vesicle|vacuole|peroxisome|melanosome", lc))
+      return("Endomembrane")
+    if (grepl("mitochondri|chloroplast|plastid|oxidative phosphorylation", lc))
+      return("Mitochondria & metabolic organelles")
+    if (grepl("secreted|extracellular|basement membrane|collagen|laminin|fibronectin|matrix|blood|serum|plasma protein", lc))
+      return("Extracellular")
+    if (grepl("cytoplasm|cytosol|cytoplasmic|ribosom|proteasome|stress granule|p-body", lc))
+      return("Cytosol")
+    return("Unknown")
+  }, USE.NAMES = FALSE)
+}
+
+.paSplitCompartmentValues <- function(x) {
+  x <- as.character(x)
+  if (length(x) == 0 || is.na(x) || !nzchar(trimws(x))) return(character(0))
+  vals <- unlist(strsplit(x, "[;,]", perl = TRUE), use.names = FALSE)
+  vals <- trimws(vals)
+  vals <- vals[!is.na(vals) & nzchar(vals)]
+  unique(vals)
+}
+
+.paPrimaryCompartment <- function(broad.category = NA_character_, main.location = NA_character_) {
+  raw.locations <- .paSplitCompartmentValues(main.location)
+  raw.categories <- .paSplitCompartmentValues(broad.category)
+  normalized.raw <- unique(.normalizeBroadCategory(c(raw.categories, raw.locations)))
+  normalized.raw <- normalized.raw[!is.na(normalized.raw) & normalized.raw != "Unknown"]
+
+  # Priority order: always applied when multiple categories are present.
+  # Ordered by functional specificity — more spatially restricted compartments rank higher
+  # so proteins with dual localization are assigned their most informative context.
+  priority <- c(
+    "Nucleus",
+    "Mitochondria & metabolic organelles",
+    "Cell surface & adhesion",
+    "Endomembrane",
+    "Cytoskeleton",
+    "Extracellular",
+    "Cytosol"
+  )
+
+  if (length(normalized.raw) == 1) {
+    primary <- normalized.raw[1]
+  } else if (length(normalized.raw) > 1) {
+    hit <- priority[priority %in% normalized.raw]
+    primary <- if (length(hit) > 0) hit[1] else normalized.raw[1]
+  } else {
+    primary <- "Unknown"
+  }
+
+  all.categories <- unique(c(primary, normalized.raw))
+  all.categories <- all.categories[!is.na(all.categories) & nzchar(all.categories)]
+  if (length(all.categories) == 0) all.categories <- "Unknown"
+
+  all.locations <- raw.locations
+  if (length(all.locations) == 0) all.locations <- if (!is.na(main.location) && nzchar(as.character(main.location))) as.character(main.location) else "Unknown"
+
+  list(
+    primary = primary,
+    display = primary,
+    all_categories = paste(all.categories, collapse = "; "),
+    all_locations = paste(all.locations, collapse = "; "),
+    is_multi = length(setdiff(all.categories, "Unknown")) > 1
+  )
+}
+
+.paResolveCompartmentAnnotations <- function(broad.categories, main.locations) {
+  n <- max(length(broad.categories), length(main.locations))
+  if (length(broad.categories) == 0) broad.categories <- rep(NA_character_, n)
+  if (length(main.locations) == 0) main.locations <- rep(NA_character_, n)
+  broad.categories <- rep(broad.categories, length.out = n)
+  main.locations <- rep(main.locations, length.out = n)
+
+  resolved <- lapply(seq_len(n), function(i) {
+    .paPrimaryCompartment(broad.categories[i], main.locations[i])
+  })
+
+  data.frame(
+    primary = vapply(resolved, `[[`, character(1), "primary"),
+    display = vapply(resolved, `[[`, character(1), "display"),
+    all_categories = vapply(resolved, `[[`, character(1), "all_categories"),
+    all_locations = vapply(resolved, `[[`, character(1), "all_locations"),
+    is_multi = vapply(resolved, `[[`, logical(1), "is_multi"),
+    stringsAsFactors = FALSE
   )
 }
 
@@ -552,10 +655,11 @@ ExtractModule<- function(nodeids, type="enr"){
       loc.main <- ifelse(is.na(loc.map$Main.location) | loc.map$Main.location == "",
                          "Unknown",
                          as.character(loc.map$Main.location))
+      loc.res <- .paResolveCompartmentAnnotations(loc.category, loc.main)
 
-      fill.category <- missing.category & loc.category != "Unknown"
+      fill.category <- missing.category & loc.res$primary != "Unknown"
       fill.location <- missing.location & loc.main != "Unknown"
-      category[fill.category] <- loc.category[fill.category]
+      category[fill.category] <- loc.res$primary[fill.category]
       main.loc[fill.location] <- loc.main[fill.location]
       msg("[ExtractModule] Recovered compartment info for ",
           sum(category != "Unknown", na.rm = TRUE), "/", vc, " nodes")
@@ -564,6 +668,9 @@ ExtractModule<- function(nodeids, type="enr"){
 
   category[is.na(category) | !nzchar(category)] <- "Unknown"
   main.loc[is.na(main.loc) | !nzchar(main.loc)] <- "Unknown"
+  resolved.category <- .paResolveCompartmentAnnotations(category, main.loc)
+  category <- resolved.category$primary
+  main.loc <- resolved.category$all_locations
   V(g)$broad_category <- category
   V(g)$main_location <- main.loc
 
@@ -908,8 +1015,20 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     cat("\n")
   }
 
-  # Count proteins per broad category
   loc.map$Broad.category[is.na(loc.map$Broad.category)] <- "Unknown"
+  if (!"Main.location" %in% colnames(loc.map)) {
+    loc.map$Main.location <- "Unknown"
+  }
+  loc.map$Main.location[is.na(loc.map$Main.location) | !nzchar(as.character(loc.map$Main.location))] <- "Unknown"
+
+  comp.res <- .paResolveCompartmentAnnotations(loc.map$Broad.category, loc.map$Main.location)
+  loc.map$Primary.category <- comp.res$primary
+  loc.map$Display.category <- comp.res$display
+  loc.map$All.categories <- comp.res$all_categories
+  loc.map$All.locations <- comp.res$all_locations
+  loc.map$Is.multilocalized <- comp.res$is_multi
+  loc.map$Broad.category <- loc.map$Primary.category
+
   category.counts <- table(loc.map$Broad.category)
   cat(sprintf("[Localization] Category distribution: %s\n",
               paste(names(category.counts), "=", category.counts, collapse=", ")))
@@ -1064,7 +1183,6 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     "Cytoskeleton" = "#4daf4a",
     "Endomembrane" = "#984ea3",
     "Mitochondria & metabolic organelles" = "#ff7f00",
-    "Mitochondrial & metabolic organelles" = "#17becf",  # Teal/cyan color
     "Cytosol" = "#a65628",
     "Extracellular" = "#f781bf",
     "Unknown" = "#999999"
@@ -1168,11 +1286,15 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     entrez.id <- as.character(nodes[i])  # primary Entrez ID for display
     category <- loc.map$Broad.category[i]
     if (is.na(category)) category <- "Unknown"
+    category.display <- loc.map$Display.category[i]
+    if (is.na(category.display) || !nzchar(category.display)) category.display <- category
+    category.all <- loc.map$All.categories[i]
+    if (is.na(category.all) || !nzchar(category.all)) category.all <- category
     comp.id <- gsub("[^A-Za-z0-9_]", "_", category)
     gene.name <- loc.map$Gene.name[i]
     if (is.na(gene.name) || gene.name == "") gene.name <- entrez.id
     if (!is.na(symVec[i]) && nzchar(symVec[i])) gene.name <- symVec[i]
-    main.loc <- loc.map$Main.location[i]
+    main.loc <- loc.map$All.locations[i]
     if (is.na(main.loc)) main.loc <- "Unknown"
     col <- category.colors[[category]]
     if (is.null(col)) col <- "#999999"
@@ -1205,6 +1327,9 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
       posx      = round(x.coords[i], 2),
       posy      = round(y.coords[i], 2),
       compartment = comp.id,
+      compartment_all = category.all,
+      all_compartments = category.all,
+      broad_category = category,
       type      = "gene",
       location  = main.loc
     )
@@ -1305,6 +1430,7 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
   }
   expr.collapsed <- expr.vals[collapsed.idx]
   loc.collapsed <- loc.map$Broad.category[collapsed.idx]
+  loc.all.collapsed <- loc.map$All.categories[collapsed.idx]
   node.table <- data.frame(
     id          = as.character(collapsed.nodes),
     label       = sapply(gene.nodes, function(n) n$label),
@@ -1313,6 +1439,7 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     betweenness = as.numeric(btws),
     expr        = as.numeric(expr.collapsed),
     location    = as.character(loc.collapsed),
+    all_compartments = as.character(loc.all.collapsed),
     stringsAsFactors = FALSE
   )
   node.table <- node.table[order(node.table$degree, decreasing = TRUE), ]

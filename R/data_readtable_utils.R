@@ -115,8 +115,16 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
    write.csv(sanitizeSmallNumbers(datOrig[1:row.num, 1:col.num]), file="raw_dataview.csv");  
 
   use.external.meta <- (!is.null(metafileName) && nchar(metafileName) > 0)
+  use.reader.meta <- !is.null(dataSet$meta.info) && (is.fragpipe || is.diann)
 
-  if (use.external.meta) {
+  if (use.reader.meta) {
+    # Format-specific readers parse metadata according to their own conventions
+    # (for example FragPipe experiment_annotation.tsv sample_name/condition columns).
+    # Re-reading the same file with the generic parser can collapse conditions to
+    # sample IDs and break downstream group comparisons.
+    meta.info <- dataSet$meta.info;
+    metaContain <- "false";
+  } else if (use.external.meta) {
     #msg("[ReadTabExpressData] external metadata provided; loading meta file (metaContain=", metaContain, ")")
     meta.info <- .readMetaData(metafileName, dataSet$data_orig, metaContain)
   } else if (!is.null(dataSet$meta.info)) {
@@ -3250,15 +3258,74 @@ SetPhosphoOptions <- function(format = "diann_report", ptm = "phospho", locProb 
 
   # 8. Create Peptide-to-Protein Map (Vital for your new modular step)
   # We extract this so you can use it in the 'Summarization' step later
-  prot.col.name <- grep("Protein", colnames(dat), value=TRUE)[1]
+  first_existing <- function(cands) {
+    hit <- cands[cands %in% colnames(dat)]
+    if (length(hit) > 0) hit[1] else NA_character_
+  }
+  first_grep <- function(pattern) {
+    hit <- grep(pattern, colnames(dat), value = TRUE)
+    if (length(hit) > 0) hit[1] else NA_character_
+  }
+  clean_fragpipe_protein <- function(x) {
+    x <- trimws(as.character(x))
+    sub("\\|TX=.*$", "", x)
+  }
+  extract_fragpipe_tag <- function(x, tag) {
+    x <- as.character(x)
+    has.tag <- grepl(paste0("\\b", tag, "="), x)
+    out <- rep(NA_character_, length(x))
+    out[has.tag] <- sub(paste0(".*\\b", tag, "=([^ ]+).*"), "\\1", x[has.tag])
+    out
+  }
+
+  prot.col.name <- first_existing(c("Protein"))
+  if (is.na(prot.col.name)) prot.col.name <- first_grep("^Protein($|[[:space:]]|\\.)")
+  protein.id.col <- first_existing(c("Protein ID", "Protein.ID", "Protein IDs", "Protein.IDs", "Protein.Ids"))
+  if (is.na(protein.id.col)) protein.id.col <- prot.col.name
+  mapped.prot.col <- first_existing(c("Mapped Proteins", "Mapped.Proteins"))
+  gene.col <- first_existing(c("Gene", "Genes", "Mapped Genes", "Mapped.Genes"))
+  desc.col <- first_existing(c("Protein Description", "Protein.Description", "Description"))
+
+  primary.prot.raw <- if (!is.na(prot.col.name)) dat[[prot.col.name]] else rep(NA_character_, nrow(dat))
+  primary.prot <- clean_fragpipe_protein(primary.prot.raw)
+  protein.id.raw <- if (!is.na(protein.id.col)) dat[[protein.id.col]] else primary.prot.raw
+  mapped.prot.raw <- if (!is.na(mapped.prot.col)) dat[[mapped.prot.col]] else rep("", nrow(dat))
+  gene.raw <- if (!is.na(gene.col)) as.character(dat[[gene.col]]) else rep(NA_character_, nrow(dat))
+  desc.raw <- if (!is.na(desc.col)) as.character(dat[[desc.col]]) else primary.prot
+  gn <- extract_fragpipe_tag(protein.id.raw, "GN")
+  ta <- extract_fragpipe_tag(protein.id.raw, "TA")
+  pa <- extract_fragpipe_tag(protein.id.raw, "PA")
+  gene.out <- ifelse(is.na(gene.raw) | trimws(gene.raw) == "", gn, gene.raw)
+  proteotypic <- as.integer(
+    !(is.na(primary.prot) | primary.prot == "") &
+      (is.na(mapped.prot.raw) | trimws(as.character(mapped.prot.raw)) == "")
+  )
+
   prot_map <- NULL
   if (!is.na(prot.col.name)) {
       prot_map <- data.frame(
           Peptide = id.col,
-          Protein = dat[[prot.col.name]],
+          Protein = primary.prot,
           stringsAsFactors = FALSE
       )
   }
+
+  fragpipe_iso_meta <- data.frame(
+    Protein.IDs = as.character(id.col),
+    Protein.Group = primary.prot,
+    Protein.Ids = as.character(protein.id.raw),
+    Protein.Names = desc.raw,
+    Gene = gene.out,
+    Genes = gene.out,
+    GN = gn,
+    TA = ta,
+    PA = pa,
+    Proteotypic = proteotypic,
+    Stripped.Sequence = if ("Peptide Sequence" %in% colnames(dat)) as.character(dat[["Peptide Sequence"]]) else as.character(id.col),
+    Modified.Sequence = if ("Modified Sequence" %in% colnames(dat)) as.character(dat[["Modified Sequence"]]) else as.character(id.col),
+    stringsAsFactors = FALSE
+  )
+  ov_qs_save(fragpipe_iso_meta, "diann_metadata.qs")
 
   # Return compatible list structure
   list(

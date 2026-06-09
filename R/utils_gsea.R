@@ -133,9 +133,24 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     # Replace names with Entrez IDs
     names(rankedVec) <- entrez.ids.ranked
 
+    # Deduplicate: multiple UniProt IDs can map to the same Entrez gene.
+    # Keep the entry with the largest absolute value (most extreme signal).
+    if (any(duplicated(names(rankedVec)))) {
+      dup.before <- length(rankedVec)
+      rankedVec <- rankedVec[order(-abs(rankedVec))]
+      rankedVec <- rankedVec[!duplicated(names(rankedVec))]
+      msg("DEBUG: Removed ", dup.before - length(rankedVec), " duplicate Entrez entries, kept max |value|")
+    }
+
     msg("DEBUG: After conversion - rankedVec length = ", length(rankedVec))
     msg("DEBUG: First 5 names of rankedVec (AFTER conversion to Entrez): ", paste(head(names(rankedVec), 5), collapse=", "))
   } else {
+    # Deduplicate in case Entrez IDs themselves are already duplicated
+    if (any(duplicated(names(rankedVec)))) {
+      rankedVec <- rankedVec[order(-abs(rankedVec))]
+      rankedVec <- rankedVec[!duplicated(names(rankedVec))]
+      msg("DEBUG: Removed duplicate Entrez entries from already-Entrez rankedVec")
+    }
     msg("DEBUG: rankedVec IDs are already Entrez, no conversion needed")
   }
 
