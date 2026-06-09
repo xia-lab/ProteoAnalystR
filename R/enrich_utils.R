@@ -344,6 +344,26 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     AddErrMsg(paste0("[EnrichLib] Library file not found: ", my.path));
     return(0);
   }
+
+  # Session cache keyed by the resolved .rds path. The same library is loaded
+  # several times per pass (ORA + ridgeline, and once per re-run), and large
+  # libraries like GO:BP are slow to readRDS + post-process. Caching the fully
+  # processed result avoids the redundant disk read. Stored in an option (NOT
+  # .GlobalEnv) so it is never serialized by save.image()/Rload.RData — keeps
+  # the project save small and survives Rserve reconnect cleanly (empty after
+  # a fresh session, repopulated on demand).
+  .lib.cache <- getOption("ov.enrichlib.cache");
+  if (is.null(.lib.cache)) {
+    .lib.cache <- new.env(parent = emptyenv());
+    options(ov.enrichlib.cache = .lib.cache);
+  }
+  if (!is.null(.lib.cache[[my.path]])) {
+    res <- .lib.cache[[my.path]];
+    # Preserve the on-disk side-effect downstream consumers read.
+    ov_qs_save(res$current.featureset, "current_featureset.qs");
+    return(res);
+  }
+
   my.lib <- tryCatch(
     readRDS(my.path),
     error = function(e) {

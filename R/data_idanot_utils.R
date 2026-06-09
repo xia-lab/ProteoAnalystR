@@ -940,7 +940,18 @@ doEntrez2SymbolMapping <- function(entrez.vec,data.org="NA", data.idType="NA"){
   }
 
   if(data.org == "NA"){
-    doEntrez2SymbolMapping(entrez.vec);
+    paramSet <- readSet(paramSet, "paramSet");
+    data.org <- paramSet$data.org;
+    if(data.idType == "NA"){
+      data.idType <- paramSet$data.idType;
+    }
+    if(!is.null(data.idType) && data.idType == "symbol"){
+      return(entrez.vec);
+    }
+  }
+
+  if(is.null(data.org) || data.org == "NA" || data.org == "na"){
+    return(entrez.vec); # org unresolved – nothing to map against
   }
 
   # Map Entrez IDs to symbols via entrez database

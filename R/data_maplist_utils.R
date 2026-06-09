@@ -374,8 +374,30 @@ GetListIntersectionSize <- function(){
     if(substring(lines[1],1,1)=="#"){
       lines <- lines[-1];
     }
-    gene.lists <- strsplit(lines, "\\s+");
+    # Accept comma as a separator in addition to whitespace so CSV-style
+    # lists ("O94911,2.68") get the same 2-column shape as tab/space lists.
+    # Without commas in the split class every CSV line becomes a single
+    # token like "O94911,2.68" which fails ID mapping at ~0%.
+    gene.lists <- strsplit(lines, "[,[:space:]]+");
     gene.mat <- do.call(rbind, gene.lists);
+
+    # Header detection — strip the first row when it looks like a column
+    # header so its labels ("Protein", "LogFC") don't try to map as IDs and
+    # drag the mapping success rate to 0. (a) multi-column: row 1 col 2 is
+    # non-numeric; (b) single-column: first cell is a common header keyword.
+    if (nrow(gene.mat) > 1) {
+      if (ncol(gene.mat) >= 2 && !.is_valid_numeric(gene.mat[1, 2])) {
+        gene.mat <- gene.mat[-1, , drop = FALSE];
+      } else if (ncol(gene.mat) == 1 &&
+                 tolower(gene.mat[1, 1]) %in%
+                   c("gene", "genes", "symbol", "symbols", "id", "ids",
+                     "name", "names", "feature", "features",
+                     "protein", "proteins", "metabolite", "metabolites",
+                     "compound", "compounds", "mirna", "mirnas",
+                     "taxon", "taxa")) {
+        gene.mat <- gene.mat[-1, , drop = FALSE];
+      }
+    }
 
     if(dim(gene.mat)[2] == 1){ # add 0
       gene.mat <- cbind(gene.mat, rep(0, nrow(gene.mat)));

@@ -137,7 +137,18 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       return(0);
     }
 
-    if (is_phospho) {
+    # When the caller (the multi-library enrichment driver) already computed the
+    # ORA for this fun.type over the SAME query, reuse the enr.mat.qs /
+    # hits_query.qs it wrote instead of recomputing — the recompute here was
+    # ~half the multi-library step's runtime. Gated on the ov.enrich.reuse option
+    # (set only by .ai_run_enrich_libs); default-off keeps manual / matrix /
+    # refine callers recomputing, where the ridgeline query (sig.mat) differs.
+    .reuse.enr <- isTRUE(getOption("ov.enrich.reuse", FALSE)) &&
+                  file.exists("enr.mat.qs") && file.exists("hits_query.qs");
+    if (.reuse.enr) {
+      message("[compute.ridgeline] reusing precomputed enr.mat.qs for ", fun.type,
+              " (skipped ORA recompute)");
+    } else if (is_phospho) {
       # For phospho data, gene.vec contains phosphosite IDs (uniprot+site)
       .performEnrichAnalysisPhospho(dataSet, imgNm, fun.type, gene.vec, "ridgeline")
     } else {
@@ -438,7 +449,9 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       scale = 1.5, rel_min_height = .02, size = 0.25,
       position = position_points_jitter(height = 0)) +
     geom_vline(xintercept = 0, color = "red") +
-    scale_y_discrete(expand = c(0, 0), name = "Gene Set") + 
+    scale_y_discrete(expand = c(0, 0), name = "Gene Set",
+                     labels = function(x) ifelse(nchar(x) > 45L,
+                                                 paste0(substr(x, 1L, 42L), "..."), x)) +
     scale_x_continuous(expand = c(0, 0), name = "log2FC") +
     scale_fill_gradient("adj. pval",
                         low = high.col, high = low.col) + 
