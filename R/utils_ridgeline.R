@@ -300,6 +300,39 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
 
   }
 
+  # ── Full-distribution ORA ridgeline ──────────────────────────────────────
+  # Originally the ORA ridge plotted only the SIGNIFICANT proteins overlapping
+  # each pathway (dataSet$sig.mat). When few proteins pass the DE cut that
+  # leaves 0-1 points per pathway and the ridges render empty. Mirror the GSEA
+  # ridge instead: plot every pathway member that has a fold change (all
+  # measured proteins), and flag the significant ones so the renderer can
+  # highlight them while the rest are drawn grey. Pathway selection and the
+  # p-value fill stay ORA-derived. Scoped to onedata (sig.mat / comp.res share
+  # the data's UniProt id space); other anal.types keep the prior behaviour.
+  ridge.sig.ids <- NULL
+  if (ridgeType == "ora" && anal.type == "onedata" && !is.null(dataSet$comp.res)) {
+    ridge.sig.ids <- rownames(sigmat)                 # significant proteins (sig.mat)
+    # Fold changes come from the primary comparison of interest (a single-contrast
+    # table); for multi-group designs comp.res is the overall F-test with no single
+    # logFC, so fall back through the resolver. col 1 = logFC.
+    primary.fc <- if (exists(".ov_primary_comp")) .ov_primary_comp(dataSet) else dataSet$comp.res
+    full.fc  <- as.data.frame(primary.fc)
+    univ.ids <- rownames(full.fc)
+    umap <- tryCatch(queryGeneDB("entrez_uniprot", paramSet$data.org),
+                     error = function(e) NULL)
+    if (!is.null(umap)) {
+      norm.ids <- sub("-\\d+$", "", sub("_[A-Z]_\\d+$", "", univ.ids))
+      univ.ent <- umap[match(norm.ids, umap[, "accession"]), "gene_id"]
+      full.hits <- lapply(current.featureset,
+                          function(es) univ.ids[as.character(univ.ent) %in% as.character(es)])
+      full.hits <- full.hits[resTable$pathway]
+      if (any(vapply(full.hits, length, integer(1)) > 0)) {
+        hits.query <- full.hits                       # all pathway members in data
+        sigmat <- full.fc                             # fold-change source = all proteins
+      }
+    }
+  }
+
   # prepare data for plotting
   # For phospho data, rownames(sigmat) are phosphosite IDs that need to be converted to entrez
   is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")
@@ -422,8 +455,12 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   df <- merge(df, degs.plot, by = "merge_id", all.x = TRUE, all.y = FALSE);
   df <- na.omit(df)
 
-  if(nrow(df) > 0) {
-  }
+  # Flag the significant proteins among the plotted pathway members so the
+  # renderer can highlight them (others drawn grey). ridge.sig.ids is set only
+  # for the full-distribution ORA path; otherwise every point is "other".
+  sig.flag <- if (!is.null(ridge.sig.ids)) df$entrez %in% ridge.sig.ids else rep(FALSE, nrow(df))
+  df$sig <- factor(ifelse(sig.flag, "significant", "other"),
+                   levels = c("significant", "other"))
 
   # Check if we have any data to plot
   if (nrow(df) == 0) {
@@ -441,20 +478,33 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   means <- means[order(means$x, decreasing = FALSE), ];
   df$name <- factor(df$name, levels = means$Group.1);
   
-  # make the plot
-  rp <- ggplot(df, aes(x = value, y = name, fill = adj.pval)) +
+  # make the plot. When significant members are present, colour the jittered
+  # points by significance (highlighted vs grey); otherwise keep the single
+  # grey point colour so GSEA / no-sig plots look exactly as before.
+  hasSig <- any(df$sig == "significant")
+  ridge_points <- if (hasSig) {
+    geom_density_ridges(
+      aes(point_color = sig),
+      jittered_points = TRUE, point_shape = "|", point_size = 5, point_alpha = 1,
+      color = "white",
+      scale = 1.5, rel_min_height = .02, size = 0.25,
+      position = position_points_jitter(height = 0))
+  } else {
     geom_density_ridges(
       jittered_points = TRUE, point_shape = "|", point_size = 5, point_color = "#898A89",
       color = "white",
       scale = 1.5, rel_min_height = .02, size = 0.25,
-      position = position_points_jitter(height = 0)) +
+      position = position_points_jitter(height = 0))
+  }
+  rp <- ggplot(df, aes(x = value, y = name, fill = adj.pval)) +
+    ridge_points +
     geom_vline(xintercept = 0, color = "red") +
     scale_y_discrete(expand = c(0, 0), name = "Gene Set",
                      labels = function(x) ifelse(nchar(x) > 45L,
                                                  paste0(substr(x, 1L, 42L), "..."), x)) +
     scale_x_continuous(expand = c(0, 0), name = "log2FC") +
     scale_fill_gradient("adj. pval",
-                        low = high.col, high = low.col) + 
+                        low = high.col, high = low.col) +
     coord_cartesian(clip = "off") +
     theme_ridges(center = TRUE) +
     theme(legend.position = "right",
@@ -462,6 +512,12 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
           axis.title = element_text(size=12, face = "bold"),
           axis.text.x = element_text(color = "black"),
           axis.text.y = element_text(size=12,color = "black"))
+  if (hasSig) {
+    rp <- rp + ggplot2::scale_discrete_manual(
+      aesthetics = "point_color",
+      values = c(significant = "#D7263D", other = "#9aa0a6"),
+      name = "Protein", drop = FALSE)
+  }
   
   msg("[Ridge] printing plot")
   Cairo::Cairo(file=imageName, width=10, height=8, type=format, bg="white", dpi=dpi, unit="in");

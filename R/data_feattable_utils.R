@@ -87,11 +87,23 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   # for two-class, only one column, multiple columns can be involved
   # for > comparisons - in this case, use the largest logFC among all comparisons
   # further filter by logFC
+  # Multi-group ("default") designs route the DE table + significance through the
+  # overall F-test (comp.res.omnibus) instead of an arbitrary pairwise contrast,
+  # mirroring ExpressAnalystR. Per-pairwise tables stay in comp.res.list and the
+  # selected inx becomes the primary comparison of interest (directional plots).
+  use.omnibus <- identical(dataSet$comp.type, "default") &&
+                 !is.null(dataSet$comp.res.omnibus)
   if (dataSet$de.method=="deseq2"){
-    hit.inx <- which(colnames(resTable) == "baseMean");
-    dataSet$comp.res <- dataSet$comp.res.list[[inx]];
-    dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+    if (use.omnibus) {
+      # Multi-group LRT is the table + significance; inx = primary comparison.
+      dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+      dataSet$comp.res <- dataSet$comp.res.omnibus;
+    } else {
+      dataSet$comp.res <- dataSet$comp.res.list[[inx]];
+      dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+    }
     resTable <- dataSet$comp.res;
+    hit.inx <- which(colnames(resTable) == "baseMean");
    } else if (dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt" ){
     #msg("[GetSigfeatures] Processing limma/deqms/wtt method...")
 
@@ -120,9 +132,19 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
       hit.inx <- NA
     }
 
-    dataSet$comp.res <- dataSet$comp.res.list[[inx]];
-    dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
-    resTable <- dataSet$comp.res;
+    if (use.omnibus) {
+      # Multi-group: overall F-test is the table + significance; inx selects the
+      # primary comparison of interest (drives the directional plots).
+      dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+      dataSet$comp.res <- dataSet$comp.res.omnibus;
+      resTable <- dataSet$comp.res;
+      cn <- colnames(resTable); dim(cn) <- NULL; cn <- as.character(cn);
+      hit.inx <- match("AveExpr", cn);
+    } else {
+      dataSet$comp.res <- dataSet$comp.res.list[[inx]];
+      dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+      resTable <- dataSet$comp.res;
+    }
 
     if (is.na(hit.inx) && dataSet$de.method == "wtt") {
       ave.expr <- rowMeans(
@@ -138,10 +160,16 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
       dataSet$comp.res.list[[inx]] <- resTable
     }
   } else {
-    hit.inx <- which(colnames(resTable) == "logCPM");
-    dataSet$comp.res <- dataSet$comp.res.list[[inx]];
-    dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+    if (use.omnibus) {
+      # Multi-group edgeR LRT is the table + significance; inx = primary comparison.
+      dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+      dataSet$comp.res <- dataSet$comp.res.omnibus;
+    } else {
+      dataSet$comp.res <- dataSet$comp.res.list[[inx]];
+      dataSet$active.comp.nm <- names(dataSet$comp.res.list)[inx];
+    }
     resTable <- dataSet$comp.res;
+    hit.inx <- which(colnames(resTable) == "logCPM");
   }
 
   if(length(hit.inx) == 0){
@@ -178,7 +206,9 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     logfc.mat <- resTable[, cols_to_take, drop = FALSE];
   }
   #msg("[GetSigfeatures] DEBUG: About to filter by fold-change (fc.lvl=", fc.lvl, ")...")
-  if(paramSet$oneDataAnalType == "dose"){
+  if(paramSet$oneDataAnalType == "dose" || use.omnibus){
+    # dose-response and the multi-group ANOVA omnibus both have multiple logFC
+    # columns; pass a feature if ANY contrast has |logFC| >= fc.lvl (max across).
     pos.mat <- abs(logfc.mat);
     fc.vec <- apply(pos.mat, 1, max);   # for > comparisons - in this case, use the largest logFC among all comparisons
     hit.inx.fc <- fc.vec >= fc.lvl;
@@ -239,7 +269,12 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   #msg("[GetSigfeatures] DEBUG: About to save data.stat.qs...")
   ov_qs_save(data, file="data.stat.qs");
   #msg("[GetSigfeatures] DEBUG: About to order comp.res by P.Value...")
-  o <- with(dataSet$comp.res, order(P.Value, -abs(logFC), na.last = TRUE))
+  o <- if ("logFC" %in% colnames(dataSet$comp.res)) {
+    with(dataSet$comp.res, order(P.Value, -abs(logFC), na.last = TRUE))
+  } else {
+    # omnibus F-test table has per-contrast logFC columns, no single logFC
+    order(dataSet$comp.res$P.Value, na.last = TRUE)
+  }
   dataSet$comp.res <- dataSet$comp.res[o, , drop = FALSE]
 
   #msg("[GetSigfeatures] DEBUG: About to filter comp.res using %in% on rownames...")
