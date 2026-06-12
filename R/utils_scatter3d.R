@@ -205,7 +205,7 @@ my.json.scatter <- function(dataSet, filenm="abc"){
   saveSet(paramSet, "paramSet");
   
   sink(filenm);
-  cat(toJSON(netData));
+  cat(jsonlite::toJSON(netData));
   sink();
   
   return(1);

@@ -806,7 +806,7 @@ ReadMetaData <- function(metafilename){
   #msg("[MaxQuant] reading proteinGroups via MSnbase at ", filePath)
   
   if (!file.exists(filePath)) {
-    warning("MaxQuant file not found: ", filePath)
+    AddErrMsg(paste0("[MaxQuant] file not found: ", filePath))
     return(NULL)
   }
 
@@ -832,7 +832,11 @@ ReadMetaData <- function(metafilename){
     if (length(lfq.cols) > 0) { ecols <- lfq.cols; source.label <- "LFQ.intensity" }
     else if (length(ibaq.cols) > 0) { ecols <- ibaq.cols; source.label <- "iBAQ" }
     else if (length(int.cols) > 0) { ecols <- int.cols; source.label <- "Intensity" }
-    else { warning("No quantification columns found."); return(NULL) }
+    else {
+      AddErrMsg(paste0("[MaxQuant] No quantification columns found (expected LFQ intensity / iBAQ / Intensity columns). Columns present: ",
+                        paste(header, collapse = ", ")))
+      return(NULL)
+    }
   }
 
   # Regex logic to find ID column
@@ -845,33 +849,38 @@ ReadMetaData <- function(metafilename){
   if(is.null(id.col.name)) {
     # Broad fallback
     broad <- grep("(?i)protein[ ._]IDs?$", header, perl = TRUE, value = TRUE)
-    if(length(broad) > 0) id.col.name <- broad[1]
-    else { warning("No Protein ID column found."); return(NULL) }
+    if(length(broad) > 0) {
+      id.col.name <- broad[1]
+    } else {
+      AddErrMsg(paste0("[MaxQuant] No Protein ID column found (expected 'Protein IDs' / 'Majority protein IDs'). Columns present: ",
+                        paste(header, collapse = ", ")))
+      return(NULL)
+    }
   }
 
   # --- Step 2: Ingest Data using fread ---
   dat <- tryCatch(
     data.table::fread(filePath, header = TRUE, check.names = FALSE, data.table = FALSE),
     error = function(e) {
-      warning("Failed to read MaxQuant file: ", e$message)
+      AddErrMsg(paste0("[MaxQuant] Failed to read file: ", e$message))
       NULL
     }
   )
 
   if (is.null(dat) || nrow(dat) == 0) {
-    warning("MaxQuant file is empty or failed to load.")
+    AddErrMsg("[MaxQuant] file is empty or failed to load.")
     return(NULL)
   }
 
   if (!id.col.name %in% colnames(dat)) {
-    warning("Protein ID column not found in MaxQuant file.")
+    AddErrMsg(paste0("[MaxQuant] Protein ID column '", id.col.name, "' not found in file body."))
     return(NULL)
   }
 
   quant.names <- header[ecols]
   quant.names <- quant.names[quant.names %in% colnames(dat)]
   if (length(quant.names) == 0) {
-    warning("No quantification columns found in MaxQuant file.")
+    AddErrMsg("[MaxQuant] No quantification columns found in file body.")
     return(NULL)
   }
 
@@ -1651,21 +1660,21 @@ SetSpectronautOptions <- function(inputType = "protein") {
 # Helper: read FragPipe LFQ protein table + experiment annotation
 .readFragpipeLfq <- function(data.file, meta.file, opts = list(quantType = "protein_maxlfq", removeContaminants = TRUE, minProb = NA, minPeptides = NA)) {
   if (!file.exists(data.file)) {
-    #msg("[FragPipe] data file not found: ", data.file)
+    AddErrMsg(paste0("[FragPipe] data file not found: ", data.file))
     return(NULL)
   }
   if (is.null(meta.file) || meta.file == "" || !file.exists(meta.file)) {
-    #msg("[FragPipe][ERROR] metadata file is required: ", meta.file)
+    AddErrMsg("[FragPipe] metadata file (experiment annotation) is required but was not provided or not found.")
     return(NULL)
   }
   dat <- tryCatch(read.delim(data.file, check.names = FALSE, stringsAsFactors = FALSE, comment.char = ""), error = function(e) NULL)
   if (is.null(dat)) {
-    #msg("[FragPipe][ERROR] unable to read data file")
+    AddErrMsg(paste0("[FragPipe] unable to read data file: ", data.file))
     return(NULL)
   }
   meta <- tryCatch(read.delim(meta.file, check.names = FALSE, stringsAsFactors = FALSE), error = function(e) NULL)
   if (is.null(meta)) {
-    #msg("[FragPipe][ERROR] unable to read metadata file")
+    AddErrMsg(paste0("[FragPipe] unable to read metadata file: ", meta.file))
     return(NULL)
   }
 
@@ -1764,7 +1773,8 @@ SetSpectronautOptions <- function(inputType = "protein") {
     match.cols <- grep("^(Intensity|LFQ.intensity)", colnames(dat), value = TRUE, ignore.case = TRUE)
   }
   if (length(match.cols) == 0) {
-    #msg("[FragPipe][ERROR] could not match intensity columns to runs (checked normalized run names and Intensity*/LFQ.intensity*)")
+    AddErrMsg(paste0("[FragPipe] could not match intensity columns to runs (checked normalized run names and Intensity*/LFQ.intensity* columns). Metadata sample names: ",
+                      paste(meta[[run.col]], collapse = ", ")))
     return(NULL)
   }
 
@@ -1884,7 +1894,7 @@ GetAnalysisType <- function(){
 # Helper: read DIA-NN report.tsv (toy example from diann-rpackage)
 .readDiannReport <- function(data.file, meta.file = "", opts = list(fileType = "protein_matrix", qvalueFilter = TRUE)) {
   if (!file.exists(data.file)) {
-    #msg('[DIA-NN] data file not found: ', data.file)
+    AddErrMsg(paste0("[DIA-NN] data file not found: ", data.file))
     return(NULL)
   }
   normalize.cached.diann <- function(obj) {
@@ -1985,7 +1995,7 @@ GetAnalysisType <- function(){
 
     precursor.col <- intersect(c("Precursor.Id", "Precursor.ID", "PrecursorId", "Precursor_Id"), cols)[1]
     if (is.na(precursor.col)) {
-      msg('[DIA-NN][ERROR] Precursor.Id column not found in pr_matrix format')
+      AddErrMsg("[DIA-NN] Precursor.Id column not found in pr_matrix format")
       return(NULL)
     }
 
@@ -2011,7 +2021,7 @@ GetAnalysisType <- function(){
     intensity.cols <- names(intensity.cols)[intensity.cols]
 
     if (length(intensity.cols) == 0) {
-      msg('[DIA-NN][ERROR] No intensity columns found in pr_matrix format')
+      AddErrMsg("[DIA-NN] No intensity columns found in pr_matrix format")
       return(NULL)
     }
 
@@ -2157,7 +2167,11 @@ GetAnalysisType <- function(){
     ))
   }
 
-  is.matrix.format <- "Protein.Ids" %in% cols &&
+  # Newer DIA-NN versions write pg_matrix.tsv with a "Protein.Group" column
+  # instead of "Protein.Ids" — accept either as the protein-id column.
+  id.col <- intersect(c("Protein.Ids", "Protein.Group"), cols)[1]
+
+  is.matrix.format <- !is.na(id.col) &&
                       ("Protein.Names" %in% cols || "features" %in% cols) &&
                       ncol(dat) > 3  # More than just annotation columns
   if (file.type == "protein_matrix" && !is.matrix.format) {
@@ -2167,9 +2181,10 @@ GetAnalysisType <- function(){
   if (is.matrix.format || file.type == "protein_matrix") {
     #msg('[DIA-NN] Detected matrix format with Protein.Ids column')
 
-    # Use Protein.Ids as rownames (keep full IDs, don't split)
-    if (!"Protein.Ids" %in% cols) {
-      #msg('[DIA-NN][ERROR] Protein.Ids column not found in matrix format')
+    # Use Protein.Ids/Protein.Group as rownames (keep full IDs, don't split)
+    if (is.na(id.col)) {
+      AddErrMsg(paste0("[DIA-NN] Protein.Ids/Protein.Group column not found in matrix format. Columns present: ",
+                        paste(cols, collapse = ", ")))
       return(NULL)
     }
 
@@ -2207,8 +2222,8 @@ GetAnalysisType <- function(){
     intensity.cols <- names(intensity.cols)[intensity.cols]
 
     if (length(intensity.cols) == 0) {
-      #msg('[DIA-NN][ERROR] No intensity columns found in matrix format')
-      #msg('[DIA-NN] Candidate columns were: ', paste(candidate.cols, collapse=", "))
+      AddErrMsg(paste0("[DIA-NN] No intensity columns found in matrix format. Candidate columns were: ",
+                        paste(candidate.cols, collapse = ", ")))
       return(NULL)
     }
 
@@ -2217,9 +2232,9 @@ GetAnalysisType <- function(){
     # Extract intensity matrix
     intens <- as.matrix(dat[, intensity.cols, drop = FALSE])
 
-    # Split Protein.Ids and take first protein (leading protein)
+    # Split Protein.Ids/Protein.Group and take first protein (leading protein)
     # This is consistent with the workflow assumption of one protein per row
-    protein.ids <- sapply(as.character(dat$Protein.Ids), function(x) {
+    protein.ids <- sapply(as.character(dat[[id.col]]), function(x) {
       parts <- strsplit(x, "[;|,]", perl = TRUE)[[1]]
       if (length(parts) == 0) return(NA_character_)
       parts[1]  # Take first/leading protein
