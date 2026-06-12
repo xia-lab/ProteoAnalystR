@@ -456,8 +456,11 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   df <- na.omit(df)
 
   # Flag the significant proteins among the plotted pathway members so the
-  # renderer can highlight them (others drawn grey). ridge.sig.ids is set only
-  # for the full-distribution ORA path; otherwise every point is "other".
+  # renderer highlights them in red (others grey). For GSEA (and any path that
+  # didn't set ridge.sig.ids) fall back to the DE-significant set so both ORA and
+  # GSEA mark the same proteins.
+  if (is.null(ridge.sig.ids) && !is.null(dataSet$sig.mat) && nrow(dataSet$sig.mat) > 0)
+    ridge.sig.ids <- rownames(dataSet$sig.mat)
   sig.flag <- if (!is.null(ridge.sig.ids)) df$entrez %in% ridge.sig.ids else rep(FALSE, nrow(df))
   df$sig <- factor(ifelse(sig.flag, "significant", "other"),
                    levels = c("significant", "other"))
@@ -478,33 +481,31 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   means <- means[order(means$x, decreasing = FALSE), ];
   df$name <- factor(df$name, levels = means$Group.1);
   
-  # make the plot. When significant members are present, colour the jittered
-  # points by significance (highlighted vs grey); otherwise keep the single
-  # grey point colour so GSEA / no-sig plots look exactly as before.
-  hasSig <- any(df$sig == "significant")
-  ridge_points <- if (hasSig) {
+  # The density ridge is built from ALL pathway members, drawn LOW and semi-
+  # transparent so it sits behind the member fold-changes (the "hits") instead of
+  # covering them — significant members in red, the rest grey. A low scale also
+  # stops a dense pathway's ridge from towering over and hiding the sparse rows
+  # next to it. fill = adj. pval is each method's own p (ORA vs GSEA stay distinct).
+  # The hits are a SEPARATE point layer (always rendered) over a low, semi-
+  # transparent density. geom_density_ridges drops a group entirely — density AND
+  # its jittered points — when it can't estimate a density (pathways with only a
+  # couple of members), which is what left sparse rows blank; a standalone
+  # geom_point keeps every member's fold-change visible regardless. Significant
+  # members in red, the rest grey; fill = each method's own adj. pval.
+  rp <- ggplot(df, aes(x = value, y = name)) +
     geom_density_ridges(
-      aes(point_color = sig),
-      jittered_points = TRUE, point_shape = "|", point_size = 5, point_alpha = 1,
-      color = "white",
-      scale = 1.5, rel_min_height = .02, size = 0.25,
-      position = position_points_jitter(height = 0))
-  } else {
-    geom_density_ridges(
-      jittered_points = TRUE, point_shape = "|", point_size = 5, point_color = "#898A89",
-      color = "white",
-      scale = 1.5, rel_min_height = .02, size = 0.25,
-      position = position_points_jitter(height = 0))
-  }
-  rp <- ggplot(df, aes(x = value, y = name, fill = adj.pval)) +
-    ridge_points +
+      aes(fill = adj.pval),
+      alpha = 0.45, color = "white", scale = 0.85, rel_min_height = 0.005, size = 0.25) +
+    geom_point(aes(colour = sig), shape = 124, size = 3.8, alpha = 1,
+               position = position_jitter(height = 0.06, width = 0)) +
     geom_vline(xintercept = 0, color = "red") +
-    scale_y_discrete(expand = c(0, 0), name = "Gene Set",
+    scale_y_discrete(expand = expansion(add = c(0.3, 0.9)), name = "Gene Set",
                      labels = function(x) ifelse(nchar(x) > 45L,
                                                  paste0(substr(x, 1L, 42L), "..."), x)) +
     scale_x_continuous(expand = c(0, 0), name = "log2FC") +
-    scale_fill_gradient("adj. pval",
-                        low = high.col, high = low.col) +
+    scale_fill_gradient("adj. pval", low = high.col, high = low.col) +
+    ggplot2::scale_colour_manual("Protein",
+      values = c(significant = "#D7263D", other = "#9aa0a6"), drop = FALSE) +
     coord_cartesian(clip = "off") +
     theme_ridges(center = TRUE) +
     theme(legend.position = "right",
@@ -512,12 +513,6 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
           axis.title = element_text(size=12, face = "bold"),
           axis.text.x = element_text(color = "black"),
           axis.text.y = element_text(size=12,color = "black"))
-  if (hasSig) {
-    rp <- rp + ggplot2::scale_discrete_manual(
-      aesthetics = "point_color",
-      values = c(significant = "#D7263D", other = "#9aa0a6"),
-      name = "Protein", drop = FALSE)
-  }
   
   msg("[Ridge] printing plot")
   Cairo::Cairo(file=imageName, width=10, height=8, type=format, bg="white", dpi=dpi, unit="in");
