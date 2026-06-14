@@ -599,13 +599,13 @@ qc.overview.patchwork <- function(dat, imgNm, dpi = 96, format = "png", meta = N
   overview.plot <- dendro.plot + violin.plot +
     patchwork::plot_layout(ncol = 2, widths = c(1.1, 1.9), guides = "collect") &
     theme(
-      legend.position = "bottom",
+      legend.position = "right",
       plot.margin = margin(2, 2, 2, 2)
     )
 
   sample_count <- length(sample.order)
   height_in <- max(6.5, min(16, 2.8 + sample_count * 0.22))
-  width_in <- 12  # Reduced from 18 (2 panels instead of 3)
+  width_in <- 14  # 2 panels + right-side collected legend
 
   if (dpi == 72) {
     dpi <- 96

@@ -109,8 +109,12 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     # IDs are UniProt, must convert to Entrez for FGSEA
     msg("DEBUG: Converting UniProt IDs in rankedVec to Entrez...")
 
-    # Normalize UniProt IDs (remove phosphosite annotations, isoforms)
+    # Normalize UniProt IDs: first strip DIA-NN compound format, then phosphosite/isoform suffixes
+    # DIA-NN row names look like "Q04837,A4D1U3|TX=9606 OS=Human GN=SSBP1 TA=..." or
+    # "P62851|TX=9606 OS=Human GN=RPS25 TA=..." — extract the primary accession only
     normalized.ranked <- ranked.ids
+    normalized.ranked <- sub("\\|.*$", "", normalized.ranked)   # strip everything after | (DIA-NN metadata)
+    normalized.ranked <- sub(",.*$", "", normalized.ranked)      # take first ID from comma-joined group
     normalized.ranked <- sub("_[A-Z]_\\d+$", "", normalized.ranked)
     normalized.ranked <- sub("-\\d+$", "", normalized.ranked)
     normalized.ranked <- trimws(normalized.ranked)
@@ -220,8 +224,10 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     # Store original UniProt IDs
     original.uniprot.vec <- ora.vec
 
-    # Normalize UniProt IDs (remove phosphosite annotations, isoforms)
+    # Normalize UniProt IDs: first strip DIA-NN compound format, then phosphosite/isoform suffixes
     normalized.ora.vec <- ora.vec
+    normalized.ora.vec <- sub("\\|.*$", "", normalized.ora.vec)   # strip DIA-NN metadata after |
+    normalized.ora.vec <- sub(",.*$", "", normalized.ora.vec)      # take first ID from comma-joined group
     normalized.ora.vec <- sub("_[A-Z]_\\d+$", "", normalized.ora.vec)  # Remove phosphosites
     normalized.ora.vec <- sub("-\\d+$", "", normalized.ora.vec)         # Remove isoforms
     normalized.ora.vec <- trimws(normalized.ora.vec)

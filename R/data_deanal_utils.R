@@ -329,16 +329,48 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
         results_list[[1]] <- topFeatures
       }
 
-      ov_qs_save(results_list, bridge_out, preset = "fast")
+      # Multi-group overall test: likelihood-ratio test of the full model vs the
+      # intercept-only (or block-only) reduced model — "does any group differ".
+      omni.res <- NULL
+      if (length(contrast_list) > 1) {
+        reduced.fml <- if ("block" %in% colnames(colData)) ~ block else ~ 1
+        dds.lrt <- tryCatch(DESeq(dds, test = "LRT", reduced = reduced.fml),
+                            error = function(e) NULL)
+        if (!is.null(dds.lrt)) {
+          ro <- results(dds.lrt, independentFiltering = FALSE, cooksCutoff = Inf)
+          omni.res <- data.frame(ro@listData); rownames(omni.res) <- rownames(ro)
+          colnames(omni.res) <- sub("padj", "adj.P.Val", colnames(omni.res))
+          colnames(omni.res) <- sub("pvalue", "P.Value", colnames(omni.res))
+          colnames(omni.res) <- sub("log2FoldChange", "logFC", colnames(omni.res))
+          keep <- intersect(c("logFC","baseMean","lfcSE","stat","P.Value","adj.P.Val"), colnames(omni.res))
+          omni.res <- omni.res[keep]
+          omni.res <- omni.res[order(omni.res$P.Value), ]
+        }
+      }
+
+      ov_qs_save(list(contrasts = results_list, omnibus = omni.res), bridge_out, preset = "fast")
     },
     args = list(wd = getwd(), bridge_in = bridge_in, bridge_out = bridge_out),
     timeout_sec = 300
   )
 
-  results_list <- if (file.exists(bridge_out)) ov_qs_read(bridge_out) else NULL
+  bundle <- if (file.exists(bridge_out)) ov_qs_read(bridge_out) else NULL
+  results_list <- bundle$contrasts
+  deseq.omni   <- bundle$omnibus
 
   dataSet$comp.res.list <- results_list
-  dataSet$comp.res <- results_list[[1]]
+  dataSet$comp.res.omnibus <- NULL
+  if (!is.null(deseq.omni) && length(results_list) > 1) {
+    dataSet$comp.res.omnibus <- deseq.omni
+    if (identical(anal.type, "default")) {
+      dataSet$comp.res <- deseq.omni
+      dataSet$filename <- "sig_proteins_multigroup_ANOVA_deseq2"
+    } else {
+      dataSet$comp.res <- results_list[[1]]
+    }
+  } else {
+    dataSet$comp.res <- results_list[[1]]
+  }
   ov_qs_save(results_list, file = "dat.comp.res.qs")
   return(dataSet)
 }
@@ -448,6 +480,33 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   return(dataSet);
 }
 
+# Attach the multi-group overall F-test (limma moderated F via topTable(coef=NULL))
+# and surface it as comp.res for "default" designs. Shared by the limma and DEqMS
+# paths (both build a limma-style fit2 over all pairwise contrasts). The per-
+# pairwise tables in result.list stay available as the primary-comparison
+# drill-down. Single-contrast designs keep the first pairwise result.
+.ov_attach_limma_omnibus <- function(dataSet, fit2, result.list, contrast.matrix, method.tag) {
+  dataSet$comp.res.omnibus <- NULL
+  if (ncol(contrast.matrix) > 1) {
+    omnibus <- tryCatch(
+      limma::topTable(fit2, coef = NULL, number = Inf, sort.by = "F", adjust.method = "fdr"),
+      error = function(e) { message("[", method.tag, " omnibus] topTable(coef=NULL) failed: ",
+                                    conditionMessage(e)); NULL })
+    if (!is.null(omnibus)) {
+      if (!is.null(omnibus$ID)) { rownames(omnibus) <- omnibus$ID; omnibus$ID <- NULL }
+      colnames(omnibus)[colnames(omnibus) == "FDR"] <- "adj.P.Val"
+      dataSet$comp.res.omnibus <- omnibus
+      if (identical(dataSet$comp.type, "default")) {
+        dataSet$comp.res <- omnibus
+        dataSet$filename <- paste0("sig_proteins_multigroup_ANOVA_", method.tag)
+        return(dataSet)
+      }
+    }
+  }
+  dataSet$comp.res <- result.list[[1]]
+  dataSet
+}
+
 .perform_limma_edger <- function(dataSet, robustTrend = FALSE) {
   ## ------------------------------------------------------------------ ##
   ## 1 · Input checks & dependencies                                    ##
@@ -519,7 +578,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     }
 
     dataSet$comp.res.list <- result.list
-    dataSet$comp.res <- result.list[[1]]
+    dataSet <- .ov_attach_limma_omnibus(dataSet, fit2, result.list, contrast.matrix, "limma")
 
   } else if (dataSet$de.method == "edger") {
 
@@ -569,7 +628,19 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
             if ("P.Value" %in% colnames(tbl)) tbl <- tbl[order(tbl$P.Value), ]
             res[[nm]] <- tbl
           }
-          res
+          # Multi-group overall test: joint LRT over all pairwise contrasts
+          # (any group differs). Reduce to a full-rank contrast subset first so
+          # edgeR doesn't choke on the rank-deficient pairwise matrix.
+          omni <- NULL
+          if (ncol(contrast.matrix) > 1) {
+            qrc <- qr(contrast.matrix)
+            ind <- qrc$pivot[seq_len(qrc$rank)]
+            lrt.o <- edgeR::glmLRT(fit, contrast = contrast.matrix[, ind, drop = FALSE])
+            omni  <- edgeR::topTags(lrt.o, n = Inf)$table
+            colnames(omni)[colnames(omni) == "FDR"]    <- "adj.P.Val"
+            colnames(omni)[colnames(omni) == "PValue"] <- "P.Value"
+          }
+          list(contrasts = res, omnibus = omni)
         },
         input_data = list(
           cnt.mat = cnt.mat, grp.fac = grp.fac, design = edger.design,
@@ -588,8 +659,21 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     })
     if (is.null(result.list)) return(0)
 
-    dataSet$comp.res.list <- result.list
-    dataSet$comp.res <- result.list[[1]]
+    edger.omni  <- result.list$omnibus
+    result.list <- result.list$contrasts
+    dataSet$comp.res.list  <- result.list
+    dataSet$comp.res.omnibus <- NULL
+    if (!is.null(edger.omni) && length(result.list) > 1) {
+      dataSet$comp.res.omnibus <- edger.omni
+      if (identical(dataSet$comp.type, "default")) {
+        dataSet$comp.res <- edger.omni
+        dataSet$filename <- "sig_proteins_multigroup_ANOVA_edger"
+      } else {
+        dataSet$comp.res <- result.list[[1]]
+      }
+    } else {
+      dataSet$comp.res <- result.list[[1]]
+    }
 
   }
 
@@ -891,7 +975,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     }
 
     dataSet$comp.res.list <- result.list
-    dataSet$comp.res <- result.list[[1]]
+    dataSet <- .ov_attach_limma_omnibus(dataSet, fit2, result.list, contrast.matrix, "deqms")
     return(dataSet)
   }
 
@@ -955,7 +1039,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   }
 
   dataSet$comp.res.list <- result.list
-  dataSet$comp.res <- result.list[[1]]
+  dataSet <- .ov_attach_limma_omnibus(dataSet, fit2, result.list, contrast.matrix, "deqms")
   print(head(dataSet$comp.res));
 
   msgSet$current.msg <- c(msgSet$current.msg,
