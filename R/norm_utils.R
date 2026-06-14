@@ -3457,16 +3457,26 @@ PlotProteoformIntensityProfile <- function(dataName, imageName, isoA, isoB,
   legend.grob <- extract_legend(p1)
   p1 <- p1 + theme(legend.position = "none")
   p2 <- make_group_plot(df.ratio, "A - B abundance score", "Proteoform A - B")
-  p3 <- make_group_plot(df.total, "Normalized abundance", "Aggregate signal", abundance.ylim)
+  p3 <- make_group_plot(df.total, "", "Aggregate signal", abundance.ylim)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
   Cairo(file = imgName, width = 12.8, height = 5.2, unit = "in",
         dpi = dpi, bg = "white", type = format)
   grid.newpage()
+  # Convert to gtables and equalize per-row heights so every sub-plot's panel
+  # (plotting area) starts and ends at the same vertical position, regardless of
+  # differing title heights or x-axis label angles.
+  g1 <- ggplotGrob(p1)
+  g2 <- ggplotGrob(p2)
+  g3 <- ggplotGrob(p3)
+  max.heights <- grid::unit.pmax(g1$heights, g2$heights, g3$heights)
+  g1$heights <- max.heights
+  g2$heights <- max.heights
+  g3$heights <- max.heights
   pushViewport(viewport(layout = grid.layout(1, 4, widths = unit(c(1.35, 1, 1, 0.45), "null"))))
-  print(p1, vp = viewport(layout.pos.row = 1, layout.pos.col = 1))
-  print(p2, vp = viewport(layout.pos.row = 1, layout.pos.col = 2))
-  print(p3, vp = viewport(layout.pos.row = 1, layout.pos.col = 3))
+  pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 1)); grid.draw(g1); popViewport()
+  pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 2)); grid.draw(g2); popViewport()
+  pushViewport(viewport(layout.pos.row = 1, layout.pos.col = 3)); grid.draw(g3); popViewport()
   if (!is.null(legend.grob)) {
     grid.draw(editGrob(legend.grob, vp = viewport(layout.pos.row = 1, layout.pos.col = 4)))
   }
@@ -3635,7 +3645,7 @@ PlotProteoformOverview <- function(dataName, isoformGroup, imageName,
             panel.background = element_rect(fill = "#e5e5e5", color = NA),
             plot.background = element_rect(fill = "white", color = NA),
             plot.title = element_text(size = 10, hjust = 0.5, color = "#444444")) +
-      ylab("Normalized abundance") +
+      ylab("") +
       ggtitle("Aggregate signal")
     if (!is.null(ylim.all)) p2 <- p2 + coord_cartesian(ylim = ylim.all)
     panels <- c(panels, list(p2))
@@ -3649,9 +3659,19 @@ PlotProteoformOverview <- function(dataName, isoformGroup, imageName,
         dpi = dpi, bg = "white", type = format)
   grid.newpage()
   n.cols <- length(panels) + 1L
+  # Convert to gtables and equalize per-row heights so every sub-plot's panel
+  # (plotting area) starts and ends at the same vertical position, regardless of
+  # differing title heights or x-axis label angles.
+  grobs <- lapply(panels, ggplotGrob)
+  if (length(grobs) > 1) {
+    max.heights <- do.call(grid::unit.pmax, lapply(grobs, function(g) g$heights))
+    for (i in seq_along(grobs)) grobs[[i]]$heights <- max.heights
+  }
   pushViewport(viewport(layout = grid.layout(1, n.cols, widths = unit(widths, "null"))))
-  for (i in seq_along(panels)) {
-    print(panels[[i]], vp = viewport(layout.pos.row = 1, layout.pos.col = i))
+  for (i in seq_along(grobs)) {
+    pushViewport(viewport(layout.pos.row = 1, layout.pos.col = i))
+    grid.draw(grobs[[i]])
+    popViewport()
   }
   if (!is.null(legend.grob)) {
     grid.draw(editGrob(legend.grob, vp = viewport(layout.pos.row = 1, layout.pos.col = n.cols)))
