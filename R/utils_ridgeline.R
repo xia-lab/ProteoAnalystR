@@ -300,6 +300,39 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
 
   }
 
+  # ── Full-distribution ORA ridgeline ──────────────────────────────────────
+  # Originally the ORA ridge plotted only the SIGNIFICANT proteins overlapping
+  # each pathway (dataSet$sig.mat). When few proteins pass the DE cut that
+  # leaves 0-1 points per pathway and the ridges render empty. Mirror the GSEA
+  # ridge instead: plot every pathway member that has a fold change (all
+  # measured proteins), and flag the significant ones so the renderer can
+  # highlight them while the rest are drawn grey. Pathway selection and the
+  # p-value fill stay ORA-derived. Scoped to onedata (sig.mat / comp.res share
+  # the data's UniProt id space); other anal.types keep the prior behaviour.
+  ridge.sig.ids <- NULL
+  if (ridgeType == "ora" && anal.type == "onedata" && !is.null(dataSet$comp.res)) {
+    ridge.sig.ids <- rownames(sigmat)                 # significant proteins (sig.mat)
+    # Fold changes come from the primary comparison of interest (a single-contrast
+    # table); for multi-group designs comp.res is the overall F-test with no single
+    # logFC, so fall back through the resolver. col 1 = logFC.
+    primary.fc <- if (exists(".ov_primary_comp")) .ov_primary_comp(dataSet) else dataSet$comp.res
+    full.fc  <- as.data.frame(primary.fc)
+    univ.ids <- rownames(full.fc)
+    umap <- tryCatch(queryGeneDB("entrez_uniprot", paramSet$data.org),
+                     error = function(e) NULL)
+    if (!is.null(umap)) {
+      norm.ids <- sub("-\\d+$", "", sub("_[A-Z]_\\d+$", "", univ.ids))
+      univ.ent <- umap[match(norm.ids, umap[, "accession"]), "gene_id"]
+      full.hits <- lapply(current.featureset,
+                          function(es) univ.ids[as.character(univ.ent) %in% as.character(es)])
+      full.hits <- full.hits[resTable$pathway]
+      if (any(vapply(full.hits, length, integer(1)) > 0)) {
+        hits.query <- full.hits                       # all pathway members in data
+        sigmat <- full.fc                             # fold-change source = all proteins
+      }
+    }
+  }
+
   # prepare data for plotting
   # For phospho data, rownames(sigmat) are phosphosite IDs that need to be converted to entrez
   is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")
@@ -422,8 +455,15 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   df <- merge(df, degs.plot, by = "merge_id", all.x = TRUE, all.y = FALSE);
   df <- na.omit(df)
 
-  if(nrow(df) > 0) {
-  }
+  # Flag the significant proteins among the plotted pathway members so the
+  # renderer highlights them in red (others grey). For GSEA (and any path that
+  # didn't set ridge.sig.ids) fall back to the DE-significant set so both ORA and
+  # GSEA mark the same proteins.
+  if (is.null(ridge.sig.ids) && !is.null(dataSet$sig.mat) && nrow(dataSet$sig.mat) > 0)
+    ridge.sig.ids <- rownames(dataSet$sig.mat)
+  sig.flag <- if (!is.null(ridge.sig.ids)) df$entrez %in% ridge.sig.ids else rep(FALSE, nrow(df))
+  df$sig <- factor(ifelse(sig.flag, "significant", "other"),
+                   levels = c("significant", "other"))
 
   # Check if we have any data to plot
   if (nrow(df) == 0) {
@@ -441,20 +481,31 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   means <- means[order(means$x, decreasing = FALSE), ];
   df$name <- factor(df$name, levels = means$Group.1);
   
-  # make the plot
-  rp <- ggplot(df, aes(x = value, y = name, fill = adj.pval)) +
+  # The density ridge is built from ALL pathway members, drawn LOW and semi-
+  # transparent so it sits behind the member fold-changes (the "hits") instead of
+  # covering them — significant members in red, the rest grey. A low scale also
+  # stops a dense pathway's ridge from towering over and hiding the sparse rows
+  # next to it. fill = adj. pval is each method's own p (ORA vs GSEA stay distinct).
+  # The hits are a SEPARATE point layer (always rendered) over a low, semi-
+  # transparent density. geom_density_ridges drops a group entirely — density AND
+  # its jittered points — when it can't estimate a density (pathways with only a
+  # couple of members), which is what left sparse rows blank; a standalone
+  # geom_point keeps every member's fold-change visible regardless. Significant
+  # members in red, the rest grey; fill = each method's own adj. pval.
+  rp <- ggplot(df, aes(x = value, y = name)) +
     geom_density_ridges(
-      jittered_points = TRUE, point_shape = "|", point_size = 5, point_color = "#898A89",
-      color = "white",
-      scale = 1.5, rel_min_height = .02, size = 0.25,
-      position = position_points_jitter(height = 0)) +
+      aes(fill = adj.pval),
+      alpha = 0.45, color = "white", scale = 0.85, rel_min_height = 0.005, size = 0.25) +
+    geom_point(aes(colour = sig), shape = 124, size = 3.8, alpha = 1,
+               position = position_jitter(height = 0.06, width = 0)) +
     geom_vline(xintercept = 0, color = "red") +
-    scale_y_discrete(expand = c(0, 0), name = "Gene Set",
+    scale_y_discrete(expand = expansion(add = c(0.3, 0.9)), name = "Gene Set",
                      labels = function(x) ifelse(nchar(x) > 45L,
                                                  paste0(substr(x, 1L, 42L), "..."), x)) +
     scale_x_continuous(expand = c(0, 0), name = "log2FC") +
-    scale_fill_gradient("adj. pval",
-                        low = high.col, high = low.col) + 
+    scale_fill_gradient("adj. pval", low = high.col, high = low.col) +
+    ggplot2::scale_colour_manual("Protein",
+      values = c(significant = "#D7263D", other = "#9aa0a6"), drop = FALSE) +
     coord_cartesian(clip = "off") +
     theme_ridges(center = TRUE) +
     theme(legend.position = "right",
