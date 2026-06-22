@@ -26,6 +26,58 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   }
 }
 
+.preparePcaFeatureMatrix <- function(dat, scaleData=FALSE){
+  dat <- as.matrix(dat);
+  keep <- apply(dat, 1, function(x) all(is.finite(x)));
+  if(scaleData){
+    variances <- apply(dat, 1, stats::var);
+    keep <- keep & is.finite(variances) & variances > .Machine$double.eps;
+  }
+  dat <- dat[keep, , drop=FALSE];
+  if(nrow(dat) == 0 || ncol(dat) == 0){
+    AddErrMsg("PCA requires at least one feature with finite, non-constant values.");
+    stop("No valid features for PCA");
+  }
+  return(dat);
+}
+
+.pcaExplainedVariance3D <- function(pca){
+  variance <- rep(0, 3);
+  imp.pca <- summary(pca)$importance;
+  if(!is.null(dim(imp.pca)) && nrow(imp.pca) >= 2 && ncol(imp.pca) > 0){
+    dim.count <- min(3, ncol(imp.pca));
+    variance[seq_len(dim.count)] <- as.numeric(imp.pca[2, seq_len(dim.count)]);
+  }
+  variance[!is.finite(variance)] <- 0;
+  return(variance);
+}
+
+.pcaAxisLabels3D <- function(pca, includeVariance=TRUE){
+  if(!includeVariance){
+    return(paste("PC", 1:3, sep=""));
+  }
+  variance <- .pcaExplainedVariance3D(pca);
+  return(paste("PC", 1:3, " (", 100*round(variance, 3), "%)", sep=""));
+}
+
+.pcaComponentMatrix3D <- function(component.mat){
+  component.mat <- as.matrix(component.mat);
+  coords <- matrix(0, nrow=nrow(component.mat), ncol=3);
+  if(nrow(component.mat) > 0 && ncol(component.mat) > 0){
+    dim.count <- min(3, ncol(component.mat));
+    coords[, seq_len(dim.count)] <- signif(component.mat[, seq_len(dim.count), drop=FALSE], 5);
+  }
+  rownames(coords) <- rownames(component.mat);
+  colnames(coords) <- paste("Dim", 1:3, sep="");
+  return(coords);
+}
+
+.pcaJsonCoords3D <- function(component.mat){
+  coords <- data.frame(t(.pcaComponentMatrix3D(component.mat)), check.names=FALSE);
+  colnames(coords) <- NULL;
+  return(coords);
+}
+
 .saveMetaClusterJSON <- function(dataSet, fileName, clustOpt,paramSet, opt){
     
     msgSet <- readSet(msgSet, "msgSet");
@@ -45,16 +97,17 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
 
     pca3d <- list();
     if(clustOpt == "pca"){
+        dat <- .preparePcaFeatureMatrix(dat, scaleData=TRUE);
         if(opt == "all"){
             pca <- prcomp(t(dat), center=T, scale=T);
             }else{
             dat <- dat[which(rownames(dat) %in% analSet$loadEntrez),]
+            dat <- .preparePcaFeatureMatrix(dat, scaleData=TRUE);
             pca <- prcomp(t(dat), center=T, scale=T);
             }
 
-        imp.pca<-summary(pca)$importance;
-        pca3d$score$axis <- paste("PC", 1:3, " (", 100*round(imp.pca[2,][1:3], 3), "%)", sep="");
-        coords <- data.frame(t(signif(pca$x[,1:3], 5)));
+        pca3d$score$axis <- .pcaAxisLabels3D(pca);
+        coords <- .pcaJsonCoords3D(pca$x);
     }else if(clustOpt == "umap"){
         require('uwot');
         # OPTIMIZED: Calculate ncol once
@@ -81,7 +134,7 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
         coords <- data.frame(t(signif(res$Y, 5)));
     }
 
-    colnames(coords) <- NULL; 
+    colnames(coords) <- NULL;
     pca3d$score$xyz <- coords;
     pca3d$score$name <- colnames(dat);
 
@@ -106,8 +159,12 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
     # add shape sphere, triangles, square, pentagon (first two)
     pca3d$score$shapes <- c("sphere", "triangle");
 
-    mypos <- t(coords);
-    colnames(mypos) <- paste("Dim", 1:3, sep="");
+    if(clustOpt == "pca"){
+      mypos <- .pcaComponentMatrix3D(pca$x);
+    }else{
+      mypos <- t(coords);
+      colnames(mypos) <- paste("Dim", 1:3, sep="");
+    }
     coords <- data.frame(Class=facA, Data=facB, mypos);
 
     pos.xyz <- mypos;
@@ -149,6 +206,7 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   
   # need to deal with missing values 
   dat <- na.omit(dat);
+  dat <- .preparePcaFeatureMatrix(dat, scaleData=TRUE);
   variances <- apply(dat,1, function(x){var(x)})
   df <- data.frame(var = variances, inx = seq.int(1,length(variances)))
   df <- df[order(-df$var),];
@@ -164,18 +222,15 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   pca3d <- list();
   
   pca <- prcomp(t(dat), center=T, scale=T);    
-  imp.pca<-summary(pca)$importance;
-  pca3d$score$axis <- paste("PC", 1:3, sep="");
-  coords <- data.frame(t(signif(pca$rotation[,1:3], 5)));
+  pca3d$score$axis <- .pcaAxisLabels3D(pca, includeVariance=FALSE);
+  coords <- .pcaJsonCoords3D(pca$rotation);
   
-  colnames(coords) <- NULL; 
   pca3d$score$xyz <- coords;
   pca3d$score$name <- doEntrez2SymbolMapping(rownames(pca$rotation), paramSet$data.org, paramSet$data.idType);
   pca3d$score$entrez <- rownames(pca$rotation);
   
   analSet$loadEntrez <- pca3d$score$entrez
-  mypos <- t(coords);
-  colnames(mypos) <- paste("Dim", 1:3, sep="");
+  mypos <- .pcaComponentMatrix3D(pca$rotation);
   rownames(mypos) <- analSet$loadEntrez;
   mypos <- unitAutoScale(mypos);
   ov_qs_save(mypos, "loading_pos_xyz.qs");
@@ -207,32 +262,33 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   dat <- na.omit(dat);
   nb <- as.numeric(25000) # set to max 5000 datapoints
   if(clustOpt == "pca"){
+    dat <- .preparePcaFeatureMatrix(dat, scaleData=TRUE);
     pca <- prcomp(t(dat), center=T, scale=T);
-    imp.pca<-summary(pca)$importance;
-    pca3d$score$axis <- paste("PC", 1:3, " (", 100*round(imp.pca[2,][1:3], 3), "%)", sep="");
-    coords <- data.frame(t(signif(pca$rotation[,1:3], 5)));
+    pca3d$score$axis <- .pcaAxisLabels3D(pca);
+    coords <- .pcaJsonCoords3D(pca$rotation);
     
-    colnames(coords) <- NULL; 
     pca3d$score$xyz <- coords;
     pca3d$score$name <- doEntrez2SymbolMapping(rownames(pca$rotation), paramSet$data.org, paramSet$data.idType);
     pca3d$score$entrez <-rownames(pca$rotation);
-    weights <- imp.pca[2,][1:3]
-    mypos <- t(coords);
+    weights <- .pcaExplainedVariance3D(pca);
+    if(!any(weights > 0)){
+      weights <- rep(1, 3);
+    }
+    mypos <- .pcaComponentMatrix3D(pca$rotation);
     meanpos <- apply(abs(mypos),1, function(x){weighted.mean(x, weights)})
     df <- data.frame(pos = meanpos, inx = seq.int(1,length(meanpos)))
     df <- df[order(-df$pos),]
     
     if(nrow(df) > nb){
       inx <- df$inx[c(1:nb)]
-      mypos <- mypos[inx,];
-      pca3d$score$xyz <- coords[inx]
+      mypos <- mypos[inx,, drop=FALSE];
+      pca3d$score$xyz <- coords[, inx, drop=FALSE]
       pca3d$score$name <- pca3d$score$name[inx]
       pca3d$score$entrez <- pca3d$score$entrez[inx]
     }
   }
 
   pca3d$cls <- dataSet$meta.info;
-  colnames(mypos) <- paste("Dim", 1:3, sep="");
   # see if there is secondary
   analSet$loadEntrez <- pca3d$score$entrez
   rownames(mypos) <- pca3d$score$name;
@@ -265,15 +321,15 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   dat <- na.omit(dat);
   
   if(clustOpt == "pca"){
+    dat <- .preparePcaFeatureMatrix(dat, scaleData=FALSE);
     #if(opt == "all"){
       pca <- prcomp(t(dat));
    #}else{
     #  dat <- dat[which(rownames(dat) %in% analSet$loadEntrez),]
     #  pca <- prcomp(t(dat), center=T, scale=T);
     #}
-    imp.pca<-summary(pca)$importance;
-    pca3d$score$axis <- paste("PC", 1:3, " (", 100*round(imp.pca[2,][1:3], 3), "%)", sep="");
-    coords <- data.frame(t(signif(pca$x[,1:3], 5)));
+    pca3d$score$axis <- .pcaAxisLabels3D(pca);
+    coords <- .pcaJsonCoords3D(pca$x);
   }else if(clustOpt == "umap"){
     require('uwot');
     # OPTIMIZED: Calculate ncol once
@@ -300,12 +356,16 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
     coords <- data.frame(t(signif(res$Y, 5)));
   }
   
-  colnames(coords) <- NULL; 
+  colnames(coords) <- NULL;
   pca3d$score$xyz <- coords;
   pca3d$score$name <- colnames(dataSet$data.norm);
   
-  pos.xyz <- data.frame(x=pca$x[,1], y=pca$x[,2], z=pca$x[,3]);
-  pos.xyz <- as.data.frame(pos.xyz);
+  if(clustOpt == "pca"){
+    pos.xyz <- .pcaComponentMatrix3D(pca$x);
+  }else{
+    pos.xyz <- t(coords);
+    colnames(pos.xyz) <- paste("Dim", 1:3, sep="");
+  }
   pos.xyz <- unitAutoScale(pos.xyz);
   rownames(pos.xyz) = colnames(dataSet$data.norm);
   ov_qs_save(pos.xyz, "score_pos_xyz.qs");
@@ -316,8 +376,12 @@ SaveClusterJSON <- function(dataName="", fileNm, clustOpt, opt){
   }
   pca3d$score$facA <- facA;
   
-  mypos <- t(coords);
-  colnames(mypos) <- paste("Dim", 1:3, sep="");
+  if(clustOpt == "pca"){
+    mypos <- .pcaComponentMatrix3D(pca$x);
+  }else{
+    mypos <- t(coords);
+    colnames(mypos) <- paste("Dim", 1:3, sep="");
+  }
   # see if there is secondary
   if(length(dataSet$sec.cls) > 1){
     facB <- as.character(dataSet$sec.cls);
@@ -481,10 +545,24 @@ unitAutoScale <- function(df){
     df <- as.data.frame(df)
     row.nms <- rownames(df);
     col.nms <- colnames(df);
-    df<-apply(df, 2, AutoNorm);
+    df <- as.data.frame(lapply(df, function(x){
+      sd.x <- sd(x, na.rm=T);
+      if(!is.finite(sd.x) || sd.x == 0){
+        return(rep(0, length(x)));
+      }
+      res <- (x - mean(x, na.rm=T))/sd.x;
+      res[!is.finite(res)] <- 0;
+      return(res);
+    }), check.names=FALSE);
+    df <- as.matrix(df);
     rownames(df) <- row.nms;
     colnames(df) <- col.nms;
-    maxVal <- max(abs(df))
+    maxVal <- max(abs(df), na.rm=T)
+    if(!is.finite(maxVal) || maxVal == 0){
+      df[!is.finite(df)] <- 0;
+      return(df);
+    }
     df<- df/maxVal
+    df[!is.finite(df)] <- 0;
     return(df)
 }

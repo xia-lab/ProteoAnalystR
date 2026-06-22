@@ -100,69 +100,74 @@ my.json.scatter <- function(dataSet, filenm="abc"){
   require(RJSONIO);
   
   
-  metadf < meta;
+  metadf <- meta;
   
-  loading.data <- ov_qs_read("loading_pos_xyz.qs");
   aLoading<-list();
   aLoading$objects <- "NA";
+  loading.data <- NULL;
+  if(file.exists("loading_pos_xyz.qs")){
+    loading.data <- tryCatch(ov_qs_read("loading_pos_xyz.qs"), error=function(e) NULL);
+  }
 
-  # Check if DE has been performed
-  if(!is.null(dataSet$comp.res) && nrow(dataSet$comp.res) > 0){
-    # DE has been performed - color by p-value
-    de <- dataSet$comp.res;
-    de <- de[which(rownames(de) %in% rownames(loading.data)),]
-    ids <- rownames(de);
-    de[de == "NaN"] = 1;
-    pv <- as.numeric(de[,"P.Value"]);
-    pv_no_zero <- pv[pv != 0];
-    minval <- min(pv_no_zero);
-    pv[pv == 0] <- minval/2;
-    pvals <- -log10(pv);
-    type.vec <- pvals;
-    colors<- ComputeColorGradient(pvals, "black", F, F);
-    colorb <- colors;
-    sizes <- as.numeric(rescale2NewRange(-log10(pv), 15, 25));
-  } else {
-    # DE has not been performed - use grey color
+  nodes2 <- jsonlite::unbox("NA");
+  if(!is.null(loading.data) && nrow(loading.data) > 0 && ncol(loading.data) >= 3){
     ids <- rownames(loading.data);
     type.vec <- rep(0, length(ids));
     colorb <- rep("#808080", length(ids));  # Grey color
     sizes <- rep(18, length(ids));  # Default size
+
+    has.de <- !is.null(dataSet$comp.res) && nrow(dataSet$comp.res) > 0;
+    if(has.de){
+      # DE has been performed - color by p-value
+      de <- dataSet$comp.res;
+      de <- de[which(rownames(de) %in% ids),, drop=FALSE]
+      has.de <- nrow(de) > 0 && "P.Value" %in% colnames(de);
+    }
+    if(has.de){
+      de[de == "NaN"] = 1;
+      pv <- as.numeric(de[,"P.Value"]);
+      pv[!is.finite(pv)] <- 1;
+      pv_no_zero <- pv[pv > 0];
+      minval <- if(length(pv_no_zero) > 0) min(pv_no_zero) else 1;
+      pv[pv == 0] <- minval/2;
+      pvals <- -log10(pv);
+      de.inx <- match(rownames(de), ids);
+      type.vec[de.inx] <- pvals;
+      colors<- ComputeColorGradient(pvals, "black", F, F);
+      colorb[de.inx] <- colors;
+      sizes[de.inx] <- as.numeric(rescale2NewRange(-log10(pv), 15, 25));
+    }
+
+    nodes2 <- vector(mode="list");
+
+    seed_arr <- rep("notSeed",length(ids));
+    seed_arr[ids %in% unique(seeds)] <- "seed";
+    names <- doEntrez2SymbolMapping(ids, paramSet$data.org, paramSet$data.idType);
+    for(i in 1:nrow(loading.data)){
+      nodes2[[i]] <- list(
+        id=ids[i],
+        label=names[i],
+        size=sizes[i],
+        cluster=1,
+        omicstype=type.vec[i],
+        fx = unname(loading.data[i,1])*1000,
+        fy = unname(loading.data[i,2])*1000,
+        fz = unname(loading.data[i,3])*1000,
+        seedArr = seed_arr[i],
+        colorb=colorb[i],
+        colorw=colorb[i],
+        topocolb="#ffa500",
+        topocolw="#ffa500",
+        expcolb="#ffa500",
+        expcolw="#ffa500",
+        attributes=list(
+          expr = 1,
+          degree=1,
+          between=1
+        )
+      );
+    }
   }
-
-  nodes2 <- vector(mode="list");
-
-
-  seed.inx <- names %in% unique(seeds);
-  seed_arr <- rep("notSeed",length(names));
-  seed_arr[seed.inx] <- "seed";
-  names <- doEntrez2SymbolMapping(ids, paramSet$data.org, paramSet$data.idType);
-  for(i in 1:nrow(loading.data)){
-    nodes2[[i]] <- list(
-      id=ids[i],
-      label=names[i],
-      size=sizes[i],
-      cluster=1,
-      omicstype=type.vec[i],
-      fx = unname(loading.data[i,1])*1000,
-      fy = unname(loading.data[i,2])*1000,
-      fz = unname(loading.data[i,3])*1000,
-      seedArr = seed_arr[i],
-      colorb=colorb[i],
-      colorw=colorb[i],
-      topocolb="#ffa500",
-      topocolw="#ffa500",
-      expcolb="#ffa500",
-      expcolw="#ffa500",
-      attributes=list(
-        expr = 1,
-        degree=1,
-        between=1
-      )
-    );
-
-  
-}
 
   # Ensure metatypes and meta fields are always present in JSON
   if(paramSet$anal.type == "metadata"){
@@ -194,8 +199,13 @@ my.json.scatter <- function(dataSet, filenm="abc"){
   if(is.null(metadf)){
     metadf <- data.frame(Group = rep("Sample", length(nodes)))
   }
+  meta.list <- lapply(metadf, function(x){
+    x <- as.character(x);
+    x[is.na(x)] <- "NA";
+    return(unname(x));
+  });
 
-  netData <- list( nodes=nodes, edges=edge.mat, modules=modules, objects=a$objects, ellipse=meshes, meta=metadf,metatypes=metatypes, loading=nodes2, reductionOpt="pca" , objectsLoading=aLoading$objects, sigMat=sig.mats, omicstype=c("rna.b"));
+  netData <- list( nodes=nodes, edges=edge.mat, modules=modules, objects=a$objects, ellipse=meshes, meta=meta.list,metatypes=metatypes, loading=nodes2, reductionOpt="pca" , objectsLoading=aLoading$objects, sigMat=sig.mats, omicstype=c("rna.b"));
     
   netData[["misc"]] <- pca3d$score$axis;
   paramSet$partialToBeSaved <- c(paramSet$partialToBeSaved, c(filenm));
@@ -205,7 +215,7 @@ my.json.scatter <- function(dataSet, filenm="abc"){
   saveSet(paramSet, "paramSet");
   
   sink(filenm);
-  cat(jsonlite::toJSON(netData));
+  cat(jsonlite::toJSON(netData, auto_unbox=TRUE));
   sink();
   
   return(1);

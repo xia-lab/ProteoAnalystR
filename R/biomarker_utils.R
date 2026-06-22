@@ -1903,6 +1903,12 @@ GetLassoFreqNames <- function(dataName = ""){
   return(names(analSet$LR$lassoFreq));
 }
 
+# Gene symbols for LASSO-selected features, same order as GetLassoFreqNames().
+GetLassoFreqSymbols <- function(dataName = ""){
+  analSet <- readSet(analSet, "analSet");
+  MapFeatureIdsToSymbols(names(analSet$LR$lassoFreq), dataName);
+}
+
 GetLRConvergence <- function(dataName = ""){
   analSet <- readSet(analSet, "analSet");
   return(analSet$LR$LRConverged);
@@ -2071,6 +2077,40 @@ GetImpBiomarkersTable <- function(dataName = "") {
 GetUnivRankedFeatureNames <- function(){
   analSet <- readSet(analSet, "analSet");
   rownames(analSet$feat.rank.mat);
+}
+
+# Map a vector of feature IDs to gene symbols using symbol.map.qs.
+# Falls back to the original ID when no symbol is available.
+MapFeatureIdsToSymbols <- function(feat.ids, dataName = ""){
+  if (is.null(feat.ids) || length(feat.ids) == 0) {
+    return(feat.ids);
+  }
+  paramSet <- readSet(paramSet, "paramSet");
+
+  symbols <- feat.ids;
+  if (file.exists("symbol.map.qs")) {
+    tryCatch({
+      dataSet <- readDataset(dataName);
+      gene.map <- readDataQs("symbol.map.qs", paramSet$anal.type, dataSet$name);
+      if (!is.null(gene.map) && nrow(gene.map) > 0) {
+        mapped <- doIdMappingGeneric(feat.ids, gene.map, "gene_id", "symbol", "vec");
+        na.inx <- is.na(mapped) | mapped == "";
+        mapped[na.inx] <- feat.ids[na.inx];
+        symbols <- mapped;
+      }
+    }, error = function(e){
+      symbols <- feat.ids;
+    });
+  }
+  return(symbols);
+}
+
+# Return gene symbols for the ranked features, in the same order as
+# GetUnivRankedFeatureNames(). Falls back to the feature ID when no
+# symbol mapping is available.
+GetUnivRankedFeatureSymbols <- function(dataName = ""){
+  analSet <- readSet(analSet, "analSet");
+  MapFeatureIdsToSymbols(rownames(analSet$feat.rank.mat), dataName);
 }
 
 GetFeatureRankingMat <- function(){
