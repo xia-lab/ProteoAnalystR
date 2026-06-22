@@ -165,6 +165,16 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     }
 
     res <- safe_qread("enr.mat.qs");
+    # Defensive: a stale enr.mat.qs written before the drop=FALSE fix in
+    # .performEnrichAnalysis can round-trip as a length-5 vector (the single
+    # surviving pathway row was dropped to a vector). Coerce it back to a 1x5
+    # matrix so colnames()<- below does not error with
+    # "length of 'dimnames' [2] not equal to array extent". The pathway rowname
+    # is unrecoverable here (it was lost on the drop); fresh runs keep it via
+    # drop=FALSE in the writer.
+    if (is.null(dim(res)) && length(res) == 5L) {
+      res <- matrix(res, nrow = 1L);
+    }
     colnames(res) <- c("size", "expected", "overlap", "pval", "padj");
 
     res <- res[,c(4,5,3,1,2)]
@@ -354,12 +364,12 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     degs.plot <- data.frame(entrez = as.character(entrez.ids),
                            log2FC = fc.values,
                            stringsAsFactors = FALSE)
-    degs.plot <- reshape::melt(degs.plot);
+    degs.plot <- suppressMessages(reshape::melt(degs.plot));
     colnames(degs.plot)[1] <- "entrez";
   } else {
     # Regular data - use rownames as-is
     degs.plot <- data.frame(entrez = rownames(sigmat), log2FC = sigmat[,inx]);
-    degs.plot <- reshape::melt(degs.plot);
+    degs.plot <- suppressMessages(reshape::melt(degs.plot));
     colnames(degs.plot)[1] <- "entrez";
   }
 
@@ -389,10 +399,10 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
       ids[ids %in% degs.plot$merge_id];
     });
     hits.merge <- hits.merge[resTable$pathway];
-    gs.plot <- reshape::melt(hits.merge);
+    gs.plot <- suppressMessages(reshape::melt(hits.merge));
     colnames(gs.plot) <- c("merge_id", "name");
   } else {
-    gs.plot <- reshape::melt(hits.query);
+    gs.plot <- suppressMessages(reshape::melt(hits.query));
     colnames(gs.plot) <- c("merge_id", "name");
   }
 
@@ -455,6 +465,22 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   df <- merge(df, degs.plot, by = "merge_id", all.x = TRUE, all.y = FALSE);
   df <- na.omit(df)
 
+  # ── Min-hits filter (a ridge is a DISTRIBUTION) ──────────────────────────
+  # A gene set needs at least 3 measured members ("hits") to form a ridge;
+  # fewer renders as a flat line / lone point. Keep only sets with >=3 members
+  # — the same minimum-set-size rule used by ma/MSEA.
+  RIDGE_MIN_HITS <- 3L
+  .set.hits <- tapply(as.character(df$merge_id), as.character(df$name),
+                      function(x) length(unique(x)))
+  .keep.sets <- names(.set.hits)[!is.na(.set.hits) & .set.hits >= RIDGE_MIN_HITS]
+  df <- df[as.character(df$name) %in% .keep.sets, , drop = FALSE]
+  if (nrow(df) == 0) {
+    try(AddErrMsg(paste0("No gene set has at least ", RIDGE_MIN_HITS,
+      " measured members, so no ridgeline distribution can be drawn.")), silent = TRUE)
+    if (file.exists(jsonNm)) unlink(jsonNm)
+    return(0)
+  }
+
   # Flag the significant proteins among the plotted pathway members so the
   # renderer highlights them in red (others grey). For GSEA (and any path that
   # didn't set ridge.sig.ids) fall back to the DE-significant set so both ORA and
@@ -516,7 +542,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   
   msg("[Ridge] printing plot")
   Cairo::Cairo(file=imageName, width=10, height=8, type=format, bg="white", dpi=dpi, unit="in");
-  print(rp);
+  suppressMessages(print(rp));
   dev.off();
   msg("[Ridge] plot done")
 

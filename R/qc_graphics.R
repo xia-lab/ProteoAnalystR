@@ -38,6 +38,20 @@ PlotDataMAOverview <- function(fileName, imgNm, dpi, format){
   return("NA");
 }
 
+# Per-sample QC plots (MA overview, CV) get unreadable and slow on datasets with
+# many samples. Cap them to 12 randomly selected samples. Deterministic (fixed
+# seed, RNG state saved/restored) so the figure is stable across re-renders and
+# matches between the dashboard and the report.
+.qc_subsample_samples <- function(n, max.n = 12L, seed = 13L) {
+  if (is.na(n) || n <= max.n) return(seq_len(max(n, 0L)))
+  has.old <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  if (has.old) old <- get(".Random.seed", envir = .GlobalEnv)
+  set.seed(seed)
+  idx <- sort(sample.int(n, max.n))
+  if (has.old) assign(".Random.seed", old, envir = .GlobalEnv)
+  idx
+}
+
 PlotProteinCV <- function(fileName, imgNm, dpi = 72, format = "png") {
   dataSet <- readDataset(fileName)
   paramSet <- readSet(paramSet, "paramSet")
@@ -71,6 +85,15 @@ qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png"
 
   dpi <- as.numeric(dpi)
   finalFileNm <- paste0(imgNm, "dpi", dpi, ".", format)
+
+  # Cap to 12 randomly selected samples on large datasets (keeps the CV
+  # distribution representative without computing over hundreds of columns).
+  .n_total <- ncol(data_mat)
+  .sel <- .qc_subsample_samples(.n_total, 12L)
+  cv_subset_note <- if (length(.sel) < .n_total)
+    paste0("Based on ", length(.sel), " of ", .n_total, " randomly selected samples") else NULL
+  data_mat <- data_mat[, .sel, drop = FALSE]
+  groups <- groups[.sel]
 
   unique_groups <- unique(groups)
   df_list <- list()
@@ -128,6 +151,7 @@ qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png"
     facet_wrap(~Condition, scales = "fixed") +
     labs(
       title = "Distribution of Protein CV per Condition",
+      subtitle = cv_subset_note,
       x = "Coefficient of Variation (%)",
       y = "Frequency"
     ) +
@@ -879,8 +903,12 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
   row_mean[!is.finite(row_mean)] <- NA_real_
   sample_indices <- sampleIndex
   if (mode == "overview") {
-    sample_indices <- seq_len(min(ncol(dat), 30))
+    # Cap the overview to 12 randomly selected samples — a per-sample MA grid of
+    # dozens of panels is unreadable and slow on large datasets.
+    sample_indices <- .qc_subsample_samples(ncol(dat), 12L)
   }
+  ma_subset_note <- if (mode == "overview" && length(sample_indices) < ncol(dat))
+    paste0("Showing ", length(sample_indices), " of ", ncol(dat), " samples (random subset)") else NULL
 
   ma_list <- lapply(sample_indices, function(si) {
     x <- dat[, si]
@@ -935,6 +963,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
                label.size = 0.2, fill = "white", alpha = 0.9, inherit.aes = FALSE) +
     facet_wrap(~Panel, scales = "free_x") +
     labs(
+      subtitle = ma_subset_note,
       x = if (use_logged_scale) "A = average abundance (input scale)" else "A = average log2 intensity",
       y = if (use_logged_scale) "M = sample - pooled reference (input scale)" else "M = log2(sample) - log2(pooled reference)"
     ) +

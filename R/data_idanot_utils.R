@@ -29,6 +29,7 @@
 #'@export
 #'
 PerformDataAnnot <- function(dataName="", org="hsa", dataType="array", idType="entrez", lvlOpt="mean"){
+  try(RecordRCommand(paste0("PerformDataAnnot(\"", dataName, "\")")), silent = TRUE)
   dataSet <- readDataset(dataName);
   dataSet <- PerformDataAnnotInternal(dataSet, dataName, org, dataType, idType, lvlOpt);
   return(RegisterData(dataSet));   

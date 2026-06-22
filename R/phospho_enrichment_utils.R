@@ -446,7 +446,6 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
   if (any(duplicated(rownames(res.mat)))) {
     res.mat <- res.mat[!duplicated(rownames(res.mat)), ]
     hits.query <- hits.query[match(rownames(res.mat), names(hits.query))]
-    print("Duplicates in enr.mat were removed.")
   } else {
     res.mat <- res.mat
   }

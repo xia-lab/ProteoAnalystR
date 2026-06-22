@@ -46,6 +46,7 @@
 #' @license MIT License
 
 ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneDataAnalType="default", path="", dataFormat="default") {
+  try(RecordRCommand(paste0("ReadTabExpressData(\"", fileName, "\")")), silent = TRUE)
   #msg("[ReadTabExpressData] start file=", fileName, " metaContain=", metaContain, " path=", path, " dataFormat=", dataFormat)
   is.maxquant <- dataFormat == "maxquant" || grepl("proteinGroups", fileName, ignore.case = TRUE)
   is.fragpipe <- dataFormat == "fragpipe" || grepl("fragpipe", fileName, ignore.case = TRUE) || grepl("fragpipe", metafileName, ignore.case = TRUE)

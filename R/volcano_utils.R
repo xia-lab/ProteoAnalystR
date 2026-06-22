@@ -221,9 +221,16 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
 
 
   # Append hover_text after defining volcano_data
-  volcano_data$hover_text <- with(volcano_data, paste("Gene: ", gene, 
-                                                      "<br>Log2 FC: ", log2FoldChange, 
+  volcano_data$hover_text <- with(volcano_data, paste("Gene: ", gene,
+                                                      "<br>Log2 FC: ", log2FoldChange,
                                                       "<br>P-value: ", pValue))
+
+    # Method-standard: persist the figure's underlying data table (fold-change,
+    # p-value, status per protein) so the AI "Refine" control can re-plot from
+    # data and users can regenerate the figure in any tool. Helper lives in
+    # wf_method.R; guard so the public package still runs standalone.
+    if (exists("WfSaveFigureData")) tryCatch(WfSaveFigureData("volcano", volcano_data), error = function(e) NULL)
+
     library(ggplot2)
     library(plotly)
 
@@ -719,8 +726,6 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
   if(any(duplicated(rownames(res.mat)))) {
     res.mat <- res.mat[!duplicated(rownames(res.mat)), ]
     hits.query <- hits.query[match(rownames(res.mat), names(hits.query))]
-
-    print("Duplicates in enr.mat were removed.")
   } else {
     res.mat <- res.mat
   }

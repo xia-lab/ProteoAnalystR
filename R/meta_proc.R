@@ -25,6 +25,7 @@
 #' @license MIT License
 #'
 SanityCheckData <- function(fileName){
+  try(RecordRCommand(paste0("SanityCheckData(\"", fileName, "\")")), silent = TRUE)
   msgSet <- readSet(msgSet, "msgSet");
   dataSet <- readDataset(fileName);
   
