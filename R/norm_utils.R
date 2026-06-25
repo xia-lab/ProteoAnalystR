@@ -1730,7 +1730,7 @@ PlotProteinProfile <- function(dataName = "", protein_id = "", imgName = "prot_p
   if (tolower(type) == "pdf") {
     grDevices::pdf(file = finalImg, width = 12, height = 6)
   } else {
-    grDevices::png(filename = finalImg, width = 900, height = 450, res = dpi)
+    grDevices::png(filename = finalImg, width = 900, height = 450, res = dpi, type = "cairo")
   }
   p <- ggplot()
   if (nrow(pep_df) > 0) {
