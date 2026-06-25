@@ -627,11 +627,23 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
     #msg("[Predict.class] DEBUG: LR returning prob.out only, length=", length(prob.out));
   }else{ # pls or plsda
     #msg("[Predict.class] DEBUG: Entering PLS branch");
-    pls.obj <- pls::plsr(y.train ~ x.train, ncomp=lvNum, validation="none");
-    score.out <- predict(pls.obj, x.test, ncomp=lvNum);
+    # plsr() requires a NUMERIC response — y.train arrives as a 2-level factor
+    # (RF/SVM accept it, PLS does not), so map it to 0/1 the same way
+    # RankFeatures() does for its PLS ranking. Without this the whole PLS-DA
+    # method errors out and is silently dropped from the multivariate panel.
+    y.num <- as.numeric(y.train) - 1;
+    # Cap components at the number of features in this (possibly tiny) CV subset
+    # — plsr errors with "Invalid number of components" when ncomp > ncol, which
+    # happens on the smallest feature-subset models of the explore sweep.
+    ncomp.use <- max(1L, min(lvNum, ncol(x.train)));
+    pls.obj <- pls::plsr(y.num ~ x.train, ncomp=ncomp.use, validation="none");
+    # plsr predict() returns a 3-D array [obs x response x ncomp]; flatten to a
+    # numeric vector so the downstream ROCR::prediction() (which builds the ROC)
+    # accepts it — an array trips "Format of predictions is invalid".
+    score.out <- as.numeric(predict(pls.obj, x.test, ncomp=ncomp.use));
     prob.out <- (score.out - min(score.out))/(max(score.out) - min(score.out));
     if(imp.out){
-      imp.vec <- Get.VIP(pls.obj, comp=lvNum);
+      imp.vec <- Get.VIP(pls.obj, comp=ncomp.use);
       #msg("[Predict.class] DEBUG: PLS returning list with prob.out length=", length(prob.out), ", imp.vec length=", length(imp.vec));
       return(list(prob.out=prob.out, imp.vec=imp.vec));
     }
