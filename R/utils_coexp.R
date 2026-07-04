@@ -329,53 +329,46 @@ my.build.cemi.net <- function(dataName,
     # FIX: Suppress Quartz popup on macOS - completely disable plotting during cemitool
     # We'll generate plots separately using the other functions
 
-    # Use RSclient to run CEMiTool in isolated Rserve fork to reduce memory bandwidth
-    # This prevents memory bloat in the main Rserve process
-
-    if (requireNamespace("RSclient", quietly = TRUE)) {
-      msg("Using RSclient subprocess...");
-      # Run cemitool in separate process with stdout/stderr capture
-      result <- run_func_via_rc_microservice(
-        func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose) {
-          suppressPackageStartupMessages({
-            library(CEMiTool)
-            library(WGCNA)
-          })
-
-          # Disable threading in subprocess too
-          WGCNA::disableWGCNAThreads()
-
-          message("[rsclient subprocess] Starting CEMiTool with ", nrow(expr_mat), " features x ", ncol(expr_mat), " samples")
-          message("[rsclient subprocess] Parameters: filter=", filter, ", min_ngen=", min_ngen, ", cor_method=", cor_method)
-
-          cem <- cemitool(expr              = expr_mat,
-                          annot             = annot_df,
-                          filter            = filter,
-                          min_ngen          = min_ngen,
-                          cor_method        = cor_method,
-                          class_column      = classCol,
-                          verbose           = verbose,
-                          plot              = FALSE,
-                          plot_diagnostics  = FALSE)
-
-          message("[rsclient subprocess] CEMiTool completed successfully")
-          return(cem)
-        },
-        args = list(
-          expr_mat   = expr_mat,
-          annot_df   = annot_df,
-          filter     = filter,
-          min_ngen   = min_ngen,
-          cor_method = cor_method,
-          classCol   = classCol,
-          verbose    = verbose
-        ),
-        timeout_sec = 180
-      )
-
-      cem <- result
-    } else {
-      msg("Running in-process (RSclient not available)");
+    # Run CEMiTool in an isolated, short-lived subprocess to reduce memory bandwidth
+    # in the main process. Data is exchanged via a BRIDGE FILE: run_func_via_microservice
+    # returns NULL (a subprocess cannot pass a value back), so the closure writes its result
+    # to bridge_out and we read it back. The wrapper falls back to in-process automatically
+    # if the subprocess helper is unavailable (the closure still writes bridge_out).
+    bridge_out <- file.path(tempdir(), paste0("cem_", paste0(sample(letters, 8), collapse = ""), ".qs"))
+    on.exit(if (file.exists(bridge_out)) unlink(bridge_out), add = TRUE)
+    run_func_via_microservice(
+      func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose, bridge_out) {
+        suppressPackageStartupMessages({
+          library(CEMiTool)
+          library(WGCNA)
+        })
+        WGCNA::disableWGCNAThreads()
+        cem <- cemitool(expr              = expr_mat,
+                        annot             = annot_df,
+                        filter            = filter,
+                        min_ngen          = min_ngen,
+                        cor_method        = cor_method,
+                        class_column      = classCol,
+                        verbose           = verbose,
+                        plot              = FALSE,
+                        plot_diagnostics  = FALSE)
+        ov_qs_save(cem, bridge_out)
+      },
+      args = list(
+        expr_mat   = expr_mat,
+        annot_df   = annot_df,
+        filter     = filter,
+        min_ngen   = min_ngen,
+        cor_method = cor_method,
+        classCol   = classCol,
+        verbose    = verbose,
+        bridge_out = bridge_out
+      ),
+      timeout_sec = 180
+    )
+    cem <- if (file.exists(bridge_out)) ov_qs_read(bridge_out) else NULL
+    if (is.null(cem)) {
+      msg("Isolated CEMiTool returned nothing; running in-process");
       cem <- cemitool(expr              = expr_mat,
                       annot             = annot_df,
                       filter            = filter,
