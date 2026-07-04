@@ -335,7 +335,7 @@ my.build.cemi.net <- function(dataName,
     if (requireNamespace("RSclient", quietly = TRUE)) {
       msg("Using RSclient subprocess...");
       # Run cemitool in separate process with stdout/stderr capture
-      result <- run_func_via_rsclient(
+      result <- run_func_via_rc_microservice(
         func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose) {
           suppressPackageStartupMessages({
             library(CEMiTool)
