@@ -262,6 +262,16 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
 
   imgSet$volcanoPlot <- paste0(fileNm, ".png");
 
+  # Annotate total down-regulated (top-left) and up-regulated (top-right) counts.
+  # Black text — the points already carry the up/down colour.
+  n_up   <- sum(volcano_data$significant == "upregulated", na.rm = TRUE);
+  n_down <- sum(volcano_data$significant == "downregulated", na.rm = TRUE);
+  gg_volcano <- gg_volcano +
+    ggplot2::annotate("text", x = -Inf, y = Inf, label = paste0("Down: ", n_down),
+                      hjust = -0.12, vjust = 1.6, color = "black", fontface = "bold", size = 4) +
+    ggplot2::annotate("text", x =  Inf, y = Inf, label = paste0("Up: ", n_up),
+                      hjust =  1.12, vjust = 1.6, color = "black", fontface = "bold", size = 4);
+
   Cairo::Cairo(file = imgSet$volcanoPlot, unit="px", dpi=dpi, width=1000, height=800, type=format, bg="white");
   print(gg_volcano)
   dev.off()
