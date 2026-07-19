@@ -1100,8 +1100,8 @@ PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width
     cat("[PlotEnrichNetworkPNG] enr.mat.qs exists:", file.exists("enr.mat.qs"), "\n")
     qs_files <- list.files(pattern = "\\.qs$")
     cat("[PlotEnrichNetworkPNG] qs files in wd:", paste(qs_files, collapse=", "), "\n")
-    enr.mat <- qs::qread("enr.mat.qs")
-    hits.query <- qs::qread("hits_query.qs")
+    enr.mat <- ov_qs_read("enr.mat.qs")
+    hits.query <- ov_qs_read("hits_query.qs")
     if (is.null(enr.mat) || nrow(enr.mat) == 0) return(0)
     if ("FDR" %in% colnames(enr.mat)) {
       ord.inx <- order(enr.mat[, "FDR"])
@@ -1133,8 +1133,8 @@ PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width
 # ── Server-side PNG: Gene-Pathway Enrichment Heatmap (ProteoAnalyst version) ──
 PlotEnrichHeatmapPNG <- function(dataName, imgName, format="png", dpi=150, width=NA) {
   tryCatch({
-    enr.mat <- qs::qread("enr.mat.qs")
-    current.geneset <- if (file.exists("current_featureset.qs")) qs::qread("current_featureset.qs") else NULL
+    enr.mat <- ov_qs_read("enr.mat.qs")
+    current.geneset <- if (file.exists("current_featureset.qs")) ov_qs_read("current_featureset.qs") else NULL
     if (is.null(enr.mat) || nrow(enr.mat) < 2 || is.null(current.geneset)) return(0)
 
     # PA stores UniProt IDs in prot.mat; use analSet$uniprot_to_entrez_map for Entrez IDs
