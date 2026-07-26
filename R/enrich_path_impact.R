@@ -186,13 +186,47 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
 
   # For protein-list uploads sig.mat is absent — use the full uploaded list as the hit set
   if (is.null(dataSet$sig.mat) || nrow(dataSet$sig.mat) == 0) {
-    if (is.null(dataSet$norm.mat) || nrow(dataSet$norm.mat) == 0) {
-      msgSet$current.msg <- "No proteins found. Please upload data first."
+    # NOTHING passed the significance cut.
+    #
+    # The old behaviour used EVERY row of norm.mat as the hit set. That is degenerate, not
+    # merely weak: q.size then equals uniq.count, so phyper(hit-1, set.size,
+    # uniq.count-set.size, q.size, lower.tail=FALSE) returns 1 for EVERY pathway and
+    # impact (hit.num/set.size) returns 1.0 for every pathway — the "top 20 by raw p" cap
+    # below was ranking arbitrary ties and presenting noise as a result.
+    #
+    # Instead, when the caller opts in via ov.pa.impact.topn.fallback, rank the differential
+    # result by RAW p and take the top N. q.size is then a real N against uniq.count, so the
+    # hypergeometric is well posed again. These proteins are NOT significant and the p-values
+    # are conditioned on a data-driven selection: exploratory only. The flag below is what
+    # labels them downstream — do not drop it.
+    # Default 100, NOT 0. This card is BEAN-dispatched (function_def.name =
+    # paNavi.goToPathwayImpact), and on that path the workflow JSON's rCommands are IGNORED —
+    # so an opt-in written as options(...) in rCommands can never fire, and defaulting to 0
+    # meant this branch always returned "not computed". The option remains an override:
+    # set ov.pa.impact.topn.fallback = 0 to disable the fallback entirely.
+    fb    <- getOption("ov.pa.impact.topn.fallback", 100L)
+    cr    <- dataSet$comp.res
+    has.p <- !is.null(cr) && nrow(cr) > 0 && "P.Value" %in% colnames(cr)
+    if (is.numeric(fb) && fb >= 1 && has.p) {
+      ord     <- order(cr[, "P.Value"], na.last = NA)
+      take    <- utils::head(ord, min(as.integer(fb), length(ord)))
+      sig.vec <- rownames(cr)[take]
+      assign(".ov.impact.rank.n", length(sig.vec), envir = globalenv())
+      msgSet$current.msg <- paste0(
+        "No protein passed the significance cut — pathway impact was computed on the top ",
+        length(sig.vec), " proteins by RAW p-value rank. These are NOT significant; treat ",
+        "the enrichment as exploratory.")
+    } else {
+      # No opt-in, or nothing to rank: report honestly rather than inventing a hit set.
+      assign(".ov.impact.rank.n", 0L, envir = globalenv())
+      msgSet$current.msg <- paste0(
+        "Pathway impact not computed: no protein passed the significance cut",
+        if (!has.p) " and no differential result is available to rank." else ".")
       saveSet(msgSet, "msgSet")
       return(0)
     }
-    sig.vec <- rownames(dataSet$norm.mat)
   } else {
+    assign(".ov.impact.rank.n", 0L, envir = globalenv())
     # Get significant protein IDs (UniProt IDs as row names of sig.mat)
     sig.vec <- rownames(dataSet$sig.mat)
   }
