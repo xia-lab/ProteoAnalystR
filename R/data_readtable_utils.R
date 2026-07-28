@@ -1646,6 +1646,16 @@ SetSpectronautOptions <- function(inputType = "protein") {
     match.msg <- paste0(match.msg, "Columns ",paste(names(meta.info)[rmcol],collapse = ", ")," are removed due to lack of replicates!   " )
   }
   
+  # Removal and re-ordering are separate concerns. Folding them into one guard made the message
+  # above true only half the time: rmcol columns are announced as removed whenever any exist, but
+  # the cbind that removed them ran only when a continuous column happened to be present. A column
+  # dropped here also disappears from colnames(meta.info), which is what the covariate resolver
+  # intersects against, so a covariate assigned to it was discarded silently.
+  if(length(rmcol) > 0){
+    meta.info <- meta.info[, -rmcol, drop=FALSE];
+    disc.inx  <- disc.inx[colnames(meta.info)];
+    cont.inx  <- cont.inx[colnames(meta.info)];
+  }
   if(sum(cont.inx)>0){
     # make sure the discrete data is on the left side
     meta.info <- cbind(meta.info[,disc.inx, drop=FALSE], meta.info[,cont.inx, drop=FALSE]);
