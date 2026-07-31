@@ -863,7 +863,7 @@ plot.gs.view <-function(fileName, format="png", dpi=96, width=NA, imgName=NA){
   imgName <- paste(imgName, "_dpi", dpi, ".", format, sep="");
 
   cmpdNm <- gsub("barcode_", "",fileName);
-  Cairo(file = imgName, dpi=dpi, width=340, height=300, type="png", bg="transparent");
+  Cairo::Cairo(file = imgName, dpi=dpi, width=340, height=300, type="png", bg="transparent");
   g <- plotEnrichment(current.featureset[[cmpdNm]], analSet$rankedVec)
   print(g)
   dev.off();

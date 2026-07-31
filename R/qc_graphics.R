@@ -164,7 +164,7 @@ qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png"
       strip.background = element_rect(fill = "#e0e0e0")
     )
 
-  Cairo(file = finalFileNm, width = 12, height = 7, unit = "in", dpi = dpi, type = format, bg = "white")
+  Cairo::Cairo(file = finalFileNm, width = 12, height = 7, unit = "in", dpi = dpi, type = format, bg = "white")
   tryCatch({
     print(p)
   }, finally = {
@@ -635,7 +635,7 @@ qc.overview.patchwork <- function(dat, imgNm, dpi = 96, format = "png", meta = N
     dpi <- 96
   }
 
-  Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
+  Cairo::Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
 
   tryCatch({
     print(overview.plot)
@@ -766,7 +766,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     # --- FIX: Safe Device Handling ---
     if(dpi == 72){ dpi <- 96 }
     
-    Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white");
+    Cairo::Cairo(file=fullPath, width=600*dpi/72, height=height*dpi/72, unit="px", dpi=dpi, type=format, bg="white");
 
     tryCatch({
         print(bp);
@@ -843,7 +843,7 @@ qc.nonmissing.per.sample <- function(dat, imgNm, dpi = 96, format = "png",
   width <- ifelse(num_samples < 50, 800, 800 + (num_samples - 50) * 10)
   height <- 600
 
-  Cairo(file = fullPath, width  = width * dpi / 72, height = height * dpi / 72, unit   = "px", dpi    = dpi, type   = format, bg     = "white")
+  Cairo::Cairo(file = fullPath, width  = width * dpi / 72, height = height * dpi / 72, unit   = "px", dpi    = dpi, type   = format, bg     = "white")
 
   tryCatch({
       print(bp)
@@ -990,7 +990,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
     return(layout(ggplotly(p), autosize = FALSE, width = fig_w, height = fig_h))
   } else {
     if (dpi == 72) dpi <- 96
-    Cairo(file = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, unit = "px", dpi = dpi, type = format, bg = "white")
+    Cairo::Cairo(file = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, unit = "px", dpi = dpi, type = format, bg = "white")
     tryCatch({
       print(p)
     }, finally = {
@@ -1283,7 +1283,7 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
   # --- FIX: Safe Device Handling ---
   if (dpi == 72) dpi <- 96
 
-  Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
+  Cairo::Cairo(file = fullPath, width = width_in, height = height_in, unit = "in", dpi = dpi, type = format, bg = "white")
 
   tryCatch({
       op <- par(no.readonly = TRUE)
@@ -1440,7 +1440,7 @@ qc.sample.corr <- function(dat, imgNm, dpi=96, format="png", interactive=FALSE, 
     dpi <- dpi *1.34
   }
   # Scale dimensions with sample size and convert to inches (Cairo unit="in")
-  Cairo(file=imgNm, unit="in", dpi=dpi, width=width, height=height, type=format, bg="white");
+  Cairo::Cairo(file=imgNm, unit="in", dpi=dpi, width=width, height=height, type=format, bg="white");
   print(p);
   dev.off();
   return("NA")
@@ -1768,7 +1768,7 @@ qc.density<- function(dataSet, imgNm="abc", dpi=96, format, interactive){
   if(dpi == 72){
   dpi <- dpi *1.34
   }
-    Cairo(file=imgNm, width=width, height=height, type=format, bg="white", dpi=dpi, unit="in");
+    Cairo::Cairo(file=imgNm, width=width, height=height, type=format, bg="white", dpi=dpi, unit="in");
     print(g)
     dev.off();
     return("NA")
@@ -1863,7 +1863,7 @@ PlotLibSizeView<-function(fileName, imgNm,dpi=96, format="png"){
   if(dpi == 72){
   dpi <- dpi *1.34
   }
-  Cairo(file=imgNm, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi);
+  Cairo::Cairo(file=imgNm, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi);
   print(g);
   dev.off();
   str <- "NA"
@@ -1894,7 +1894,7 @@ qc.meanstd <- function(dat, imgNm, dpi=96, format="png"){
   # --- FIX: Safe Device Handling ---
   if(dpi == 72){ dpi <- 96 }
   
-  Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
+  Cairo::Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
   
   tryCatch({
       # Call meanSdPlot with plot=FALSE to prevent it from printing to the wrong device
@@ -2060,7 +2060,7 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
     # --- FIX: Safe Device Handling ---
     if(dpi == 72){ dpi <- 96 }
 
-    Cairo(file = fullPath, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi)
+    Cairo::Cairo(file = fullPath, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi)
     
     tryCatch({
         print(pcafig)
@@ -2143,7 +2143,7 @@ qc.ncov5.plot <- function(ncov5_df,
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
-    Cairo(file = imgNm, width = width, height = height,
+    Cairo::Cairo(file = imgNm, width = width, height = height,
           type = format, bg = "white", dpi = dpi, unit = "in")
     print(g)
     dev.off()
@@ -2218,7 +2218,7 @@ qc.nsig.plot <- function(nsig_df,
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
-    Cairo(file = imgNm, width = width, height = height,
+    Cairo::Cairo(file = imgNm, width = width, height = height,
           type = format, bg = "white", dpi = dpi, unit = "in")
     print(g)
     dev.off()
@@ -2303,7 +2303,7 @@ qc.dendrogram.plot <- function(dendro_df,
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
-    Cairo(file = outFile, width = 8, height = 6,
+    Cairo::Cairo(file = outFile, width = 8, height = 6,
           type = format, bg = "white", dpi = dpi, unit = "in")
     print(g)
     dev.off()
@@ -2536,7 +2536,7 @@ qc.gini.plot <- function(gini_df,
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
-    Cairo(file = imgNm, width = width, height = height,
+    Cairo::Cairo(file = imgNm, width = width, height = height,
           type = format, bg = "white", dpi = dpi, unit = "in")
     print(g)
     dev.off()

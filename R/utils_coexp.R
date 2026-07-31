@@ -495,7 +495,7 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
     # FIX: Suppress Quartz popup on macOS - close any existing devices first
     while (dev.cur() > 1) dev.off()
 
-    Cairo(file, width = width_in, height = height_in, dpi = dpi,
+    Cairo::Cairo(file, width = width_in, height = height_in, dpi = dpi,
           bg = "white", type = format, units = "in")
 
     oldMar <- par("mar"); par(mar = oldMar + c(0, 0, 0, 4))
@@ -734,7 +734,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     while (dev.cur() > 1) dev.off()
 
     if (tolower(format) == "png") {
-      Cairo(file   = outFile,
+      Cairo::Cairo(file   = outFile,
             width  = width_in,
             height = height_in,
             dpi    = dpi,
@@ -742,7 +742,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
             type   = "png",
             units  = "in")
     } else {
-      Cairo(file   = outFile,
+      Cairo::Cairo(file   = outFile,
             width  = width_in,
             height = height_in,
             bg     = "white",
@@ -827,7 +827,7 @@ PlotCemiScaleFree <- function(imgName = "coexp_scalefree",
     # FIX: Suppress Quartz popup on macOS - close any existing devices first
     while (dev.cur() > 1) dev.off()
 
-    Cairo(file, width = width_in, height = height_in, dpi = dpi, bg = "white", type = format, units = "in")
+    Cairo::Cairo(file, width = width_in, height = height_in, dpi = dpi, bg = "white", type = format, units = "in")
   invisible(print(g))    # ggplot draw
   invisible(dev.off())
     imgSet <- readSet(imgSet, "imgSet");

@@ -303,7 +303,7 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
 
   imgName <- paste(imageName, "dpi", dpi, ".", format, sep = "")
   plot.width <- min(20, max(9.2, 4.2 + 0.55 * length(feature.levels)))
-  Cairo(file = imgName, width = plot.width, height = 5.8, unit = "in",
+  Cairo::Cairo(file = imgName, width = plot.width, height = 5.8, unit = "in",
         dpi = dpi, bg = "white", type = format)
   invisible(print(myplot))
   invisible(dev.off())
@@ -512,7 +512,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
 
       # Save ----------------------------------------------------------------
       # FIX: Suppress Quartz popup on macOS by using invisible() and checking device
-      Cairo(file = imgName, width = 5, height = 5, unit = "in",
+      Cairo::Cairo(file = imgName, width = 5, height = 5, unit = "in",
             dpi  = dpi, bg   = "white", type = format)
       invisible(print(myplot))
       invisible(dev.off())
@@ -580,7 +580,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
         p_all[[lv]] <- df.orig
       }
       # FIX: Suppress Quartz popup on macOS
-      Cairo(file = imgName, width=5, height=5, type=format, bg="white", dpi=dpi,unit="in");
+      Cairo::Cairo(file = imgName, width=5, height=5, type=format, bg="white", dpi=dpi,unit="in");
 
       alldata <- do.call(rbind, p_all)
       alldata$facA <- factor(as.character(alldata$facA), levels=levels(out.fac))
@@ -624,7 +624,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
     # calculate width based on the dateset number
     if(num == 1){
       # FIX: Suppress Quartz popup on macOS
-      Cairo(file = imgName, width=5, height=5, type=format, bg="white", dpi=dpi);
+      Cairo::Cairo(file = imgName, width=5, height=5, type=format, bg="white", dpi=dpi);
       col <- GetGroupPalette(as.character(inmex.meta$cls.lbl), paletteOpt);
       expr_vals <- as.numeric(inmex.meta$plot.data[gene.row.id.meta,])
       cls_vals <- as.character(inmex.meta$cls.lbl)
@@ -662,7 +662,7 @@ PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolca
       #print(w)
       #print(h)
       # FIX: Suppress Quartz popup on macOS
-      Cairo(file = imgName, width=width, height=height, type=format, bg="white", dpi=dpi);
+      Cairo::Cairo(file = imgName, width=width, height=height, type=format, bg="white", dpi=dpi);
       data.lbl <- as.character(inmex.meta$data.lbl);
       data.lbl <- substr(data.lbl, 0, nchar(data.lbl)-4);
       
@@ -758,7 +758,7 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
     if (is.null(cmpdNm) || is.na(cmpdNm) || cmpdNm == "") cmpdNm <- gene.id
 
     # FIX: Suppress Quartz popup on macOS
-    Cairo(file = imgName,  width=320*dpi/72, height=380*dpi/72, type=format, dpi=dpi, bg="white");
+    Cairo::Cairo(file = imgName,  width=320*dpi/72, height=380*dpi/72, type=format, dpi=dpi, bg="white");
     dat <- data.norm
     
     df.norm <- data.frame(value=dat[gene.id,], name = cls);
@@ -805,7 +805,7 @@ UpdateMultifacPlot <-function(dataName="",imgName, gene.id, boxmeta,format="png"
     # calculate width based on the dateset number
     if(num == 1){
       # FIX: Suppress Quartz popup on macOS
-      Cairo(file = imgName, width=280*dpi/72, height=320*dpi/72, type=format, dpi=dpi, bg="white");
+      Cairo::Cairo(file = imgName, width=280*dpi/72, height=320*dpi/72, type=format, dpi=dpi, bg="white");
       
       col <- GetGroupPalette(as.character(inmex.meta$cls.lbl), paletteOpt);
       df.norm <- data.frame(value=inmex.meta$plot.data[gene.id,], name = as.character(inmex.meta$cls.lbl))
@@ -858,7 +858,7 @@ PlotSelectedGeneRaw <- function(gene.id="",imgName="", format="png", dpi=96) {
 
   # Generate and save the plot using Cairo
   # FIX: Suppress Quartz popup on macOS
-  Cairo(file = imgName, width = 420 * dpi / 72, height = 560 * dpi / 72, type = format, dpi = dpi, bg = "white")
+  Cairo::Cairo(file = imgName, width = 420 * dpi / 72, height = 560 * dpi / 72, type = format, dpi = dpi, bg = "white")
   invisible(print(p))
   invisible(dev.off())
 }

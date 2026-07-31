@@ -136,6 +136,11 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
         data.anot <- res[[1]];
         msgSet <- res[[2]];
         dataSet$id.current <- "uniprot";
+        # data.idType must describe the IDs now in use, not the upload format.
+        # The rows are UniProt accessions from here on; dataSet$id.orig keeps the
+        # original type. Leaving it as the input type (e.g. "symbol") makes every
+        # downstream ID-space decision read a non-unique, no-longer-current ID.
+        paramSet$data.idType <- "uniprot";
         dataSet$annotated <- T;
         #msg("[Annot] Summarized to ", nrow(data.anot), " unique UniProt IDs after duplicate handling (lvlOpt=", lvlOpt, ")")
       } else if (is_phospho) {
@@ -548,14 +553,30 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
                          is.na(gene.ids) | !nzchar(gene.ids) | gene.ids == uniprot.vec)
   if (length(missing.inx) == 0) return(symbol.map)
 
+  # Only IDs that are actually queryable count toward the REST budget. An
+  # unresolved ROW is usually NA (the feature never mapped to an accession) or a
+  # non-UniProt ID; .fetchUniprotPrimarySymbols discards both, so counting rows
+  # here skipped the fallback over entries it was never going to send.
+  lookupable <- .normalizeUniProtAccessionsForLookup(uniprot.vec[missing.inx])
+  lookupable <- lookupable[!is.na(lookupable) & nzchar(lookupable)]
+  lookupable <- unique(lookupable[.looksLikeUniProtAccessionsForLookup(lookupable)])
+
   .paProteinDiagLog("[UniProtFallback] unresolved symbol/gene rows before UniProt fallback: ",
                     length(missing.inx), "/", nrow(symbol.map),
-                    "; sample accession(s)=",
-                    paste(head(.normalizeUniProtAccessionsForLookup(uniprot.vec[missing.inx]), 5), collapse = ","))
+                    "; queryable UniProt accession(s)=", length(lookupable),
+                    "; sample=", paste(head(lookupable, 5), collapse = ","))
 
-  if (length(missing.inx) > max.rest.fallback) {
-    .paProteinDiagLog("[UniProtFallback] skipped REST fallback because unresolved batch is too large: ",
-                      length(missing.inx), " > ", max.rest.fallback,
+  if (length(lookupable) == 0) {
+    .paProteinDiagLog("[UniProtFallback] no queryable UniProt accessions among the ",
+                      length(missing.inx), " unresolved row(s); nothing to look up. ",
+                      "These features carry no accession -- this is upstream ID-mapping coverage, ",
+                      "not a REST failure.")
+    return(symbol.map)
+  }
+
+  if (length(lookupable) > max.rest.fallback) {
+    .paProteinDiagLog("[UniProtFallback] skipped REST fallback because the queryable batch is too large: ",
+                      length(lookupable), " > ", max.rest.fallback,
                       ". Refresh entrez_uniprot SQLite instead.")
     return(symbol.map)
   }

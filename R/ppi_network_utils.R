@@ -22,11 +22,11 @@ ComputeSubnetStats <- function(comps){
   colnames(net.stats) <- c("Node", "Edge", "Query");
   for(i in 1:length(comps)){
     g <- comps[[i]];
-    num_nodes <- vcount(g);
-    num_edges <- ecount(g);
+    num_nodes <- igraph::vcount(g);
+    num_edges <- igraph::ecount(g);
     # Count query nodes (from original upload)
-    num_query <- if (!is.null(V(g)$is_query)) {
-      sum(V(g)$is_query, na.rm = TRUE)
+    num_query <- if (!is.null(igraph::V(g)$is_query)) {
+      sum(igraph::V(g)$is_query, na.rm = TRUE)
     } else {
       cat(sprintf("[PPI] Module %d: is_query attribute is NULL!\n", i))
       0  # If is_query attribute doesn't exist, default to 0
@@ -505,7 +505,7 @@ CreateGraph <- function(dummy = NA) {
   # appear in the edge list and are therefore missing from the graph. Add them back
   # as isolated vertices so their expression values are preserved in the output.
   if (!is.null(cache$seeds) && length(cache$seeds) > 0) {
-    missing.seeds <- setdiff(as.character(cache$seeds), V(g)$name)
+    missing.seeds <- setdiff(as.character(cache$seeds), igraph::V(g)$name)
     if (length(missing.seeds) > 0) {
       g <- igraph::add_vertices(g, length(missing.seeds), name = missing.seeds)
       msg(sprintf("[CreateGraph] Added %d isolated seed(s) missing from edge list", length(missing.seeds)))
@@ -524,7 +524,7 @@ CreateGraph <- function(dummy = NA) {
   # Attach expression values (if provided) to nodes for downstream exports.
   # Fill from multiple sources in order and keep unresolved nodes as NA until the end.
   expr.vec <- rep(NA_real_, igraph::vcount(g))
-  names(expr.vec) <- V(g)$name
+  names(expr.vec) <- igraph::V(g)$name
   analSet <- readSet(analSet, "analSet")
 
   fillExprFromNamedValues <- function(named.vals) {
@@ -635,7 +635,7 @@ CreateGraph <- function(dummy = NA) {
   }
 
   msg(sprintf("[CreateGraph-EXPR] graph nodes=%d; sample node names: %s",
-              igraph::vcount(g), paste(head(V(g)$name, 5), collapse=",")))
+              igraph::vcount(g), paste(head(igraph::V(g)$name, 5), collapse=",")))
   msg(sprintf("[CreateGraph-EXPR] uniprot_to_entrez_map size=%d; sample: %s",
               length(analSet$uniprot_to_entrez_map),
               if (length(analSet$uniprot_to_entrez_map) > 0)
@@ -703,14 +703,14 @@ CreateGraph <- function(dummy = NA) {
               sum(!is.na(expr.vec) & expr.vec != 0), length(expr.vec)))
 
   expr.vec[is.na(expr.vec)] <- 0
-  V(g)$expr <- expr.vec
-  V(g)$abundance <- expr.vec  # Also set abundance for compatibility
+  igraph::V(g)$expr <- expr.vec
+  igraph::V(g)$abundance <- expr.vec  # Also set abundance for compatibility
   expr.vec <<- expr.vec[!is.na(expr.vec)]
 
   # Mark seed nodes and attach both Entrez and UniProt identifiers. PPI graphs
   # can be stored with UniProt vertex names, while localization and symbols are
   # keyed by Entrez.
-  node.names <- V(g)$name
+  node.names <- igraph::V(g)$name
   org <- if (!is.null(paramSet$data.org) && nzchar(paramSet$data.org)) {
     paramSet$data.org
   } else if (!is.null(paramSet$org) && nzchar(paramSet$org)) {
@@ -719,25 +719,25 @@ CreateGraph <- function(dummy = NA) {
     "hsa"
   }
   graph.ids <- .paResolveGraphIds(g, org)
-  V(g)$entrez <- graph.ids$entrez
-  V(g)$uniprot <- graph.ids$uniprot
+  igraph::V(g)$entrez <- graph.ids$entrez
+  igraph::V(g)$uniprot <- graph.ids$uniprot
 
   seed.ids <- unique(trimws(as.character(cache$seeds)))
   seed.ids <- seed.ids[!is.na(seed.ids) & nzchar(seed.ids)]
   seed.uniprot <- .paNormalizeUniprotIds(seed.ids)
   is.seed <- node.names %in% seed.ids |
-    V(g)$entrez %in% seed.ids |
-    V(g)$uniprot %in% seed.uniprot
-  V(g)$is_query <- is.seed;
-  V(g)$size <- .paScaleGraphNodeSizes(g)
+    igraph::V(g)$entrez %in% seed.ids |
+    igraph::V(g)$uniprot %in% seed.uniprot
+  igraph::V(g)$is_query <- is.seed;
+  igraph::V(g)$size <- .paScaleGraphNodeSizes(g)
 
   gene.symbols <- tryCatch({
-    doEntrez2SymbolMapping(V(g)$entrez, org, "entrez")
+    doEntrez2SymbolMapping(igraph::V(g)$entrez, org, "entrez")
   }, error = function(e) {
     rep(NA_character_, length(node.names))
   })
   gene.symbols[is.na(gene.symbols) | !nzchar(gene.symbols)] <- node.names[is.na(gene.symbols) | !nzchar(gene.symbols)]
-  V(g)$gene_symbol <- gene.symbols
+  igraph::V(g)$gene_symbol <- gene.symbols
 
   # Add compartment/localization information as vertex attributes
   # This preserves compartment data for extracted modules
@@ -746,7 +746,7 @@ CreateGraph <- function(dummy = NA) {
   if (file.exists(loc.path)) {
     msg(sprintf("[CreateGraph] Loading localization data from: %s\n", loc.path))
     loc.data <- ov_qs_read(loc.path)
-    loc.map <- loc.data[match(as.character(V(g)$entrez), as.character(loc.data$EntrezID)), ]
+    loc.map <- loc.data[match(as.character(igraph::V(g)$entrez), as.character(loc.data$EntrezID)), ]
 
     comp.res <- .paResolveCompartmentAnnotations(
       ifelse(is.na(loc.map$Broad.category) | loc.map$Broad.category == "",
@@ -757,17 +757,17 @@ CreateGraph <- function(dummy = NA) {
              as.character(loc.map$Main.location))
     )
 
-    V(g)$broad_category <- comp.res$primary
-    V(g)$compartment_all <- comp.res$all_categories
-    V(g)$main_location <- comp.res$all_locations
+    igraph::V(g)$broad_category <- comp.res$primary
+    igraph::V(g)$compartment_all <- comp.res$all_categories
+    igraph::V(g)$main_location <- comp.res$all_locations
 
     msg(sprintf("[CreateGraph] Added compartment info to %d/%d nodes\n",
-                sum(V(g)$broad_category != "Unknown"), vcount(g)))
+                sum(igraph::V(g)$broad_category != "Unknown"), igraph::vcount(g)))
   } else {
     # No localization data available - set defaults
-    V(g)$broad_category <- "Unknown"
-    V(g)$compartment_all <- "Unknown"
-    V(g)$main_location <- "Unknown"
+    igraph::V(g)$broad_category <- "Unknown"
+    igraph::V(g)$compartment_all <- "Unknown"
+    igraph::V(g)$main_location <- "Unknown"
     msg(sprintf("[CreateGraph] Localization data not found, all nodes marked as Unknown\n"))
   }
 
@@ -782,7 +782,7 @@ CreateGraph <- function(dummy = NA) {
   analSet <- .ensurePpiList()
 
   # Use minNodeNum = 2 for very small networks (allows 2-node networks to be visualized)
-  minNodes <- ifelse(vcount(g) < 3, 2, 3)
+  minNodes <- ifelse(igraph::vcount(g) < 3, 2, 3)
 
   analSet <- DecomposeGraph(g, analSet, minNodeNum = minNodes)
   substats <- analSet$substats
@@ -804,7 +804,7 @@ CreateGraph <- function(dummy = NA) {
     current.net.nm <<- names(ppi.comps)[1]
     paramSet$current.net.nm <- current.net.nm
     msg(sprintf("[PPI] Set current network to %s with %d nodes\n",
-                current.net.nm, vcount(ppi.comps[[current.net.nm]])))
+                current.net.nm, igraph::vcount(ppi.comps[[current.net.nm]])))
   }
 
   saveSet(paramSet, "paramSet")
@@ -934,15 +934,15 @@ PrepareNetwork <- function(net.nm, json.nm) {
   }
 
   # Get node names
-  nms <- V(g)$name
+  nms <- igraph::V(g)$name
   if (is.null(nms) || length(nms) == 0) {
     nms <- as.character(1:vcount(g))
-    V(g)$name <- nms
+    igraph::V(g)$name <- nms
   }
   n <- length(nms)
 
   # msg(sprintf("[exportNetworkToJSON] Exporting network '%s' with %d nodes, %d edges\n",
-  #            net.nm, n, ecount(g)))
+  #            net.nm, n, igraph::ecount(g)))
 
   # Get organism from paramSet
   org <- paramSet$data.org
@@ -951,8 +951,8 @@ PrepareNetwork <- function(net.nm, json.nm) {
     org <- "hsa"
   }
   graph.ids <- .paResolveGraphIds(g, org)
-  V(g)$entrez <- graph.ids$entrez
-  V(g)$uniprot <- graph.ids$uniprot
+  igraph::V(g)$entrez <- graph.ids$entrez
+  igraph::V(g)$uniprot <- graph.ids$uniprot
 
   # Calculate network metrics
   node.dgr <- igraph::degree(g)
@@ -960,8 +960,8 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   # Get expression values if available
   node.expr <- rep(0, n)
-  if (!is.null(V(g)$expr)) {
-    node.expr <- V(g)$expr
+  if (!is.null(igraph::V(g)$expr)) {
+    node.expr <- igraph::V(g)$expr
   } else if (exists("expr.vec") && !is.null(expr.vec)) {
     node.expr <- expr.vec[match(nms, names(expr.vec))]
     node.expr[is.na(node.expr)] <- 0
@@ -969,8 +969,8 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   # Use existing graph sizes when present so switching between extracted and
   # original networks does not silently rescale the same nodes.
-  stored.sizes <- if (!is.null(V(g)$size) && length(V(g)$size) == n) {
-    suppressWarnings(as.numeric(V(g)$size))
+  stored.sizes <- if (!is.null(igraph::V(g)$size) && length(igraph::V(g)$size) == n) {
+    suppressWarnings(as.numeric(igraph::V(g)$size))
   } else {
     rep(NA_real_, n)
   }
@@ -978,7 +978,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
     node.sizes <- stored.sizes
   } else {
     node.sizes <- .paScaleGraphNodeSizes(g)
-    V(g)$size <- node.sizes
+    igraph::V(g)$size <- node.sizes
   }
 
   # Compute colors based on expression (centered gradient)
@@ -1016,9 +1016,9 @@ PrepareNetwork <- function(net.nm, json.nm) {
   }, error = function(e) {
     rep(NA_character_, length(nms))
   })
-  if (!is.null(V(g)$gene_symbol) && length(V(g)$gene_symbol) == length(nms)) {
+  if (!is.null(igraph::V(g)$gene_symbol) && length(igraph::V(g)$gene_symbol) == length(nms)) {
     use.attr.label <- is.na(node.labels) | !nzchar(node.labels)
-    node.labels[use.attr.label] <- as.character(V(g)$gene_symbol)[use.attr.label]
+    node.labels[use.attr.label] <- as.character(igraph::V(g)$gene_symbol)[use.attr.label]
   }
   node.labels[is.na(node.labels) | !nzchar(node.labels)] <- nms[is.na(node.labels) | !nzchar(node.labels)]
 
@@ -1049,27 +1049,27 @@ PrepareNetwork <- function(net.nm, json.nm) {
 "))
   }
 
-  if (!is.null(V(g)$broad_category) && length(V(g)$broad_category) == length(nms)) {
-    attr.locations <- if (!is.null(V(g)$main_location) && length(V(g)$main_location) == length(nms)) {
-      as.character(V(g)$main_location)
+  if (!is.null(igraph::V(g)$broad_category) && length(igraph::V(g)$broad_category) == length(nms)) {
+    attr.locations <- if (!is.null(igraph::V(g)$main_location) && length(igraph::V(g)$main_location) == length(nms)) {
+      as.character(igraph::V(g)$main_location)
     } else {
       rep(NA_character_, length(nms))
     }
-    attr.res <- .paResolveCompartmentAnnotations(as.character(V(g)$broad_category), attr.locations)
+    attr.res <- .paResolveCompartmentAnnotations(as.character(igraph::V(g)$broad_category), attr.locations)
     keep.attr <- !is.na(attr.res$primary) & nzchar(attr.res$primary) & attr.res$primary != "Unknown"
     node.categories[keep.attr] <- attr.res$primary[keep.attr]
     node.category.all[keep.attr] <- attr.res$all_categories[keep.attr]
     node.locations[keep.attr] <- attr.res$all_locations[keep.attr]
   }
-  if (!is.null(V(g)$main_location) && length(V(g)$main_location) == length(nms)) {
-    attr.locations <- as.character(V(g)$main_location)
+  if (!is.null(igraph::V(g)$main_location) && length(igraph::V(g)$main_location) == length(nms)) {
+    attr.locations <- as.character(igraph::V(g)$main_location)
     keep.attr <- !is.na(attr.locations) & nzchar(attr.locations) & attr.locations != "Unknown"
     node.locations[keep.attr] <- attr.locations[keep.attr]
   }
 
-  V(g)$broad_category <- node.categories
-  V(g)$compartment_all <- node.category.all
-  V(g)$main_location <- node.locations
+  igraph::V(g)$broad_category <- node.categories
+  igraph::V(g)$compartment_all <- node.category.all
+  igraph::V(g)$main_location <- node.locations
 
   uniprot.vec <- graph.ids$uniprot
 
@@ -1103,7 +1103,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
       ""
     }
 
-    is.query <- if (!is.null(V(g)$is_query)) V(g)$is_query[i] else FALSE
+    is.query <- if (!is.null(igraph::V(g)$is_query)) igraph::V(g)$is_query[i] else FALSE
 
     phosphosites <- NULL
     if (length(phosphosite.map) > 0 && nzchar(entrez.id) && entrez.id %in% names(phosphosite.map)) {
@@ -1283,7 +1283,7 @@ BuildSeedProteinNet <- function(){
     analSet <- .ensurePpiList()
 
     # Get nodes from overall graph
-    nodes <- V(overall.graph)$name
+    nodes <- igraph::V(overall.graph)$name
 
     # Filter to only seed proteins (from cache)
     hit.inx <- nodes %in% cache$seeds
@@ -1300,7 +1300,7 @@ BuildSeedProteinNet <- function(){
     }
 
     # Mark all nodes as query (since this is seeds-only)
-    V(g)$is_query <- TRUE
+    igraph::V(g)$is_query <- TRUE
 
     # msg(sprintf("[PPI] Seed-only network: %d nodes, %d edges\n",
     #            igraph::vcount(g), igraph::ecount(g)))
@@ -1368,7 +1368,7 @@ ComputePCSFNet <- function(){
     # Create igraph from edge list
     node_names <- unique(c(as.character(edg[,1]), as.character(edg[,2])))
     ppi <- igraph::graph_from_data_frame(edg[,1:2], vertices=node_names, directed=FALSE)
-    E(ppi)$weight <- as.numeric(edg[,3])
+    igraph::E(ppi)$weight <- as.numeric(edg[,3])
     ppi <- igraph::simplify(ppi)
 
     # msg(sprintf("[PPI] Input graph for PCSF: %d nodes, %d edges\n",
@@ -1376,7 +1376,7 @@ ComputePCSFNet <- function(){
 
     # Create prize vector: high prizes for seed nodes, low/zero for others
     # This is the key to PCSF - it finds the minimum cost subnetwork connecting high-prize nodes
-    all.nodes <- V(ppi)$name
+    all.nodes <- igraph::V(ppi)$name
     prizes <- rep(0, length(all.nodes))  # Default prize = 0 for non-seed nodes
     names(prizes) <- all.nodes
 
@@ -1421,9 +1421,9 @@ ComputePCSFNet <- function(){
     #             igraph::vcount(g), igraph::ecount(g)))
 
     # Mark query nodes (nodes that were in original seeds)
-    node.names <- V(g)$name
+    node.names <- igraph::V(g)$name
     is.seed <- node.names %in% cache$seeds
-    V(g)$is_query <- is.seed
+    igraph::V(g)$is_query <- is.seed
 
     # msg(sprintf("[PPI] Marked %d/%d nodes as query nodes in PCSF network\n",
     #            sum(is.seed), length(node.names)))
@@ -1513,7 +1513,7 @@ GetMinConnectedGraphs <- function(max.len = 200){
         # flush.console()
 
         # Get seed proteins from cache, but only keep those present in the graph
-        all.graph.nodes <- V(overall.graph)$name
+        all.graph.nodes <- igraph::V(overall.graph)$name
         my.seeds <- cache$seeds[cache$seeds %in% all.graph.nodes]
 
         if (length(my.seeds) == 0) {
@@ -1533,7 +1533,7 @@ GetMinConnectedGraphs <- function(max.len = 200){
         # flush.console()
         dgrs <- igraph::degree(overall.graph)
         keep.inx <- dgrs > 1 | (names(dgrs) %in% my.seeds)
-        nodes2rm <- V(overall.graph)$name[!keep.inx]
+        nodes2rm <- igraph::V(overall.graph)$name[!keep.inx]
 
         cat(sprintf("[PPI] Step 4: Trimming graph (removing %d nodes)\n", length(nodes2rm)))
         flush.console()
@@ -1600,7 +1600,7 @@ GetMinConnectedGraphs <- function(max.len = 200){
         }
 
     # Keep only nodes that are on shortest paths
-    nodes2rm <- V(g.trimmed)$name[-nds.inxs]
+    nodes2rm <- igraph::V(g.trimmed)$name[-nds.inxs]
     g <- igraph::simplify(igraph::delete_vertices(g.trimmed, nodes2rm))
 
     if (igraph::vcount(g) == 0) {
@@ -1612,9 +1612,9 @@ GetMinConnectedGraphs <- function(max.len = 200){
     #            igraph::vcount(g), igraph::ecount(g)))
 
     # Mark query nodes (nodes that were in original seeds)
-    node.names <- V(g)$name
+    node.names <- igraph::V(g)$name
     is.seed <- node.names %in% cache$seeds
-    V(g)$is_query <- is.seed
+    igraph::V(g)$is_query <- is.seed
 
     # msg(sprintf("[PPI] Marked %d/%d nodes as query nodes\n",
     #            sum(is.seed), length(node.names)))
@@ -1674,7 +1674,7 @@ Compute.SteinerForest <- function(ppi, terminals, w = 2, b = 1, mu = 0.0005, dum
   terminal_values <- as.numeric(terminals)
 
   # Incorporate the node prizes
-  node_names <- V(ppi)$name
+  node_names <- igraph::V(ppi)$name
   node_prz <- vector(mode = "numeric", length = length(node_names))
   index <- match(terminal_names, node_names)
   percent <- signif((length(index) - sum(is.na(index)))/length(index)*100, 4)
@@ -1704,14 +1704,14 @@ Compute.SteinerForest <- function(ppi, terminals, w = 2, b = 1, mu = 0.0005, dum
   node_prizes[index] <- hub_penalization[index]
 
   # Construct the list of edges
-  edges <- ends(ppi,es = E(ppi))
+  edges <- ends(ppi,es = igraph::E(ppi))
   from <- c(rep("DUMMY", length(dummies)), edges[,1])
   to <- c(dummies, edges[,2])
 
-  cost <- c(rep(w, length(dummies)), E(ppi)$weight)
+  cost <- c(rep(w, length(dummies)), igraph::E(ppi)$weight)
 
   #PCSF will faill if there are NAs in weights, this will check and fail gracefully
-  if(any(is.na(E(ppi)$weight))){
+  if(any(is.na(igraph::E(ppi)$weight))){
     print("NAs found in the weight vector!");
     return (NULL);
   }
@@ -1735,10 +1735,10 @@ Compute.SteinerForest <- function(ppi, terminals, w = 2, b = 1, mu = 0.0005, dum
 
     v <- data.frame(output[[4]], output[[5]], type)
     names(v) <- c("terminals", "prize", "type")
-    subnet <- graph_from_data_frame(e,vertices=v,directed=F)
-    #E(subnet)$weight <- as.numeric(output[[3]])
-    subnet <- delete_vertices(subnet, "DUMMY")
-    subnet <- delete_vertices(subnet, names(which(degree(subnet)==0)));
+    subnet <- igraph::graph_from_data_frame(e,vertices=v,directed=F)
+    #igraph::E(subnet)$weight <- as.numeric(output[[3]])
+    subnet <- igraph::delete_vertices(subnet, "DUMMY")
+    subnet <- igraph::delete_vertices(subnet, names(which(igraph::degree(subnet)==0)));
     return(subnet)
 
   } else{

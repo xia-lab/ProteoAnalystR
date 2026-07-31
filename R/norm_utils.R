@@ -3460,7 +3460,7 @@ PlotProteoformIntensityProfile <- function(dataName, imageName, isoA, isoB,
   p3 <- make_group_plot(df.total, "Normalized abundance", "Aggregate signal", abundance.ylim)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = 12.8, height = 5.2, unit = "in",
+  Cairo::Cairo(file = imgName, width = 12.8, height = 5.2, unit = "in",
         dpi = dpi, bg = "white", type = format)
   grid.newpage()
   pushViewport(viewport(layout = grid.layout(1, 4, widths = unit(c(1.35, 1, 1, 0.45), "null"))))
@@ -3645,7 +3645,7 @@ PlotProteoformOverview <- function(dataName, isoformGroup, imageName,
 
   img.width <- max(8, 2.5 * n.iso + 2.5)
   imgName   <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = img.width, height = 5.2, unit = "in",
+  Cairo::Cairo(file = imgName, width = img.width, height = 5.2, unit = "in",
         dpi = dpi, bg = "white", type = format)
   grid.newpage()
   n.cols <- length(panels) + 1L
@@ -4038,7 +4038,7 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
     ggtitle(trunc.seq, subtitle = mod.label)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = 5, height = 5, unit = "in", dpi = dpi, bg = "white", type = format)
+  Cairo::Cairo(file = imgName, width = 5, height = 5, unit = "in", dpi = dpi, bg = "white", type = format)
   invisible(print(myplot))
   invisible(dev.off())
   return(invisible(1))
@@ -4123,7 +4123,7 @@ PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
   imgNm <- paste0(imageName, "dpi", dpi, ".", format)
   h <- max(3, nrow(summary_df) * 1.1 + 1.5)
   require(Cairo)
-  Cairo(file = imgNm, width = 6.5, height = h, unit = "in", dpi = dpi, bg = "white",
+  Cairo::Cairo(file = imgNm, width = 6.5, height = h, unit = "in", dpi = dpi, bg = "white",
         type = if (format == "pdf") "pdf" else "png")
   print(p)
   dev.off()

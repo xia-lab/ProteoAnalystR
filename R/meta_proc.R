@@ -837,7 +837,7 @@ PlotMetaPCA <- function(imgNm, dpi, format, interactive=F){
     xlab(xlabel) + ylab(ylabel) + 
     theme_bw()
   
-  Cairo(file=imgNm, width=8, height=6, type=format, bg="white", unit="in", dpi=dpi);
+  Cairo::Cairo(file=imgNm, width=8, height=6, type=format, bg="white", unit="in", dpi=dpi);
   print(pcafig);
   dev.off();
   
@@ -889,7 +889,7 @@ PlotMetaDensity<- function(imgNm, dpi=96, format, interactive=F){
         geom_line(aes(color=class, group=ind), stat="density", alpha=0.3) + 
         geom_line(aes(color=class), stat="density", alpha=0.6, size=1.5) +
         theme_bw()
-  Cairo(file=imgNm, width=10, height=6, type=format, bg="white", dpi=dpi, unit="in");
+  Cairo::Cairo(file=imgNm, width=10, height=6, type=format, bg="white", dpi=dpi, unit="in");
   print(g);
   dev.off();
 
