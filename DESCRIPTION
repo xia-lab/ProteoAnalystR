@@ -1,0 +1,24 @@
+Package: ProteoAnalystR
+Title: ProteoAnalystR
+Version: 1.0.0
+Authors@R: c(
+           person(given = "Jeff",
+           family = "Xia",
+           role = c("aut", "cre"),
+           email = "jeff.xia@mcgill.ca"
+           )
+           )
+Description: Underlying R functions for the ProteoAnalyst web server, covering
+    proteomics and phosphoproteomics data processing, differential analysis,
+    enrichment analysis, biomarker exploration and network-based interpretation.
+License: MIT + file LICENSE
+Depends: R (>= 4.0.3), igraph, RColorBrewer, qs2, rjson, RSQLite, ggplot2, Cairo
+Imports: limma, edgeR, DESeq2, DEqMS, sva, dplyr, tidyr, tibble, readr,
+    pryr, plotly, ggrepel, ggpubr, ggridges, gridExtra, lattice, png, see,
+    graphlayouts, WGCNA, CEMiTool, caret, preprocessCore, reshape, reshape2,
+    jsonlite, RJSONIO, rgl, alphashape3d, ks, fgsea
+BugReports: https://github.com/xia-lab/ProteoAnalystR/issues/new
+URL: https://github.com/xia-lab/ProteoAnalystR
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.2.1
