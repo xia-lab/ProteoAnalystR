@@ -150,6 +150,49 @@ SetCurrentGroups <- function(dataName = "", grps){
 #'@param y.in Class labels
 #'@param method Ranking method: "auroc", "ttest", "foldchange"
 #'@param lvNum Number of latent variables for PLS
+# Elastic-net fit that survives a small cross-validation fold.
+#
+# cv.glmnet needs enough members per class to hold folds out; inside MCCV the
+# training subset is a fraction of the data, so it fails there and returned NULL.
+# The caller then had no feature ranking, built no models, and the results page
+# showed an empty "Best model (max AUC)". Fall back to a plain glmnet path and
+# pick a mid-path lambda, which always yields coefficients.
+# Returns list(fit, s) or NULL.
+# Tie-free elastic-net importance: total |beta| across the whole lambda path.
+#
+# |beta| at a SINGLE lambda is mostly exact zeros, and GetImpFeatureMat ranks each
+# CV run with rank(-imp), which AVERAGES ties — so every zero-coefficient feature
+# receives the same rank and "Selected Frequency" collapses to 1.0 for all of
+# them. Used by BOTH RankFeatures and Predict.class: imp.cv (what the frequency
+# plot actually ranks) is produced by Predict.class, so fixing only the former
+# left the plot unchanged.
+.ov_enet_imp <- function(x, y, feat.names) {
+  fit <- try(glmnet::glmnet(as.matrix(x), as.factor(y), family = "binomial", alpha = 0.5), silent = TRUE);
+  if (inherits(fit, "try-error")) {
+    ef <- .ov_enet_fit(as.matrix(x), y);
+    if (is.null(ef)) return(NULL);
+    v <- abs(as.matrix(stats::coef(ef$fit, s = ef$s))[-1, 1]);
+  } else {
+    v <- rowSums(abs(as.matrix(stats::coef(fit))))[-1];
+  }
+  names(v) <- feat.names;
+  v
+}
+
+.ov_enet_fit <- function(x, y) {
+  if (!requireNamespace("glmnet", quietly = TRUE)) return(NULL);
+  y <- as.factor(y);
+  nfold <- max(3, min(5, min(table(y))));
+  fit <- try(glmnet::cv.glmnet(x, y, family = "binomial", alpha = 0.5, nfolds = nfold), silent = TRUE);
+  if (!inherits(fit, "try-error")) {
+    return(list(fit = fit, s = "lambda.min"));
+  }
+  fit2 <- try(glmnet::glmnet(x, y, family = "binomial", alpha = 0.5), silent = TRUE);
+  if (inherits(fit2, "try-error")) return(NULL);
+  lam <- fit2$lambda[max(1L, ceiling(length(fit2$lambda) / 2L))];
+  list(fit = fit2, s = lam);
+}
+
 RankFeatures <- function(x.in, y.in, method, lvNum){
   #msg("[RankFeatures] DEBUG: method=", method, " x.in dims=", nrow(x.in), "x", ncol(x.in), " y.in length=", length(y.in))
   #msg("[RankFeatures] DEBUG: y.in class=", class(y.in), " levels=", paste(levels(y.in), collapse=", "))
@@ -185,6 +228,32 @@ RankFeatures <- function(x.in, y.in, method, lvNum){
     #msg("[RankFeatures] DEBUG: Using fisher method")
     imp.vec <- Get.Fisher(x.in, as.factor(y.in));
     names(imp.vec) <- colnames(x.in);
+    return(imp.vec);
+  }else if(method == "glmnet"){ # elastic net absolute coefficients
+    if(!requireNamespace("glmnet", quietly=TRUE)){
+      print("Package glmnet is not installed.");
+      return(NULL);
+    }
+    # Importance = the feature's total |coefficient| ACROSS THE WHOLE LAMBDA PATH,
+    # not |coefficient| at a single lambda.
+    #
+    # At one lambda, elastic net shrinks most coefficients to exactly 0, so the
+    # importance vector is mostly ties at zero. GetImpFeatureMat ranks each CV run
+    # with rank(-imp) — which AVERAGES ties — so every zero-coefficient feature
+    # gets rank (n+1)/2, and any bestFeatNum above that counts EVERY feature as
+    # selected in EVERY run. The "Selected Frequency" plot then collapses to a
+    # flat 1.0 for all features, even for a 2-feature model. SVM / RF / PLS-DA
+    # never show this because squared weights, MeanDecreaseAccuracy and VIP are
+    # continuous.
+    #
+    # Summing |beta| over the regularisation path keeps elastic net's own notion
+    # of importance (a feature entering early and staying large scores high, one
+    # that never enters scores 0) while being effectively tie-free, so the
+    # ranking machinery behaves as it does for the other learners.
+    imp.vec <- .ov_enet_imp(x.in, y.in, colnames(x.in));
+    if(is.null(imp.vec)){
+      return(NULL);
+    }
     return(imp.vec);
   }else{
     print(paste("Not supported method:", method));
@@ -547,8 +616,35 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
   auc.vec <- colMeans(auc.mat);
 
   auc.cis <- GetCIs(auc.mat);
-  # get the best based on AUROC
-  best.model.inx <- which.max(auc.vec);
+  # get the best based on AUROC, preferring PARSIMONY among statistically
+  # indistinguishable models (the 1-SE rule).
+  #
+  # Plain which.max breaks down when the AUC curve is flat across feature-subset
+  # sizes, because the winner is then decided by noise. Elastic net makes this
+  # routine: it performs its OWN internal selection, so restricting the input to
+  # the top-N features and re-regularising barely moves the AUC, and the maximum
+  # drifts to the FULL feature set. "Best Model" then means "all features", which
+  # in turn makes Selected Frequency 1.0 for every feature by construction --
+  # every feature is inside the subset in every run.
+  #
+  # Taking the smallest subset whose mean AUC is within one standard error of the
+  # best gives the model a reader would actually choose, and matches what glmnet
+  # itself does with lambda.1se. On a curve with a genuine peak (PLS-DA, SVM, RF)
+  # this is the peak or one step inside it, so those methods are essentially
+  # unchanged.
+  # which.max returns integer(0) when EVERY auc is NA, which propagates as an
+  # empty/NA model index: the "Best Model" dropdown renders blank and R indexes
+  # test.feats with nothing. Guard it so a best model always exists.
+  best.model.inx <- if(all(is.na(auc.vec))) 1L else which.max(auc.vec);
+  if(length(best.model.inx) != 1L || is.na(best.model.inx)) best.model.inx <- 1L;
+  best.se <- tryCatch(stats::sd(auc.mat[, best.model.inx], na.rm = TRUE) / sqrt(nrow(auc.mat)),
+                      error = function(e) NA_real_);
+  if(!is.na(best.se) && best.se > 0){
+    within <- which(auc.vec >= (auc.vec[best.model.inx] - best.se));
+    if(length(within) > 0){
+      best.model.inx <- min(within);
+    }
+  }
 
   analSet$multiROC <- list(
     type = analSet$type,
@@ -642,6 +738,29 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
       return(result);
     }
     #msg("[Predict.class] DEBUG: LR returning prob.out only, length=", length(prob.out));
+  }else if(clsMethod == "glmnet"){ # elastic net
+    if(!requireNamespace("glmnet", quietly=TRUE)){
+      stop("Package glmnet is required for elastic net classification.");
+    }
+    x.tr <- as.matrix(x.train);
+    x.te <- as.matrix(x.test);
+    y.fac <- as.factor(y.train);
+    ef <- .ov_enet_fit(x.tr, if (exists("y.fac", inherits=FALSE)) y.fac else y.train);
+    if(is.null(ef)){
+      stop("Elastic net could not be fitted on this training subset.");
+    }
+    prob.out <- as.numeric(stats::predict(ef$fit, newx=x.te, s=ef$s, type="response"));
+    names(prob.out) <- rownames(x.test);
+    if(imp.out){
+      # Path-based, not single-lambda — see .ov_enet_imp. This vector becomes
+      # analSet$multiROC$imp.cv, which the Selected Frequency plot ranks.
+      imp.vec <- .ov_enet_imp(x.tr, if (exists("y.fac", inherits=FALSE)) y.fac else y.train, colnames(x.train));
+      if (is.null(imp.vec)) {
+        imp.vec <- abs(as.matrix(stats::coef(ef$fit, s = ef$s))[-1, 1]);
+        names(imp.vec) <- colnames(x.train);
+      }
+      return(list(prob.out=prob.out, imp.vec=imp.vec));
+    }
   }else{ # pls or plsda
     #msg("[Predict.class] DEBUG: Entering PLS branch");
     # plsr() requires a NUMERIC response — y.train arrives as a 2-level factor
@@ -3756,8 +3875,22 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
   analSet$roc.sig.nm <- imp.fileNm;
   
   if(measure=="freq"){
-    imp.vec <- sort(imp.mat[,1], decreasing=T);
-    xlbl <- "Selected Frequency (%)";
+    # Selected Frequency is the share of CV runs in which a feature fell inside the
+    # chosen model's feature subset. When that subset IS the full feature set --
+    # which happens whenever the best-AUC model uses every feature -- each feature
+    # is inside it in every run by construction, and the plot degenerates to a
+    # column of 1.0 that tells the reader nothing. Fall back to the model's own
+    # average importance, which always discriminates, and relabel the axis so the
+    # figure is not silently showing a different quantity.
+    freq.vec <- imp.mat[,1];
+    if(length(freq.vec) > 1 && all(abs(freq.vec - 1) < 1e-8)){
+      imp.vec <- sort(imp.mat[,2], decreasing=T);
+      xlbl <- "Average Importance";
+      print("All features selected in every run (model uses the full feature set); showing average importance instead of selected frequency.");
+    }else{
+      imp.vec <- sort(freq.vec, decreasing=T);
+      xlbl <- "Selected Frequency (%)";
+    }
   }else{ # default sort by freq, need to reorder
     imp.vec <- sort(imp.mat[,2], decreasing=T);
     xlbl <- "Average Importance";
