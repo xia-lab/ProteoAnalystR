@@ -139,6 +139,12 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
   paramSet$norm.opt   <- norm.opt
   paramSet$var.perc   <- var.thresh
   paramSet$abun.perc  <- count.thresh
+  # The valid-value filter is what actually removes proteins here, so the report and the deck
+  # need it too. Only the two percentile knobs were recorded, which is why those surfaces could
+  # describe filtering that was off while saying nothing about the filter that ran.
+  paramSet$remove.missing  <- isTRUE(removeMissing) || identical(removeMissing, "true") ||
+                              identical(removeMissing, "TRUE")
+  paramSet$missing.percent <- suppressWarnings(as.numeric(missingPercent))
 
   if (identical(norm.opt, "MORlog")) {
 
