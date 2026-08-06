@@ -696,7 +696,31 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
     }
     zero.ind <- !is.na(data) & data == 0
     miss.ind <- miss.ind | zero.ind
-    miss.frac <- rowMeans(miss.ind)
+    # GROUP-AWARE. Proteomics missingness is not random: a protein below the detector limit in
+    # one condition and abundant in the other is absent from half the samples BY BIOLOGY, and
+    # that is the "turn-on" case an experiment exists to find. Judged across all samples it is
+    # 50% missing and gets dropped at any threshold under 50 -- the same defect as filtering
+    # RNA-seq counts on their mean across groups.
+    #
+    # The fraction is therefore taken WITHIN each group and the BEST group decides. With the
+    # threshold at 30 this keeps a protein present in at least 70% of the samples of at least
+    # one group, and the parameter keeps its existing meaning ("% missing tolerated").
+    grp <- dataSet$cls
+    if (is.null(grp) || length(grp) != ncol(data)) {
+      grp <- tryCatch(dataSet$meta.info[colnames(data), 1], error = function(e) NULL)
+    }
+    if (!is.null(grp) && length(grp) == ncol(data) &&
+        length(unique(grp[!is.na(grp)])) > 1) {
+      gf <- droplevels(factor(grp))
+      per.grp <- vapply(levels(gf), function(lv) {
+        cols <- which(gf == lv)
+        if (!length(cols)) rep(1, nrow(miss.ind)) else rowMeans(miss.ind[, cols, drop = FALSE])
+      }, numeric(nrow(miss.ind)))
+      if (is.null(dim(per.grp))) per.grp <- matrix(per.grp, nrow = nrow(miss.ind))
+      miss.frac <- apply(per.grp, 1, min, na.rm = TRUE)   # the group where it is best observed
+    } else {
+      miss.frac <- rowMeans(miss.ind)                     # no usable grouping -> previous behaviour
+    }
 
     rm.miss <- miss.frac > (miss.pct.num/100)
 
@@ -705,6 +729,16 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
       rm.miss.msg <- paste("Removed", sum(rm.miss), "features with >", miss.pct.num, "% missing values.")
       msg <- paste(msg, rm.miss.msg)
     }
+  }
+
+  # Constant features come out ALWAYS, independently of the variance threshold. A feature with
+  # one distinct value has nothing for VSN's mean-variance fit, no correlation and no model to
+  # estimate, and disabling the percentile cut must not silently disable this too.
+  const.inx <- apply(data, 1, function(x) { u <- unique(x[!is.na(x)]); length(u) <= 1L })
+  const.inx[is.na(const.inx)] <- TRUE
+  if (any(const.inx) && sum(!const.inx) >= 2) {
+    data <- data[!const.inx, , drop = FALSE]
+    msg <- paste(msg, "Removed", sum(const.inx), "constant features.", collapse = " ")
   }
 
   # Check if we have data left after filtering
