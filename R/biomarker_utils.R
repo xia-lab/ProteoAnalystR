@@ -62,7 +62,10 @@ GetFeatureNumbers <- function(feat.len){
 #'@param y Input the data
 #'@param propTraining By default set to 2/3
 #'@param nRuns By default set to 30
-GetTrainTestSplitMat <- function(y, propTraining = 2/3, nRuns = 30){
+#'@param rseed Input the random seed
+GetTrainTestSplitMat <- function(y, propTraining = 2/3, nRuns = 30, rseed = 28051968){
+
+  set.seed(rseed);
 
   nTotalSample <- length(y);
 
