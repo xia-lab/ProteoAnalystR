@@ -1673,7 +1673,8 @@ BuildCEMiNet <- function(dataName,
                          min_ngen    = 30,
                          cor_method  = "pearson",
                          verbose     = TRUE,
-                         auto_impute = TRUE) {  # <-- Auto-impute NAs by default
+                         auto_impute = TRUE,     # <-- Auto-impute NAs by default
+                         force_beta  = FALSE) {  # <-- take the best available soft threshold
 
   ## Call the implementation (loaded at session init)
   res <- my.build.cemi.net(
@@ -1682,7 +1683,8 @@ BuildCEMiNet <- function(dataName,
     min_ngen    = min_ngen,
     cor_method  = cor_method,
     verbose     = verbose,
-    auto_impute = auto_impute  # <-- Pass through auto_impute parameter
+    auto_impute = auto_impute, # <-- Pass through auto_impute parameter
+    force_beta  = force_beta
   )
   return(res);
 }

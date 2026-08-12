@@ -38,7 +38,9 @@ my.build.cemi.net <- function(dataName,
                               cor_method  = "pearson",
                               verbose     = FALSE,
                               classCol    = NULL,
-                              auto_impute = TRUE) {   # <-- optional: auto-impute NAs before analysis
+                              auto_impute = TRUE,     # <-- optional: auto-impute NAs before analysis
+                              force_beta  = FALSE) {  # take the best available soft threshold when
+                                                      # no power reaches scale-free topology
   tryCatch({
 
     ## 1 · load dataset -------------------------------------------------
@@ -337,7 +339,7 @@ my.build.cemi.net <- function(dataName,
     bridge_out <- file.path(tempdir(), paste0("cem_", paste0(sample(letters, 8), collapse = ""), ".qs"))
     on.exit(if (file.exists(bridge_out)) unlink(bridge_out), add = TRUE)
     run_func_via_microservice(
-      func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose, bridge_out) {
+      func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose, bridge_out, force_beta) {
         suppressPackageStartupMessages({
           library(CEMiTool)
           library(WGCNA)
@@ -350,6 +352,7 @@ my.build.cemi.net <- function(dataName,
                         cor_method        = cor_method,
                         class_column      = classCol,
                         verbose           = verbose,
+                        force_beta        = force_beta,
                         plot              = FALSE,
                         plot_diagnostics  = FALSE)
         ov_qs_save(cem, bridge_out)
@@ -362,7 +365,8 @@ my.build.cemi.net <- function(dataName,
         cor_method = cor_method,
         classCol   = classCol,
         verbose    = verbose,
-        bridge_out = bridge_out
+        bridge_out = bridge_out,
+        force_beta = force_beta
       ),
       timeout_sec = 180
     )
@@ -376,6 +380,7 @@ my.build.cemi.net <- function(dataName,
                       cor_method        = cor_method,
                       class_column      = classCol,
                       verbose           = verbose,
+                      force_beta        = force_beta,
                       plot              = FALSE,           # Disable all plotting
                       plot_diagnostics  = FALSE)
     }
