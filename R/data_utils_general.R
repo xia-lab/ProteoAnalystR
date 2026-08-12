@@ -127,7 +127,28 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
     paramSet <<- paramSet;
   }else{
     paramSet$sqlite.path <- sqlite.path;
-    paramSet$lib.path <- paste0(path, dataPath);
+    # Reference-data (geneset .rds, localization .qs) lives in the SHARED, consolidated
+    # <app>/resources/data. lib.path used to be RELATIVE ("../../../../resources/data/"),
+    # which only resolves when the run cwd sits at <app>/<tool>/resources/users/<user>. On
+    # OmicsVerse run dirs live in a SEPARATE storage volume, so R's physical ".." walks out
+    # of the app and every enrichment read failed with "cannot open the connection" (error
+    # 127). Derive the ABSOLUTE shared data dir from a loader-set anchor (.rscripts.abs.path,
+    # set in _script_loader.R before Init.Data; else the shared .ov.shared.rscripts.dir set by
+    # SharedRSession); fall back to the relative path only when neither anchor is available.
+    shared.data <- tryCatch({
+      a <- get0(".rscripts.abs.path", envir = globalenv(), ifnotfound = NA_character_)
+      if (length(a) == 1 && !is.na(a) && nzchar(a)) {
+        file.path(dirname(dirname(dirname(a))), "resources", "data")
+      } else {
+        sd <- get0(".ov.shared.rscripts.dir", envir = globalenv(), ifnotfound = NA_character_)
+        if (length(sd) == 1 && !is.na(sd) && nzchar(sd)) file.path(dirname(sd), "data") else NA_character_
+      }
+    }, error = function(e) NA_character_);
+    if (!is.na(shared.data) && dir.exists(file.path(shared.data, "libs"))) {
+      paramSet$lib.path <- paste0(shared.data, "/");
+    } else {
+      paramSet$lib.path <- paste0(path, dataPath);
+    }
   }
   print(paste("sqlitePath:", sqlite.path));
 
