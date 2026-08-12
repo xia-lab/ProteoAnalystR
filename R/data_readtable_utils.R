@@ -1508,6 +1508,20 @@ SetSpectronautOptions <- function(inputType = "protein") {
         mydata$`#NAME` <- mydata$SampleID
       } else if ("Sample" %in% colnames(mydata)) {
         mydata$`#NAME` <- mydata$Sample
+      } else if (ncol(mydata) >= 2 &&
+                 length(intersect(
+                   trimws(as.character(mydata[[1]])),
+                   trimws(if (is.matrix(datOrig)) colnames(datOrig) else colnames(datOrig)[-1]))) > 0) {
+        # No explicit identifier header. A metadata sheet saved with row names
+        # (write.csv / fast.write(row.names = TRUE)) has an EMPTY first-column header,
+        # which fread auto-names "V1". .readMetaData ITSELF writes exactly such a file
+        # (fast.write(meta.info, "metadata_processed.csv", row.names = TRUE) below), so a
+        # saved project re-fed through "Start a new analysis" would otherwise fail to
+        # round-trip: the reader rejected the file it just wrote, meta.info came back
+        # NULL, and ReadTabExpressData fell back to .synthesizeMetaFromRuns() — one group
+        # per sample (the primary factor collapses to the sample IDs). Treat the first
+        # column as the sample identifier when its values match the data's sample columns.
+        colnames(mydata)[1] <- "#NAME"
       } else {
         msgSet$current.msg <- "Metadata file must contain a '#NAME' or 'SampleID' column for sample identifiers.";
         saveSet(msgSet, "msgSet");
