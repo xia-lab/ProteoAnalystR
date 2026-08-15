@@ -1,0 +1,4 @@
+# Export all public (non-dot) top-level functions. Internal helpers are named with
+# a leading dot and stay unexported. Dependencies are attached via Imports; the
+# analysis functions also reference packages explicitly with `pkg::fun()`.
+exportPattern("^[[:alpha:]]")

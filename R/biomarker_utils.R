@@ -379,8 +379,19 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
   analSet$rank.method <- rank.method;
   analSet$exp.lvNum <- lvNum;
 
-  data <- dataSet$data.norm.transposed;
-  cls <- dataSet$cls;
+  # Fold-wise covariate adjustment context (NULL when no adjustment was applied).
+  # When active, CV runs on the UN-adjusted base data and re-fits the covariate
+  # adjustment inside each training fold so held-out samples never influence the
+  # adjustment (prevents over-optimistic AUC/accuracy from information leakage).
+  adj.ctx <- .GetCVAdjustContext(dataSet);
+  if(!is.null(adj.ctx)){
+    data <- adj.ctx$base.data;
+    cls <- adj.ctx$cls;
+    msg("[PerformCV.explore] Covariate adjustment is re-fit within each CV training fold (leakage-free).");
+  } else {
+    data <- dataSet$data.norm.transposed;
+    cls <- dataSet$cls;
+  }
 
   # DEBUG: Check what we received
   #msg("[PerformCV.explore] DEBUG: data is.null? ", is.null(data))
@@ -446,9 +457,28 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
       #msg("[PerformCV.explore] DEBUG: testSampleRun sum: ", sum(testSampleRun))
     }
 
-    x.in <- data[trainingSampleRun, ];
+    trainingSampleRun.raw <- data[trainingSampleRun, , drop=FALSE];
+    testSampleRun.raw <- data[testSampleRun, , drop=FALSE];
     y.train <- cls[trainingSampleRun];
     actualCls[[irun]] <- y.test <- cls[testSampleRun];
+
+    # Re-fit covariate adjustment on THIS fold's training samples only, then
+    # apply the training-derived projection to the held-out samples. Held-out
+    # expression/outcome is never used to fit the adjustment (only its known
+    # covariate values), so the CV estimate is free of adjustment leakage.
+    if(!is.null(adj.ctx) && !is.null(adj.ctx$covariate.design)){
+      fold.adj <- .RemoveCovariateEffectFold(
+        trainingSampleRun.raw, testSampleRun.raw,
+        adj.ctx$primary.design[trainingSampleRun, , drop=FALSE],
+        adj.ctx$covariate.design[trainingSampleRun, , drop=FALSE],
+        adj.ctx$covariate.design[testSampleRun, , drop=FALSE]);
+      train.fold <- fold.adj$train;
+      test.fold <- fold.adj$test;
+    } else {
+      train.fold <- trainingSampleRun.raw;
+      test.fold <- testSampleRun.raw;
+    }
+    x.in <- train.fold;
 
     if (irun == 1) {
       #msg("[PerformCV.explore] DEBUG: x.in dimensions: ", nrow(x.in), " x ", ncol(x.in))
@@ -470,7 +500,10 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
 
     feat.outp[[irun]] <- imp.vec;
     ord.inx <- order(imp.vec, decreasing = TRUE);
-    ordData <- data[, ord.inx];
+    # rank features on the fold-adjusted training data; reorder both the adjusted
+    # training and held-out matrices consistently for classifier building
+    train.ord <- train.fold[, ord.inx, drop=FALSE];
+    test.ord <- test.fold[, ord.inx, drop=FALSE];
 
     # building classifiers for each number of selected features and test on the test data
     for (inum in seq(along = nFeatures)){
@@ -478,8 +511,8 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
         #msg("[PerformCV.explore] DEBUG: Inner loop - inum=", inum, " nFeatures[inum]=", nFeatures[inum])
       }
 
-      x.train <- ordData[trainingSampleRun, 1:nFeatures[inum], drop=FALSE];
-      x.test <- ordData[testSampleRun, 1:nFeatures[inum], drop=FALSE];
+      x.train <- train.ord[, 1:nFeatures[inum], drop=FALSE];
+      x.test <- test.ord[, 1:nFeatures[inum], drop=FALSE];
 
       if (irun == 1 && inum == 1) {
         #msg("[PerformCV.explore] DEBUG: x.train dimensions: ", nrow(x.train), " x ", ncol(x.train))
@@ -641,6 +674,123 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
   return(prob.out);
 }
 
+#'Build covariate/primary-condition design matrices for fold-wise adjustment
+#'@description Construct the design matrices used to regress covariate/batch
+#' effects out of biomarker data. Only covariate *values* (e.g. age, sex, batch)
+#' are used here; the outcome/expression is never touched, so this is safe to
+#' build once from all samples and subset per fold without leaking held-out
+#' information. The intercept is dropped from the covariate design because
+#' removeBatchEffect-style adjustment only subtracts covariate contributions
+#' while preserving the primary condition (kept in \code{primary.design}).
+#'@param meta.info Data frame of sample metadata (rows aligned to data rows)
+#'@param primary.condition Name of the primary condition column (kept, not removed)
+#'@param adj.vec Character vector of covariate/batch column names to remove
+#'@return list(primary.design, covariate.design) or NULL covariate.design if none
+.BuildCovariateDesign <- function(meta.info, primary.condition, adj.vec){
+  var.types <- sapply(meta.info, class);
+  chr.inx <- var.types == "character";
+  if(any(chr.inx)){
+    # single-bracket (no comma) indexes columns and preserves the data.frame
+    meta.info[chr.inx] <- lapply(meta.info[chr.inx], factor);
+  }
+
+  primary.design <- model.matrix(as.formula(paste0("~ ", primary.condition)), data=meta.info);
+  covariate.design <- model.matrix(as.formula(paste0("~ ", paste(adj.vec, collapse=" + "))), data=meta.info);
+
+  # drop intercept from covariates; the primary-condition design keeps its own
+  if(ncol(covariate.design) > 1){
+    covariate.design <- covariate.design[, -1, drop=FALSE];
+  } else {
+    covariate.design <- NULL;
+  }
+
+  primary.design <- as.matrix(primary.design);
+  storage.mode(primary.design) <- "double";
+  if(!is.null(covariate.design)){
+    covariate.design <- as.matrix(covariate.design);
+    storage.mode(covariate.design) <- "double";
+  }
+
+  list(primary.design = primary.design, covariate.design = covariate.design);
+}
+
+#'Remove covariate effects fold-wise (leakage-free)
+#'@description Estimate covariate-removal coefficients from TRAINING samples only
+#' (least-squares fit of expression on the primary condition + covariates), then
+#' subtract the covariate contribution from both the training and the held-out
+#' test samples. The held-out fold contributes only its covariate *values* (used
+#' to build \code{cov.test}); its expression and outcome are never used to fit the
+#' adjustment, so the resulting cross-validation performance is not inflated by
+#' information leakage. This is the fold-wise analogue of limma::removeBatchEffect.
+#'@param x.train Training expression, samples x features
+#'@param x.test Held-out expression, samples x features
+#'@param primary.train Primary-condition design for training rows (kept)
+#'@param cov.train Covariate design (no intercept) for training rows (removed)
+#'@param cov.test Covariate design (no intercept) for held-out rows (removed)
+#'@return list(train, test) with covariate effects removed
+.RemoveCovariateEffectFold <- function(x.train, x.test, primary.train, cov.train, cov.test){
+  if(is.null(cov.train) || ncol(cov.train) == 0){
+    return(list(train = x.train, test = x.test));
+  }
+
+  # Center covariates by their TRAINING means (mirrors limma::removeBatchEffect,
+  # which preserves the overall data mean) and apply the SAME training means to
+  # the held-out fold. Using training means -- not the held-out fold's own means
+  # -- is what keeps the adjustment free of held-out information.
+  cov.means <- colMeans(cov.train);
+  cov.train.c <- sweep(cov.train, 2, cov.means, "-");
+  cov.test.c  <- sweep(cov.test,  2, cov.means, "-");
+
+  # least-squares fit on TRAINING samples only: expression ~ primary + covariates
+  X <- cbind(primary.train, cov.train.c);         # n.train x (p.primary + p.cov)
+  qrX <- qr(X);
+  beta <- qr.coef(qrX, x.train);                  # (p.primary + p.cov) x features
+
+  cov.cols <- (ncol(primary.train) + 1):(ncol(primary.train) + ncol(cov.train));
+  beta.cov <- beta[cov.cols, , drop=FALSE];       # p.cov x features
+  # aliased/non-estimable coefficients (rank-deficient fold) -> do not remove them
+  beta.cov[is.na(beta.cov)] <- 0;
+
+  train.adj <- x.train - cov.train.c %*% beta.cov; # apply training-derived projection
+  test.adj  <- x.test  - cov.test.c  %*% beta.cov; # to held-out fold (covariate values only)
+
+  list(train = train.adj, test = test.adj);
+}
+
+#'Assemble the fold-wise covariate-adjustment context for CV, if active
+#'@description Returns NULL when no covariate adjustment was requested, in which
+#' case cross-validation runs on \code{dataSet$data.norm.transposed} unchanged.
+#' When adjustment is active it returns the UN-adjusted base data, aligned class
+#' labels, and pre-built design matrices so the CV loop can re-fit the adjustment
+#' inside every training fold instead of using the globally-adjusted data.
+#'@param dataSet The dataset object
+#'@return list(base.data, cls, primary.design, covariate.design) or NULL
+.GetCVAdjustContext <- function(dataSet){
+  if(!isTRUE(dataSet$covariate.adjusted) || is.null(dataSet$cv.adjust)){
+    return(NULL);
+  }
+  spec <- dataSet$cv.adjust;
+  # Note on ComBat (spec$use.combat): the per-fold correction below is the linear
+  # removeBatchEffect projection of spec$adj.vec (the batch variable), re-fit on
+  # each training fold -- this is leakage-free and validated. ComBat's empirical-
+  # Bayes location/scale shrinkage is deliberately NOT re-run inside folds: it is a
+  # whole-matrix, transductive method (per-batch parameters borrow strength across
+  # all samples) and per-fold refitting is unstable when a batch level is absent
+  # from a training fold. ComBat is therefore used only for the globally reported/
+  # displayed adjusted matrix; the CV estimate uses the linear per-fold removal of
+  # the same batch, which differs only by the EB shrinkage.
+  if(is.null(spec$base.data) || is.null(spec$meta.info) || is.null(spec$cls)){
+    return(NULL);
+  }
+  design <- .BuildCovariateDesign(spec$meta.info, spec$primary.condition, spec$adj.vec);
+  list(
+    base.data = spec$base.data,
+    cls = spec$cls,
+    primary.design = design$primary.design,
+    covariate.design = design$covariate.design
+  );
+}
+
 #'Get VIP scores from PLS
 #'@param pls.obj PLS model object
 #'@param comp Number of components
@@ -734,20 +884,34 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
 
   analSet$tester.method <- method;
   analSet$tester.lvNum <- lvNum;
+
+  # `data` is the (globally covariate-adjusted, if requested) matrix used for the
+  # FINAL model, hold-out and new-sample prediction -- fitting the final deployed
+  # model on all data is legitimate. `cv.data` is the UN-adjusted base used inside
+  # the CV loop, where the covariate adjustment is re-fit per training fold to
+  # avoid the information leakage that inflates the reported CV AUC/accuracy.
+  adj.ctx <- .GetCVAdjustContext(dataSet);
   data <- dataSet$data.norm.transposed;
-  cls <- dataSet$cls;
+  if(!is.null(adj.ctx)){
+    cv.data <- adj.ctx$base.data;
+    cls <- adj.ctx$cls;   # aligned to the filtered rows shared by data and cv.data
+    msg("[PerformCV.test] Covariate adjustment is re-fit within each CV training fold (leakage-free).");
+  } else {
+    cv.data <- data;
+    cls <- dataSet$cls;
+  }
 
   #msg("[PerformCV.test] DEBUG: data dim: ", nrow(data), " x ", ncol(data));
-  #msg("[PerformCV.test] DEBUG: cls length: ", length(cls));    
-  
+  #msg("[PerformCV.test] DEBUG: cls length: ", length(cls));
+
   if(method == "lr") {
     if(is.null(analSet$LR)){
       analSet$LR <- list();
     }
     # check cls (response variable) whether it is number 0/1 or not
-    if(length(levels(dataSet$cls)) == 2 ) {
-      dataSet$cls.lbl <- levels(dataSet$cls);  # already sorted
-      cls <- as.numeric(dataSet$cls)-1;
+    if(length(levels(factor(cls))) == 2 ) {
+      dataSet$cls.lbl <- levels(factor(cls));  # already sorted
+      cls <- as.numeric(factor(cls))-1;
       dataSet$cls.lbl.new <- sort(unique(cls));
       dataSet$cls01 <- cls; # integer values for response of logistic regression
     } else {
@@ -763,7 +927,7 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
         return(0);
       }
     }
-    cls <- dataSet$cls;
+    # cls already resolved above (fold-aligned when covariate adjustment is active)
   }
   
   splitMat <- GetTrainTestSplitMat(cls, propTraining, nRuns);
@@ -777,10 +941,24 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
     if(irun == 1) msg("[PerformCV.test] DEBUG: Starting iteration 1 with method='", method, "'");
     trainingSampleRun <- trainRuns[irun, ]
     testSampleRun <- testRuns[irun, ];
-    x.train <- data[trainingSampleRun, ,drop=F];
-    x.test <- data[testSampleRun, ,drop=F];
+    x.train.raw <- cv.data[trainingSampleRun, ,drop=F];
+    x.test.raw <- cv.data[testSampleRun, ,drop=F];
     y.train <- cls[trainingSampleRun];
     actualCls[[irun]] <- y.test <- cls[testSampleRun];
+
+    # Re-fit covariate adjustment on this fold's training samples only, then
+    # apply the training-derived projection to the held-out samples.
+    if(!is.null(adj.ctx) && !is.null(adj.ctx$covariate.design)){
+      fold.adj <- .RemoveCovariateEffectFold(x.train.raw, x.test.raw,
+        adj.ctx$primary.design[trainingSampleRun, , drop=FALSE],
+        adj.ctx$covariate.design[trainingSampleRun, , drop=FALSE],
+        adj.ctx$covariate.design[testSampleRun, , drop=FALSE]);
+      x.train <- fold.adj$train;
+      x.test <- fold.adj$test;
+    } else {
+      x.train <- x.train.raw;
+      x.test <- x.test.raw;
+    }
 
     if(irun == 1) msg("[PerformCV.test] DEBUG: About to call Predict.class");
     res <- Predict.class(x.train, y.train, x.test, method, lvNum, imp.out=T);
@@ -4218,6 +4396,33 @@ PerformCovariateAdjustmentForROC <- function(dataName,
   # Update the data.norm.transposed to use adjusted data for downstream ROC analysis
   dataSet$data.norm.transposed.original <- dataSet$data.norm.transposed
   dataSet$data.norm.transposed <- data.adjusted.transposed
+
+  # -------------------------------------------------------------------------
+  # Stash a cross-validation adjustment spec so the biomarker CV loops can
+  # RE-FIT the covariate adjustment inside each training fold rather than
+  # splitting the globally-adjusted data. Using globally-adjusted data in CV
+  # leaks held-out samples into the adjustment and inflates AUC/accuracy.
+  # base.data is the UN-adjusted (but sample-filtered) matrix; meta.info and
+  # cls below are aligned to its rows so fold indices are consistent.
+  # -------------------------------------------------------------------------
+  cv.cls <- dataSet$cls;
+  if(!is.null(cv.cls) && length(cv.cls) == nrow(dataSet$data.norm.transposed.original)){
+    # dataSet$cls aligns positionally with the pre-filter transposed data;
+    # subset it to the samples that survived covariate filtering.
+    keep.idx <- match(rownames(data.matrix), rownames(dataSet$data.norm.transposed.original));
+    if(!any(is.na(keep.idx))){
+      cv.cls <- droplevels(factor(cv.cls)[keep.idx]);
+    }
+  }
+  dataSet$cv.adjust <- list(
+    primary.condition = primary.condition,
+    adj.vec = adj.vec,
+    blocking.factor = blocking.factor,
+    use.combat = use.combat,
+    base.data = data.matrix,   # samples x features, UN-adjusted, covariate-filtered
+    meta.info = meta.info,     # aligned to base.data rows
+    cls = cv.cls               # aligned to base.data rows
+  );
 
   method.label <- ifelse(use.combat, "ComBat", "limma removeBatchEffect")
   msgSet$current.msg <- paste0("Successfully adjusted for: ", paste(adj.vec, collapse=", "),

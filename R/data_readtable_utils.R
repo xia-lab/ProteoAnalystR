@@ -55,9 +55,18 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   if (is.maxquant) {
     #msg("[ReadTabExpressData] MaxQuant format detected")
     mx.opts <- getOption("pa.maxquant.opts", list(quantType = "lfq", removeContaminants = TRUE, removeDecoys = TRUE))
+    # evidence.txt is a long, run-resolved MaxQuant export. Detect it from the
+    # header because the filename may be changed by an upload client.
+    mq.header <- try(names(data.table::fread(paste0(path, fileName), nrows = 0,
+                                             header = TRUE, check.names = FALSE)), silent = TRUE)
+    is.evidence <- !inherits(mq.header, "try-error") &&
+      all(c("Raw file", "Intensity") %in% mq.header) &&
+      any(c("Modified sequence", "Sequence") %in% mq.header)
     # Route to appropriate reader based on quantType
     qtype <- if (!is.null(mx.opts$quantType)) tolower(mx.opts$quantType) else "lfq"
-    if (qtype == "peptide") {
+    if (is.evidence) {
+      dataSet <- .readMaxQuantEvidence(paste0(path, fileName), mx.opts)
+    } else if (qtype == "peptide") {
       # Use peptide-level reader for peptides.txt
       #msg("[ReadTabExpressData] Using peptide-level reader for MaxQuant (quantType=", qtype, ")")
       dataSet <- .readMaxQuantPeptides(paste0(path, fileName), mx.opts)
@@ -403,12 +412,30 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     saveSet(msgSet, "msgSet");
     return(NULL);
   }
-  wide <- reshape2::dcast(dat, ProteinName ~ Run, value.var = value.col);
+  # MSstats long tables commonly contain several peptide/transition features for
+  # each protein and run. reshape2::dcast() defaults to length() when keys are
+  # duplicated, which silently turns intensities into feature counts. Collapse
+  # duplicates explicitly and deterministically instead.
+  wide <- reshape2::dcast(
+    dat,
+    ProteinName ~ Run,
+    value.var = value.col,
+    fun.aggregate = function(x) {
+      x <- suppressWarnings(as.numeric(x));
+      if (all(is.na(x))) NA_real_ else stats::median(x, na.rm = TRUE)
+    },
+    fill = NA_real_
+  );
   int.mat <- as.matrix(wide[, -1, drop = FALSE]);
   storage.mode(int.mat) <- "numeric";
   rownames(int.mat) <- wide$ProteinName;
   # Build metadata from Condition/BioReplicate per Run
   meta.df <- unique(dat[, c("Run", "Condition", "BioReplicate")]);
+  if (anyDuplicated(meta.df$Run)) {
+    msgSet$current.msg <- "MSstats long-format file maps at least one Run to multiple Condition/BioReplicate values.";
+    saveSet(msgSet, "msgSet");
+    return(NULL);
+  }
   rownames(meta.df) <- meta.df$Run;
   meta.df$Run <- NULL;
   disc.inx <- rep(TRUE, ncol(meta.df)); names(disc.inx) <- colnames(meta.df);
@@ -425,7 +452,8 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     data = int.mat,
     type = "prot",
     meta.info = meta.list,
-    format = "msstats-long"
+    format = "msstats-long",
+    aggregation = "median"
   );
 }
 
@@ -1065,6 +1093,94 @@ ReadMetaData <- function(metafilename){
   )
 }
 
+# Read MaxQuant evidence.txt as a run-resolved peptide/precursor matrix. Unlike
+# peptides.txt, evidence.txt stores one intensity column and identifies the run
+# in `Raw file`. Keeping this route peptide-level lets ProteoAnalyst apply its
+# own summarization during a benchmark instead of pre-summarizing the proteins.
+.readMaxQuantEvidence <- function(filePath, opts = list(removeContaminants = TRUE,
+                                                        removeDecoys = TRUE)) {
+  if (!file.exists(filePath) || !requireNamespace("reshape2", quietly = TRUE)) return(NULL)
+  dat <- try(data.table::fread(filePath, header = TRUE, check.names = FALSE,
+                              data.table = FALSE), silent = TRUE)
+  if (inherits(dat, "try-error") || nrow(dat) == 0) return(NULL)
+
+  required <- c("Raw file", "Intensity")
+  if (!all(required %in% colnames(dat))) return(NULL)
+  peptide.col <- c("Modified sequence", "Sequence")
+  peptide.col <- peptide.col[peptide.col %in% colnames(dat)][1]
+  protein.col <- c("Leading razor protein", "Leading proteins", "Proteins")
+  protein.col <- protein.col[protein.col %in% colnames(dat)][1]
+  if (is.na(peptide.col) || is.na(protein.col)) return(NULL)
+
+  keep <- rep(TRUE, nrow(dat))
+  if (isTRUE(opts$removeContaminants)) {
+    if ("Potential contaminant" %in% colnames(dat)) {
+      flag <- as.character(dat[["Potential contaminant"]])
+      keep <- keep & (is.na(flag) | !flag %in% c("+", "TRUE"))
+    }
+    keep <- keep & !grepl("CON__|^CON_", as.character(dat[[protein.col]]))
+  }
+  if (isTRUE(opts$removeDecoys)) {
+    if ("Reverse" %in% colnames(dat)) {
+      flag <- as.character(dat$Reverse)
+      keep <- keep & (is.na(flag) | !flag %in% c("+", "TRUE"))
+    }
+    keep <- keep & !grepl("REV__|^REV_", as.character(dat[[protein.col]]))
+  }
+  dat <- dat[keep, , drop = FALSE]
+  if (nrow(dat) == 0) return(NULL)
+
+  peptide <- as.character(dat[[peptide.col]])
+  protein <- vapply(strsplit(as.character(dat[[protein.col]]), ";", fixed = TRUE),
+                    function(x) x[1], character(1))
+  charge <- if ("Charge" %in% colnames(dat)) as.character(dat$Charge) else "NA"
+  long <- data.frame(
+    FeatureKey = paste(peptide, charge, protein, sep = "\u241F"),
+    Peptide = peptide,
+    Protein = protein,
+    Charge = charge,
+    Run = trimws(as.character(dat[["Raw file"]])),
+    Intensity = suppressWarnings(as.numeric(dat$Intensity)),
+    stringsAsFactors = FALSE
+  )
+  valid <- !is.na(long$Peptide) & nzchar(long$Peptide) &
+    !is.na(long$Protein) & nzchar(long$Protein) &
+    !is.na(long$Run) & nzchar(long$Run) &
+    is.finite(long$Intensity) & long$Intensity > 0
+  long <- long[valid, , drop = FALSE]
+  if (nrow(long) == 0) return(NULL)
+
+  # MaxQuant evidence can contain repeated matches for the same precursor/run.
+  # Match the MSstats paper conversion and retain the maximum evidence intensity.
+  wide <- reshape2::dcast(long, FeatureKey ~ Run, value.var = "Intensity",
+                          fun.aggregate = function(x) max(x, na.rm = TRUE),
+                          fill = NA_real_)
+  int.mat <- as.matrix(wide[, -1, drop = FALSE])
+  storage.mode(int.mat) <- "numeric"
+  key.map <- unique(long[, c("FeatureKey", "Peptide", "Protein", "Charge")])
+  key.map <- key.map[match(wide$FeatureKey, key.map$FeatureKey), , drop = FALSE]
+  feature.ids <- paste0(key.map$Peptide, "_z", key.map$Charge)
+  feature.ids <- make.unique(feature.ids)
+  rownames(int.mat) <- feature.ids
+
+  prot.map <- data.frame(Peptide = feature.ids, Protein = key.map$Protein,
+                         stringsAsFactors = FALSE)
+  runs <- colnames(int.mat)
+  meta.df <- data.frame(Condition = factor(runs), row.names = runs,
+                        stringsAsFactors = FALSE)
+  list(
+    data = int.mat,
+    data_orig = int.mat,
+    type = "peptide",
+    format = "maxquant-evidence",
+    meta.info = list(meta.info = meta.df,
+                     disc.inx = c(Condition = TRUE),
+                     cont.inx = c(Condition = FALSE)),
+    prot.map = prot.map,
+    aggregation = "maximum evidence intensity"
+  )
+}
+
 # Helper: read MaxQuant peptides.txt for peptide-level analysis
 .readMaxQuantPeptides <- function(filePath, opts = list(quantType = "intensity", removeContaminants = TRUE, removeDecoys = TRUE)) {
 
@@ -1507,8 +1623,16 @@ SetSpectronautOptions <- function(inputType = "protein") {
         mydata$`#NAME` <- mydata$SampleID
       } else if ("Sample" %in% colnames(mydata)) {
         mydata$`#NAME` <- mydata$Sample
+      } else if ("Run" %in% colnames(mydata)) {
+        mydata$`#NAME` <- mydata$Run
+      } else if ("Raw.file" %in% colnames(mydata)) {
+        mydata$`#NAME` <- mydata$Raw.file
+      } else if ("Raw file" %in% colnames(mydata)) {
+        mydata$`#NAME` <- mydata[["Raw file"]]
+      } else if ("R.FileName" %in% colnames(mydata)) {
+        mydata$`#NAME` <- mydata$R.FileName
       } else {
-        msgSet$current.msg <- "Metadata file must contain a '#NAME' or 'SampleID' column for sample identifiers.";
+        msgSet$current.msg <- "Metadata file must contain a sample identifier column (#NAME, SampleID, Sample, Run, Raw.file, Raw file, or R.FileName).";
         saveSet(msgSet, "msgSet");
         return(NULL);
       }
@@ -2609,9 +2733,17 @@ GetAnalysisType <- function(){
                              'Accession', 'Protein.Group', 'ProteinName')
   get.spectronaut.protein.ids <- function(x, protein.col) {
     proteins <- as.character(x[[protein.col]])
-    proteins <- vapply(strsplit(proteins, "[;|,]", perl = TRUE), function(parts) {
+    # Semicolon/comma delimit protein groups, whereas pipes are part of UniProt
+    # identifiers (for example 1/sp|P37108|SRP14_HUMAN). Splitting on `|`
+    # previously reduced thousands of proteins to a handful of FASTA prefixes.
+    proteins <- vapply(strsplit(proteins, "[;,]", perl = TRUE), function(parts) {
       if (length(parts) == 0) return(NA_character_)
-      trimws(parts[1])
+      id <- trimws(parts[1])
+      id <- sub("^[0-9]+/", "", id)
+      if (grepl("^(sp|tr)\\|[^|]+\\|", id)) {
+        id <- sub("^(sp|tr)\\|([^|]+)\\|.*$", "\\2", id)
+      }
+      id
     }, character(1))
     proteins
   }
@@ -2734,17 +2866,26 @@ GetAnalysisType <- function(){
         return(NULL)
       }
 
-      agg <- stats::aggregate(Intensity ~ Peptide + Run, data = long.df, FUN = median, na.rm = TRUE)
+      # A sequence can occur under multiple protein groups. Reshaping on the
+      # peptide alone merges those groups and then leaves the made-unique row
+      # names unmatched in prot.map. Preserve peptide/protein identity through
+      # the reshape and expose unique peptide feature IDs afterwards.
+      long.df$FeatureKey <- paste(long.df$Peptide, long.df$Protein, sep = "\u241F")
+      agg <- stats::aggregate(Intensity ~ FeatureKey + Run, data = long.df,
+                              FUN = median, na.rm = TRUE)
       if (!requireNamespace("reshape2", quietly = TRUE)) {
         return(NULL)
       }
-      wide <- reshape2::dcast(agg, Peptide ~ Run, value.var = "Intensity")
+      wide <- reshape2::dcast(agg, FeatureKey ~ Run, value.var = "Intensity")
       intens <- as.matrix(wide[, -1, drop = FALSE])
-      rownames(intens) <- make.unique(as.character(wide$Peptide))
+      feature.map <- unique(long.df[, c("FeatureKey", "Peptide", "Protein"), drop = FALSE])
+      feature.map <- feature.map[match(wide$FeatureKey, feature.map$FeatureKey), , drop = FALSE]
+      feature.ids <- make.unique(as.character(feature.map$Peptide))
+      rownames(intens) <- feature.ids
       storage.mode(intens) <- "numeric"
 
-      prot.map <- unique(long.df[, c("Peptide", "Protein"), drop = FALSE])
-      prot.map <- prot.map[match(rownames(intens), prot.map$Peptide), , drop = FALSE]
+      prot.map <- data.frame(Peptide = feature.ids, Protein = feature.map$Protein,
+                             stringsAsFactors = FALSE)
       runs <- colnames(intens)
       meta.df <- data.frame(Condition = factor(runs), stringsAsFactors = FALSE)
       rownames(meta.df) <- runs

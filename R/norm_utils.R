@@ -1845,9 +1845,9 @@ BuildProteinOptions <- function() {
   # Phosphosite format: "P12345_S_123" or "ProteinID_Residue_Position"
   site_ids <- rownames(phospho_data)
 
-  # Extract protein ID (everything before the first underscore)
-  # Handle cases where protein ID may contain multiple components (e.g., "sp|P12345|PROT_HUMAN")
-  protein_ids <- sapply(strsplit(site_ids, "_"), function(x) x[1])
+  # Remove only the terminal residue/position suffix. Protein identifiers may
+  # themselves contain underscores (for example simulated Protein_1_S_1).
+  protein_ids <- sub("_[A-Z]_[0-9]+$", "", site_ids)
 
   #msg("[.correctPhosphoByProteinAbundance] Processing ", length(unique(protein_ids)), " unique proteins from ",
   #        nrow(phospho_data), " phosphosites")

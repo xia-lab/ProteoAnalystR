@@ -239,8 +239,11 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   current.featureset <- setres$current.featureset
   current.setids     <- setres$current.setids    # named vector: pathway name → KEGG pathway ID
 
-  # Determine background universe
-  universeOpt <- if (!is.null(paramSet$universeOpt)) paramSet$universeOpt else "library"
+  # Determine background universe. Read the same paramSet$universe.opt the UI
+  # sets (via SetUniverseOpt) and the other enrichment paths use, so pathway
+  # impact honours the shared measured-proteome default instead of a stray
+  # camelCase toggle that SetUniverseOpt never wrote.
+  universeOpt <- if (!is.null(paramSet$universe.opt)) paramSet$universe.opt else "uploaded"
   if (universeOpt == "uploaded") {
     all.vec    <- rownames(dataSet$norm.mat)
     all.vec    <- sub("_[A-Z]_\\d+$", "", all.vec)

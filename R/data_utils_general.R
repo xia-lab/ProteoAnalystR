@@ -71,7 +71,12 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
   paramSet$anal.type <- "onedata";
   paramSet$api.bool <- F;
   paramSet$api.base <<- "http://api.xialab.ca" #dose response
-  paramSet$universe.opt <- "library";
+  # Default the enrichment background to the measured proteome/phosphoproteome
+  # (the features actually detected in the experiment), not the whole gene-set
+  # library. Over-representation against a genome-wide background is anti-
+  # conservative for MS proteomics because only the measured proteome could have
+  # been called significant. Users can still switch to "library" in the UI.
+  paramSet$universe.opt <- "uploaded";
   paramSet$universe.opt.readable <- "Uploaded data";
   paramSet$fc.thresh <- 0;
   paramSet$report.format <- "pdf";
@@ -543,8 +548,12 @@ replace_extension_with_qs <- function(data_name) {
     return(0);
   }
   
-  # Use gsub to replace supported tabular upload extensions with .qs
-  result <- gsub("\\.(csv|txt|tsv)$", ".qs", data_name, ignore.case = TRUE)
+  # Use gsub to replace supported tabular upload extensions with .qs.
+  # .xls/.xlsx are included because Spectronaut reports are commonly deposited with
+  # an .xls extension despite being tab-delimited text; without this the derived
+  # dataset name would keep the .xls suffix and ov_qs_save() could overwrite the
+  # original upload with a .qs blob.
+  result <- gsub("\\.(csv|txt|tsv|xls|xlsx)$", ".qs", data_name, ignore.case = TRUE)
   return(result)
 }
 

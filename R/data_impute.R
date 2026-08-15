@@ -95,10 +95,16 @@ ImputeMissingVar <- function(dataName="", method="min"){
   }else{
     if (is.null(new.mat)) {
       if(method == "knn_var"){
-        new.mat<-t(impute::impute.knn(as.matrix(int.mat))$data);
+        # impute.knn keeps the input (features x samples) orientation. Do NOT
+        # transpose the result, or it becomes samples x features and no longer
+        # aligns with the feature row names assigned below (this previously threw
+        # "invalid 'row.names' length" whenever #features != #samples).
+        new.mat<-impute::impute.knn(as.matrix(int.mat))$data;
         current.msg <- c(current.msg, "Missing variables were imputed using KNN (feature-wise)");
       }else if(method == "knn_smp"){
-        new.mat<-impute::impute.knn(data.matrix(t(int.mat)))$data;
+        # Impute across samples (rows after transpose), then transpose back to the
+        # original features x samples orientation.
+        new.mat<-t(impute::impute.knn(data.matrix(t(int.mat)))$data);
         current.msg <- c(current.msg, "Missing variables were imputed using KNN (sample-wise)");
       }else if(method == "bpca"){
         new.mat<-pcaMethods::pca(t(int.mat), nPcs =5, method="bpca", center=T)@completeObs;
@@ -302,10 +308,11 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min") {
       AddErrMsg("MNAR imputation methods require the 'imputeLCMD' package. Install with: BiocManager::install('imputeLCMD')"); return(0);
     }
   }else if(method=="knn_var"){
-    new.mat<-t(impute::impute.knn(as.matrix(int.mat))$data);
+    # impute.knn returns features x samples; do NOT transpose (see ImputeMissingVar).
+    new.mat<-impute::impute.knn(as.matrix(int.mat))$data;
     current.msg <- c(current.msg, "Missing variables were imputed using KNN (feature-wise)");
   }else if(method=="knn_smp"){
-    new.mat<-impute::impute.knn(data.matrix(t(int.mat)))$data;
+    new.mat<-t(impute::impute.knn(data.matrix(t(int.mat)))$data);
     current.msg <- c(current.msg, "Missing variables were imputed using KNN (sample-wise)");
   }else if(method=="bpca"){
     new.mat<-pcaMethods::pca(t(int.mat), nPcs =5, method="bpca", center=T)@completeObs;

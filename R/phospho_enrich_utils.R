@@ -5,6 +5,78 @@
 ## Generated for phospho module implementation
 ###################################################
 
+# ---------------------------------------------------------------------------
+# Statistics reporting helpers (reviewer transparency, Theme 5a)
+#
+# These make the phospho enrichment output self-documenting so a reader can
+# verify exactly how significance was defined and how the enrichment test was
+# powered, without having to inspect the code:
+#   * which p-value drove the input significance (FDR-adjusted by default),
+#   * the FDR and fold-change cutoffs used to select significant phosphosites,
+#   * the number of features tested and the enrichment background (universe),
+#   * that enrichment p-values are Benjamini-Hochberg FDR-adjusted.
+# ---------------------------------------------------------------------------
+
+#' Read the differential-expression significance thresholds that were used to
+#' define the input set of significant phosphosites.
+#' @return list(fdr, fc, selection) where `selection` is "FDR-adjusted" or "raw".
+.phosphoSigThresholds <- function(paramSet) {
+  fdr <- suppressWarnings(as.numeric(paramSet$BHth))
+  if (length(fdr) == 0 || is.na(fdr)) fdr <- 0.05
+  fc <- suppressWarnings(as.numeric(paramSet$fc.thresh))
+  if (length(fc) == 0 || is.na(fc)) fc <- 0
+  sel <- paramSet$pval.selection
+  sel.lbl <- if (!is.null(sel) && tolower(sel) == "raw") "raw" else "FDR-adjusted"
+  list(fdr = fdr, fc = fc, selection = sel.lbl)
+}
+
+#' Attach standardized statistics-reporting columns to an enrichment result
+#' table so every row records how the test was powered and thresholded.
+#' Adds: N_Sig_Tested, N_Background, DE_Sig_Cutoff, DE_log2FC_Cutoff,
+#'       Enrich_FDR_Cutoff, Significant (FDR-driven).
+#' Assumes the table already carries raw `P_value` and BH-adjusted `FDR`.
+.annotateEnrichReport <- function(df, paramSet, n_tested, n_background,
+                                  enrich_fdr = 0.05) {
+  if (is.null(df) || nrow(df) == 0) return(df)
+  th <- .phosphoSigThresholds(paramSet)
+  df$N_Sig_Tested      <- as.integer(n_tested)
+  df$N_Background      <- as.integer(n_background)
+  df$DE_Sig_Cutoff     <- signif(th$fdr, 3)
+  df$DE_log2FC_Cutoff  <- signif(th$fc, 3)
+  df$Enrich_FDR_Cutoff <- signif(enrich_fdr, 3)
+  sig <- suppressWarnings(as.numeric(df$FDR) < enrich_fdr)
+  sig[is.na(sig)] <- FALSE
+  # Character (not logical) so the Java REXP->table conversion indexes each row
+  # correctly and the UI renders a clear Yes/No.
+  df$Significant <- ifelse(sig, "Yes", "No")
+  df
+}
+
+#' Build a reviewer-facing summary sentence describing the significance
+#' definition, thresholds, features tested and enrichment background.
+.phosphoEnrichSummary <- function(paramSet, what, n_class, n_tested,
+                                  n_background, enrich_fdr = 0.05) {
+  th <- .phosphoSigThresholds(paramSet)
+  fc.txt <- if (th$fc > 0) paste0(" and |log2FC| > ", signif(th$fc, 3)) else ""
+  paste0(
+    what, " complete. Tested ", n_class, " ", .phosphoWhatUnit(what),
+    " using ", n_tested, " significant phosphosite(s) (defined by ",
+    th$selection, " p < ", signif(th$fdr, 3), fc.txt,
+    ") against a background of ", n_background, " phosphosite(s). ",
+    "Enrichment p-values are Benjamini-Hochberg FDR-adjusted; ",
+    "significance at FDR < ", signif(enrich_fdr, 3), "."
+  )
+}
+
+# Small label helper so the summary reads naturally per analysis type.
+.phosphoWhatUnit <- function(what) {
+  w <- tolower(what)
+  if (grepl("kinase", w)) return("kinase(s)")
+  if (grepl("motif", w))  return("motif class(es)")
+  if (grepl("compartment", w)) return("compartment(s)")
+  "term(s)"
+}
+
 #' Perform kinase enrichment analysis on significant phosphosites
 #'
 #' @param dataName Dataset name
@@ -77,6 +149,15 @@ PerformKinaseEnrichment <- function(dataName, database = "phosphositeplus") {
     return(0)
   }
 
+  # Attach standardized statistics-reporting columns (features tested,
+  # enrichment background, DE FDR/FC cutoffs, FDR-driven significance flag).
+  n_tested     <- length(sig_sites)
+  n_background <- length(all_sites)
+  enrichment_results <- .annotateEnrichReport(
+    enrichment_results, paramSet,
+    n_tested = n_tested, n_background = n_background, enrich_fdr = 0.05
+  )
+
   # Save results
   analSet$kinase.enrich <- enrichment_results
   saveSet(analSet, "analSet")
@@ -84,8 +165,14 @@ PerformKinaseEnrichment <- function(dataName, database = "phosphositeplus") {
   # Export to CSV
   fast.write(enrichment_results, file = "kinase_enrichment.csv", row.names = FALSE)
 
-  msgSet$current.msg <- paste0("Kinase enrichment analysis complete. Found ",
-                                nrow(enrichment_results), " enriched kinases.")
+  n_enriched <- sum(suppressWarnings(as.numeric(enrichment_results$FDR)) < 0.05, na.rm = TRUE)
+  msgSet$current.msg <- paste0(
+    .phosphoEnrichSummary(paramSet, "Kinase enrichment",
+                          n_class = nrow(enrichment_results),
+                          n_tested = n_tested, n_background = n_background,
+                          enrich_fdr = 0.05),
+    " ", n_enriched, " kinase(s) reached FDR < 0.05."
+  )
   saveSet(msgSet, "msgSet")
 
   return(1)
@@ -527,11 +614,10 @@ GetAvailableKinaseDBs <- function() {
   # Adjust p-values for multiple testing
   results$FDR <- p.adjust(results$P_value, method = "BH")
 
-  # Sort by p-value
+  # Sort by p-value. Keep every tested kinase (do not drop non-significant
+  # rows) so the reported table transparently shows all features tested; the
+  # FDR-driven Significant flag is added downstream in PerformKinaseEnrichment.
   results <- results[order(results$P_value), ]
-
-  # Filter by significance
-  results <- results[results$FDR < 0.05, ]
 
   return(results)
 }
@@ -841,6 +927,12 @@ PerformMotifEnrichment <- function(dataName) {
   results$FDR <- p.adjust(results$P_value, method = "BH")
   results <- results[order(results$P_value), ]
 
+  # Attach standardized statistics-reporting columns.
+  results <- .annotateEnrichReport(
+    results, paramSet,
+    n_tested = total.sig, n_background = total.bg, enrich_fdr = 0.05
+  )
+
   context.out <- classified$contexts
   context.out$Significant <- context.out$Site %in% sig.sites
 
@@ -855,10 +947,10 @@ PerformMotifEnrichment <- function(dataName) {
   fast.write(results, file = "motif_enrichment.csv", row.names = FALSE)
   fast.write(context.out, file = "phosphosite_motif_context.csv", row.names = FALSE)
 
-  msgSet$current.msg <- paste0(
-    "Motif analysis complete. Tested ", nrow(results),
-    " motif class(es) using ", total.sig, " significant phosphosite(s) and ",
-    total.bg, " background phosphosite(s) with sequence context."
+  msgSet$current.msg <- .phosphoEnrichSummary(
+    paramSet, "Motif analysis",
+    n_class = nrow(results), n_tested = total.sig, n_background = total.bg,
+    enrich_fdr = 0.05
   )
   saveSet(msgSet, "msgSet")
   return(1)
@@ -1096,7 +1188,13 @@ GetMotifEnrichmentResults <- function() {
       P_value = numeric(),
       Fold_Enrichment = numeric(),
       FDR = numeric(),
-      Example_Sites = character()
+      Example_Sites = character(),
+      N_Sig_Tested = integer(),
+      N_Background = integer(),
+      DE_Sig_Cutoff = numeric(),
+      DE_log2FC_Cutoff = numeric(),
+      Enrich_FDR_Cutoff = numeric(),
+      Significant = character()
     ))
   }
   analSet$motif.enrich
@@ -1274,7 +1372,13 @@ GetKinaseEnrichmentResults <- function() {
       Substrates_Sig = integer(),
       P_value = numeric(),
       Fold_Enrichment = numeric(),
-      FDR = numeric()
+      FDR = numeric(),
+      N_Sig_Tested = integer(),
+      N_Background = integer(),
+      DE_Sig_Cutoff = numeric(),
+      DE_log2FC_Cutoff = numeric(),
+      Enrich_FDR_Cutoff = numeric(),
+      Significant = character()
     ))
   }
 
@@ -1474,13 +1578,20 @@ PerformCompartmentEnrichment <- function(dataName) {
   results$FDR <- p.adjust(results$P_value, method = "BH")
   results <- results[order(results$P_value), ]
 
+  # Attach standardized statistics-reporting columns.
+  results <- .annotateEnrichReport(
+    results, paramSet,
+    n_tested = total.sig, n_background = total.bg, enrich_fdr = 0.05
+  )
+
   analSet$comp.enrich <- results
   saveSet(analSet, "analSet")
   fast.write(results, file = "compartment_enrichment.csv", row.names = FALSE)
 
-  msgSet$current.msg <- paste0(
-    "Compartment enrichment complete. Tested ", nrow(results), " compartment(s) using ",
-    total.sig, " significant and ", total.bg, " background phosphosite(s)."
+  msgSet$current.msg <- .phosphoEnrichSummary(
+    paramSet, "Compartment enrichment",
+    n_class = nrow(results), n_tested = total.sig, n_background = total.bg,
+    enrich_fdr = 0.05
   )
   saveSet(msgSet, "msgSet")
   return(1L)
@@ -1495,7 +1606,13 @@ GetCompartmentEnrichmentResults <- function() {
       Sig_Sites       = integer(),
       P_value         = numeric(),
       Fold_Enrichment = numeric(),
-      FDR             = numeric()
+      FDR             = numeric(),
+      N_Sig_Tested      = integer(),
+      N_Background      = integer(),
+      DE_Sig_Cutoff     = numeric(),
+      DE_log2FC_Cutoff  = numeric(),
+      Enrich_FDR_Cutoff = numeric(),
+      Significant       = character()
     ))
   }
   analSet$comp.enrich
@@ -1634,9 +1751,19 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
 
   # --- site-to-protein mapping ---
   site.ids   <- rownames(phospho.mat)
-  prot.ids   <- sub("_[STY]_[0-9]+$", "", site.ids)
-  residues   <- regmatches(site.ids, regexpr("[STY](?=_[0-9]+$)", site.ids, perl = TRUE))
-  residues[lengths(regmatches(site.ids, gregexpr("[STY](?=_[0-9]+$)", site.ids, perl = TRUE))) == 0] <- ""
+  # Parent protein per site. Accept the standard "PROT_RES_POS" form as well as
+  # MSstatsPTM-style ids with no underscore before the position and/or a trailing
+  # labelling tag, e.g. "PROT_K351 (heavy)" / "PROT_K_351 (light)".
+  site.suffix <- "_[A-Z]_?[0-9]+( *\\((?:heavy|light)\\))?$"
+  prot.ids    <- sub(site.suffix, "", site.ids, ignore.case = TRUE, perl = TRUE)
+  # Residue per site, ALIGNED to site.ids. regmatches() drops non-matching sites,
+  # which previously shrank `residues` and misaligned residues[i] (a vector),
+  # crashing on inputs where some site ids don't parse. Build a full-length
+  # vector, "" for no match.
+  res.pat    <- "[A-Z](?=_?[0-9]+( *\\((?:heavy|light)\\))?$)"
+  res.match  <- regexpr(res.pat, site.ids, perl = TRUE, ignore.case = TRUE)
+  residues   <- rep("", length(site.ids))
+  residues[res.match > 0] <- toupper(regmatches(site.ids, res.match))
 
   # gene name lookup from feature.info
   gene.lookup <- setNames(prot.ids, site.ids)
@@ -1748,7 +1875,7 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     occ.g1   <- mean(occ.vec[g1.idx], na.rm = TRUE)
     occ.g2   <- mean(occ.vec[g2.idx], na.rm = TRUE)
 
-    mod.name <- if (nchar(res) > 0) paste0("Phospho(", res, ")") else "Phospho"
+    mod.name <- if (identical(res, "K")) "KGG(K)" else if (nchar(res) > 0) paste0("Phospho(", res, ")") else "PTM"
 
     data.frame(
       Gene             = gene.lookup[[sid]],
@@ -1784,7 +1911,7 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
   #     differ from the common names in DIA-NN Genes columns, and
   # (b) the entrez_uniprot table provides a direct accession → Entrez mapping.
   analSet <- readSet(analSet, "analSet")
-  result.prot.ids <- sub("_[STY]_[0-9]+$", "", results$Peptide)
+  result.prot.ids <- sub("_[A-Z]_[0-9]+$", "", results$Peptide)
   comp.vec <- .mapSitesToCompartment(result.prot.ids, paramSet, analSet)
   comp.vec[is.na(comp.vec)] <- "Unknown"
   results$Parent.Compartment      <- comp.vec
@@ -1833,7 +1960,7 @@ PlotPhosphoOccupancyProfile <- function(dataName, imageName, siteId,
   names(groups) <- rownames(meta.info)
 
   # find matching protein
-  prot.id <- sub("_[STY]_[0-9]+$", "", siteId)
+  prot.id <- sub("_[A-Z]_[0-9]+$", "", siteId)
   pidx    <- which(rownames(prot.ref) == prot.id)
   if (length(pidx) == 0) pidx <- which(grepl(prot.id, rownames(prot.ref), fixed = TRUE))
   if (length(pidx) == 0) return(invisible(0))

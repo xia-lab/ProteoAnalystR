@@ -20,6 +20,9 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
   } else if (dataFormat == "diann") {
       msg("[ReadPhosphoData] Detected DIA-NN format. Using DIA-NN reader.")
       dataSet <- .readDIANNPhospho(fileName, opts)
+  } else if (dataFormat == "msstatsptm") {
+      msg("[ReadPhosphoData] Detected MSstatsPTM long format.")
+      dataSet <- .readMSstatsPTMLong(fileName, proteinRefFile)
   } else if (dataFormat %in% c("text", "table", "plain")) {
     msg("[ReadPhosphoData] Detected plain text format. Using tab reader.")
     dataSet <- .readTabData(fileName)
@@ -212,7 +215,19 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
   # (e.g., proteinGroups.txt from MaxQuant) for protein-level normalization
   paramSet <- readSet(paramSet, "paramSet")
 
-  if (proteinRefFile != "" && file.exists(proteinRefFile)) {
+  if (!is.null(dataSet$protein.ref)) {
+    protein_data <- dataSet$protein.ref
+    common_protein_samples <- intersect(colnames(int.mat), colnames(protein_data))
+    if (length(common_protein_samples) > 0) {
+      protein_data <- protein_data[, common_protein_samples, drop = FALSE]
+      paramSet$protein.ref <- protein_data
+      paramSet$has.protein.ref <- TRUE
+      paramSet$ptm.type <- if (!is.null(dataSet$ptm.type)) dataSet$ptm.type else "PTM"
+      msgSet$current.msg <- paste0(msgSet$current.msg, " Paired MSstatsPTM protein reference loaded (", nrow(protein_data), " proteins).")
+    } else {
+      paramSet$has.protein.ref <- FALSE
+    }
+  } else if (proteinRefFile != "" && file.exists(proteinRefFile)) {
     #msg("[ReadPhosphoData] Loading global proteome reference file: ", proteinRefFile)
     protein_data <- if (identical(dataFormat, "diann")) {
       .readDIANNProteome(proteinRefFile, colnames(int.mat))
@@ -323,6 +338,99 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
   saveSet(paramSet, "paramSet")
 
   return(RegisterData(dataSet))
+}
+
+# Read canonical paired MSstatsPTM feature-level tables. The PTM table must
+# contain SiteName (or a site-level ProteinName), ProteinName, Run, Condition,
+# BioReplicate and Intensity. The protein table uses ProteinName with the same
+# run/design columns. Duplicate features are collapsed by the median; protein
+# reference values are stored on the log2 scale used by occupancy adjustment.
+.readMSstatsPTMLong <- function(ptmFile, proteinFile) {
+  if (!file.exists(ptmFile) || is.null(proteinFile) || !nzchar(proteinFile) || !file.exists(proteinFile)) {
+    return(NULL)
+  }
+
+  ptm <- try(data.table::fread(ptmFile, header = TRUE, check.names = FALSE, data.table = FALSE), silent = TRUE)
+  protein <- try(data.table::fread(proteinFile, header = TRUE, check.names = FALSE, data.table = FALSE), silent = TRUE)
+  if (inherits(ptm, "try-error") || inherits(protein, "try-error")) return(NULL)
+
+  design.cols <- c("Run", "Condition", "BioReplicate", "Intensity")
+  if (!all(design.cols %in% colnames(ptm)) ||
+      !all(c("ProteinName", design.cols) %in% colnames(protein))) return(NULL)
+
+  if (!"SiteName" %in% colnames(ptm)) {
+    if (!"ProteinName" %in% colnames(ptm)) return(NULL)
+    ptm$SiteName <- as.character(ptm$ProteinName)
+  }
+  if (!"ProteinName" %in% colnames(ptm)) {
+    ptm$ProteinName <- sub("_[A-Z]_[0-9]+$", "", as.character(ptm$SiteName))
+  }
+
+  run.meta <- unique(ptm[, c("Run", "Condition", "BioReplicate"), drop = FALSE])
+  if (anyDuplicated(run.meta$Run)) return(NULL)
+  protein.meta <- unique(protein[, c("Run", "Condition", "BioReplicate"), drop = FALSE])
+  if (anyDuplicated(protein.meta$Run)) return(NULL)
+
+  collapse.long <- function(dat, id.col) {
+    dat[[id.col]] <- as.character(dat[[id.col]])
+    dat$Run <- as.character(dat$Run)
+    dat$Intensity <- suppressWarnings(as.numeric(dat$Intensity))
+    formula <- stats::as.formula(paste(id.col, "~ Run"))
+    wide <- reshape2::dcast(
+      dat, formula, value.var = "Intensity",
+      fun.aggregate = function(x) if (all(is.na(x))) NA_real_ else stats::median(x, na.rm = TRUE),
+      fill = NA_real_
+    )
+    mat <- as.matrix(wide[, -1, drop = FALSE])
+    storage.mode(mat) <- "numeric"
+    rownames(mat) <- wide[[id.col]]
+    mat
+  }
+
+  ptm.mat <- collapse.long(ptm, "SiteName")
+  protein.mat <- collapse.long(protein, "ProteinName")
+  common.runs <- intersect(intersect(as.character(run.meta$Run), colnames(ptm.mat)), colnames(protein.mat))
+  if (length(common.runs) == 0) return(NULL)
+  ptm.mat <- ptm.mat[, common.runs, drop = FALSE]
+  protein.mat <- protein.mat[, common.runs, drop = FALSE]
+
+  # MSstats/MSstatsPTM feature intensities are normally linear. Avoid a second
+  # log transform for explicitly summarized LogIntensities supplied as Intensity.
+  finite.protein <- protein.mat[is.finite(protein.mat)]
+  if (length(finite.protein) && min(finite.protein) >= 0 && max(finite.protein) > 100) {
+    protein.mat[protein.mat == 0] <- NA_real_
+    protein.mat <- log2(protein.mat)
+  }
+
+  run.meta <- run.meta[match(common.runs, run.meta$Run), , drop = FALSE]
+  meta.df <- run.meta[, c("Condition", "BioReplicate"), drop = FALSE]
+  rownames(meta.df) <- common.runs
+  disc.inx <- setNames(rep(TRUE, ncol(meta.df)), colnames(meta.df))
+  cont.inx <- setNames(rep(FALSE, ncol(meta.df)), colnames(meta.df))
+
+  site.map <- unique(ptm[, c("SiteName", "ProteinName"), drop = FALSE])
+  site.map <- site.map[match(rownames(ptm.mat), site.map$SiteName), , drop = FALSE]
+  feature.info <- data.frame(
+    Protein = site.map$ProteinName,
+    row.names = site.map$SiteName,
+    stringsAsFactors = FALSE
+  )
+  ptm.type <- if (any(grepl("_K_[0-9]+$", rownames(ptm.mat)))) "KGG" else "PTM"
+
+  list(
+    name = basename(ptmFile),
+    data_orig = data.frame(SiteName = rownames(ptm.mat), ptm.mat,
+                           check.names = FALSE, stringsAsFactors = FALSE),
+    data = ptm.mat,
+    type = "phospho",
+    format = "msstatsptm",
+    meta.info = list(meta.info = meta.df, disc.inx = disc.inx, cont.inx = cont.inx),
+    feature.info = feature.info,
+    protein.ref = protein.mat,
+    feature.long = ptm,
+    ptm.type = ptm.type,
+    aggregation = "median"
+  )
 }
 
 # Convert intensity-like columns to numeric safely (handles integer64 and character vectors).

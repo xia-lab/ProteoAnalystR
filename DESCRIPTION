@@ -1,0 +1,42 @@
+Package: ProteoAnalystR
+Type: Package
+Title: Backend R Functions for the ProteoAnalyst Platform
+Version: 1.0.0
+Authors@R: c(
+    person("Jeff", "Xia", email = "jeff.xia@mcgill.ca", role = c("aut", "cre")),
+    person("Guangyan", "Zhou", email = "guangyan.zhou@mail.mcgill.ca", role = "aut"))
+Description: The statistical and visualization backend that powers the ProteoAnalyst
+    web platform for downstream analysis of quantitative proteomics and
+    phosphoproteomics data. Provides readers for common upstream outputs (MaxQuant,
+    FragPipe, DIA-NN, Spectronaut, and MSstats/MSstatsPTM long tables), normalization,
+    peptide-to-protein summarization, imputation, differential expression (limma /
+    DEqMS / edgeR / DESeq2), protein-adjusted PTM/occupancy analysis, functional and
+    kinase enrichment, WGCNA/co-expression, PPI network construction, and biomarker /
+    ROC analysis.
+License: MIT + file LICENSE
+Encoding: UTF-8
+URL: https://www.proteoanalyst.ca, https://github.com/xia-lab/ProteoAnalystR
+BugReports: https://github.com/xia-lab/ProteoAnalystR/issues
+Depends:
+    R (>= 4.5)
+biocViews: Proteomics, MassSpectrometry, DifferentialExpression, Normalization,
+    Network, GeneSetEnrichment
+Imports:
+    data.table, qs, qs2, jsonlite, RJSONIO, rjson,
+    dplyr, tidyr, tibble, reshape2, reshape, readr,
+    Matrix, matrixStats, S4Vectors,
+    limma, DEqMS, edgeR, DESeq2, sva, MSstats, MSstatsConvert, metagenomeSeq,
+    impute, imputeLCMD, preprocessCore,
+    igraph, WGCNA, fastcluster, fgsea,
+    ggplot2, RColorBrewer, scales, ggrepel, gridExtra, ggdendro, Cairo, UpSetR,
+    pROC, ROCR, caret, randomForest, e1071, pls, lars, MASS, boot, caTools,
+    pcaMethods, Rtsne, uwot, RSQLite, RSclient, curl, pryr, png, xtable,
+    RhpcBLASctl, arrow
+Suggests:
+    ggpubr, ggridges, patchwork, see, graphlayouts, plotly, rgl,
+    PhosR, CEMiTool, backbone,
+    multiUS, SeqKnn, rrcovNA,
+    BiocManager
+Remotes:
+    github::xia-lab/XiaLabCppLib
+RoxygenNote: 7.3.1
