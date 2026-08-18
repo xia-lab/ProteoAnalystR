@@ -869,9 +869,37 @@ FindCommunities <- function(method = "walktrap",
 
   seed.expr   <- paramSet$seed.expr
   ppi.comps <- analSet$ppi.comps
-  current.net <- ppi.comps[[current.net.nm]]
-  
-  if (igraph::vcount(current.net) < 2L) return("NA||Graph too small")
+  # Resolve the current network from the PERSISTED paramSet, not the loose
+  # `current.net.nm` global. On an AI result-view / project-restore the network
+  # JSON renders from disk but the network-drawing function never re-runs, so the
+  # global is absent and `ppi.comps[[current.net.nm]]` errored with
+  # "object 'current.net.nm' not found" — the interactive Module Explorer then
+  # returned NA for every algorithm. Mirror graph_utils_general.R, which already
+  # reads paramSet$current.net.nm, with a fallback to the first component.
+  cur.net.nm <- paramSet$current.net.nm
+  if (is.null(cur.net.nm) || !(cur.net.nm %in% names(ppi.comps))) {
+    if (exists("current.net.nm") && !is.null(current.net.nm) && current.net.nm %in% names(ppi.comps)) {
+      cur.net.nm <- current.net.nm
+    } else {
+      cur.net.nm <- names(ppi.comps)[1]
+    }
+  }
+  current.net <- if (!is.null(cur.net.nm)) ppi.comps[[cur.net.nm]] else NULL
+
+  if (is.null(current.net) || igraph::vcount(current.net) < 2L) return("NA||Graph too small")
+
+  # Symbol lookup table for community labels. `ppi.net` is a loose global set
+  # only while the network is drawn in-session; after a restore it is absent, so
+  # resolve it defensively and fall back to the graph's own vertex attributes.
+  node.data.map <- if (exists("ppi.net") && !is.null(ppi.net[["node.data"]])) {
+    ppi.net[["node.data"]]
+  } else {
+    nm <- igraph::V(current.net)$name
+    lbl <- igraph::V(current.net)$Label
+    if (is.null(nm)) nm <- as.character(seq_len(igraph::vcount(current.net)))
+    if (is.null(lbl)) lbl <- nm
+    data.frame(Id = as.character(nm), Label = as.character(lbl), stringsAsFactors = FALSE)
+  }
   
   # ---- choose component(s) ----------------------------------------------------
   pick_largest <- function(g) {
@@ -915,8 +943,8 @@ FindCommunities <- function(method = "walktrap",
     }
     
     # symbol mapping with fallback to name
-    hit.x <- match(vnames, ppi.net[["node.data"]][, 1])
-    sybls <- ppi.net[["node.data"]][hit.x, 2]
+    hit.x <- match(vnames, node.data.map[, 1])
+    sybls <- node.data.map[hit.x, 2]
     sybls[is.na(sybls)] <- vnames[is.na(sybls)]
     names(sybls) <- vnames
     
