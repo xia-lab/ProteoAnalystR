@@ -301,6 +301,19 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     
   }
   
+  # merge duplicate protein/feature IDs (user-selected statistic) so downstream
+  # DE never hits duplicate rownames
+  if (anyDuplicated(rownames(data.proc)) && exists("ov_merge_duplicate_features")) {
+    dres <- ov_merge_duplicate_features(data.proc);
+    if (!is.null(dres$data)) {
+      data.proc <- dres$data;
+      msgSet$current.msg <- paste0(msgSet$current.msg, "; ", dres$msg);
+    } else {
+      AddErrMsg(dres$msg);
+      return(0);
+    }
+  }
+
   # save processed data for download user option
   data.proc <- sanitizeSmallNumbers(data.proc);
   fast.write(sanitizeSmallNumbers(data.proc), file="data_original.csv");
