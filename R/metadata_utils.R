@@ -314,7 +314,7 @@ DeleteSample <- function(dataName="",samplNm){
   if(dataName != "NA"){
     dataSet <- readDataset(dataName);
     dataSet$meta.info <- dataSet$meta.info[rownames(dataSet$meta.info)!=samplNm,,drop=F]
-    dataSet$data.norm <- dataSet$data.norm[,colnames(dataSet$data.norm!=samplNm)]
+    dataSet$data.norm <- dataSet$data.norm[,colnames(dataSet$data.norm)!=samplNm]
     RegisterData(dataSet);
   }else{
     paramSet <- readSet(paramSet, "paramSet")  
@@ -336,6 +336,60 @@ DeleteSample <- function(dataName="",samplNm){
     RegisterData(dataSet);
   }
   
+  return(1);
+}
+
+GetUploadedSampleNames <- function(dataName="", type="kept"){
+  dataSet <- readDataset(dataName);
+  if(type == "all" && !is.null(dataSet$meta.info.full)){
+    return(rownames(dataSet$meta.info.full));
+  }
+  return(rownames(dataSet$meta.info));
+}
+
+#'Update the sample set for one dataset
+#'@description Keeps only the samples named in smpl.nm.vec. Surviving rows keep
+#'their (possibly edited) metadata; rows added back are restored from the copy
+#'taken on first use, together with their data columns, so an exclusion is always
+#'reversible. Applies to the expression matrix and the sample metadata together,
+#'which is what keeps the two in step.
+#'@export
+UpdateUploadedSampleItems <- function(dataName=""){
+  if(!exists("smpl.nm.vec")){
+    current.msg <<- "Cannot find the sample names to keep!";
+    return(0);
+  }
+  dataSet <- readDataset(dataName);
+
+  if(is.null(dataSet$meta.info.full)){
+    dataSet$meta.info.full <- dataSet$meta.info;
+    dataSet$data.norm.full <- dataSet$data.norm;
+  }
+
+  full.meta <- dataSet$meta.info.full;
+  keep <- intersect(rownames(full.meta), smpl.nm.vec);
+  if(length(keep) < 3){
+    current.msg <<- "At least three samples must remain for analysis.";
+    return(0);
+  }
+
+  cur <- dataSet$meta.info;
+  kept.cur <- cur[intersect(rownames(cur), keep), , drop=FALSE];
+  add.back <- setdiff(keep, rownames(cur));
+  if(length(add.back) > 0){
+    common.cols <- intersect(colnames(cur), colnames(full.meta));
+    kept.cur <- rbind(kept.cur[, common.cols, drop=FALSE],
+                      full.meta[add.back, common.cols, drop=FALSE]);
+  }
+  ord <- rownames(full.meta)[rownames(full.meta) %in% rownames(kept.cur)];
+  dataSet$meta.info <- kept.cur[ord, , drop=FALSE];
+
+  full.data <- dataSet$data.norm.full;
+  dataSet$data.norm <- full.data[, colnames(full.data) %in% ord, drop=FALSE];
+
+  excluded <- setdiff(rownames(full.meta), keep);
+  current.msg <<- paste0(length(ord), " samples kept; ", length(excluded), " excluded.");
+  RegisterData(dataSet);
   return(1);
 }
 
