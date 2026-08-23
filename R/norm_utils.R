@@ -1042,15 +1042,74 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
   return(data)
 }
 
+# Peptide-level imputation, applied to the normalized peptide x sample matrix BEFORE
+# protein roll-up. Low-abundance peptides can be missing-not-at-random (left-censored);
+# dropping them (na.rm during summarization) biases a collapsing protein's estimate
+# upward and compresses its true fold change. Uses the established imputeLCMD package
+# (already a dependency; Lazar et al. 2016) rather than a hand-rolled rule.
+#   method:
+#     "mnar" : MAR/MNAR-ADAPTIVE via imputeLCMD (model.Selector -> impute.MAR.MNAR,
+#              MNAR=QRILC, MAR=KNN).
+#     "qrilc": quantile-regression left-censored imputation for every missing value.
+#     "minprob"/"mindet": imputeLCMD MinProb/MinDet.
+#     "none" : no imputation (DEFAULT everywhere it is wired).
+# On failure it falls back to leaving NAs (summarization na.rm handles them).
+#
+# EMPIRICAL WARNING (benchmark, REPORT_parameter_sweep.md): NONE of these
+# pre-summarization peptide-matrix imputations help on iPRG-2015; all HURT. The
+# naive down-shift inflates empirical FDR (0.07->0.35); the MAR/MNAR-adaptive
+# method's KNN step borrows across samples and FLATTENS real spike-in gradients,
+# collapsing fold-change accuracy (r 0.98->0.67) and sensitivity (0.81->0.50).
+# The reason MSstats' MBimpute helps but these do not is architectural: MBimpute is
+# an accelerated-failure-time model applied WITHIN each protein's summarization, not
+# a detachable matrix fill. Generic peptide-matrix imputation is therefore NOT a
+# substitute and this stays OFF by default. To obtain MBimpute's benefit, route the
+# data through MSstats' own pipeline (dataProcess(MBimpute=TRUE)) as a whole.
+.impute_peptide_matrix <- function(mat, method = "mnar") {
+  if (is.null(method) || method %in% c("none", "NA", "")) return(mat)
+  mat <- as.matrix(mat); storage.mode(mat) <- "numeric"
+  if (!anyNA(mat)) return(mat)
+  if (!requireNamespace("imputeLCMD", quietly = TRUE)) return(mat)   # graceful no-op
+  # preserve caller RNG state so imputation is reproducible and side-effect-free
+  old.seed <- if (exists(".Random.seed", envir = .GlobalEnv)) get(".Random.seed", envir = .GlobalEnv) else NULL
+  on.exit(if (!is.null(old.seed)) assign(".Random.seed", old.seed, envir = .GlobalEnv), add = TRUE)
+  set.seed(123)
+  imp <- try({
+    if (method %in% c("mnar", "adaptive", "mar_mnar")) {
+      ms <- imputeLCMD::model.Selector(mat)                 # per-feature MNAR(1)/MAR(0)
+      imputeLCMD::impute.MAR.MNAR(mat, ms, method.MAR = "KNN", method.MNAR = "QRILC")
+    } else if (method == "qrilc") {
+      imputeLCMD::impute.QRILC(mat)[[1]]
+    } else if (method == "minprob") {
+      imputeLCMD::impute.MinProb(mat)
+    } else if (method == "mindet") {
+      imputeLCMD::impute.MinDet(mat)
+    } else mat
+  }, silent = TRUE)
+  if (inherits(imp, "try-error") || is.null(imp) || !is.matrix(imp) ||
+      nrow(imp) != nrow(mat) || ncol(imp) != ncol(mat)) return(mat)
+  dimnames(imp) <- dimnames(mat)
+  # safety net: fill any residual NAs (e.g. all-NA rows KNN can't touch) with column min
+  if (anyNA(imp)) for (j in seq_len(ncol(imp))) {
+    na <- is.na(imp[, j]); if (any(na)) { o <- imp[!na, j]; imp[na, j] <- if (length(o)) min(o) else 0 }
+  }
+  imp
+}
+
 # Wrapper: peptide -> protein summarization using summarize_peptides()
 # Expects a peptide-to-protein map saved as peptide_to_protein_map.qs (two columns: Peptide, Protein)
 # Input: data.stat.qs (peptide-level matrix after normalization)
 # Output: int.mat.qs + data.norm updated to protein-level for downstream annotation
+#   method:         "tukey" (true Tukey median polish; default) or the faster
+#                   "median_polish" approximation, plus top_n/mean/median/sum.
+#   peptide.impute: peptide-level MNAR imputation before roll-up ("none" default;
+#                   "mnar"/"mindet") -- recovers left-censored low-abundance peptides.
 SummarizeProteomicsData <- function(dataName = "",
-                                    method = "median_polish",
+                                    method = "tukey",
                                     top_n = 3,
                                     min_peptides = 1,
-                                    filter.unmapped = FALSE) {
+                                    filter.unmapped = FALSE,
+                                    peptide.impute = "none") {
   dataSet <- readDataset(dataName)
   msgSet  <- readSet(msgSet, "msgSet")
   paramSet <- readSet(paramSet, "paramSet")
@@ -1073,6 +1132,17 @@ SummarizeProteomicsData <- function(dataName = "",
   msgSet$current.msg <- paste0("Starting peptide summarization using method '", method,
                                "' with top_n=", top_n, ", min_peptides=", min_peptides, ".")
   saveSet(msgSet, "msgSet")
+
+  # Optional peptide-level MNAR imputation BEFORE roll-up (recovers left-censored
+  # low-abundance peptides that na.rm summarization would otherwise drop).
+  if (!is.null(peptide.impute) && !(peptide.impute %in% c("none", "NA", ""))) {
+    n.na <- sum(is.na(pep.mat))
+    pep.mat <- .impute_peptide_matrix(pep.mat, method = peptide.impute)
+    msgSet$current.msg <- c(msgSet$current.msg,
+      paste0("Peptide-level MNAR imputation ('", peptide.impute, "') filled ",
+             n.na, " missing peptide values before summarization."))
+    saveSet(msgSet, "msgSet")
+  }
 
   # Load peptide-to-protein map
   pep.map <- NULL
@@ -1107,7 +1177,7 @@ SummarizeProteomicsData <- function(dataName = "",
   if (is.null(prot.mat) || !is.matrix(prot.mat) || nrow(prot.mat) == 0) {
     msgSet$current.msg <- paste0(
       "Peptide summarization failed: no proteins remained after applying the minimum peptide ",
-      "count filter (", min_peptides, "). Try reducing 'Minimum Peptides per Protein'.")
+      "count filter (", min_peptides, "). Lower this threshold on the Filtering & Normalization page.")
     saveSet(msgSet, "msgSet")
     return(0)
   }
@@ -1529,7 +1599,9 @@ morlog_micro_run <- function(expr_field = "expr", norm_field = "norm") {
 #'                       Rows = Peptides, Cols = Samples.
 #'                       ASSUMPTION: Data is already Log2 transformed (typical for normalization steps).
 #' @param peptide_to_protein_map A data frame with two columns: 'Peptide' and 'Protein'.
-#' @param method The summarization method: "median_polish", "top_n", "mean", "median", "sum".
+#' @param method The summarization method: "median_polish" (fast median-sweep
+#'   approximation of Tukey's; default), "tukey" (true iterative Tukey median
+#'   polish), "top_n", "mean", "median", "sum".
 #' @param top_n_count Integer. Number of peptides to use for "top_n" method.
 #' @param min_peptides Integer. Minimum number of peptides required to keep a protein.
 #'
@@ -1624,6 +1696,31 @@ library(tibble)
       mutate(Log2Intensity = log2(SumLinear)) %>%
       select(Protein, Sample, Log2Intensity) %>%
       pivot_wider(names_from = Sample, values_from = Log2Intensity)
+
+  } else if (method == "tukey") {
+    # --- True Tukey median polish (iterative row/column median removal) per
+    # protein, matching MSstats' TMP. Protein value per sample = overall + column
+    # effect. Slower than the median_polish approximation above; provided for a
+    # like-for-like comparison with MSstats rather than as the default.
+    samples_all <- sort(unique(as.character(filtered_data$Sample)))
+    prot_list <- split(filtered_data[, c("Peptide","Sample","Intensity")],
+                       filtered_data$Protein)
+    est_rows <- lapply(prot_list, function(df) {
+      m <- reshape2::acast(df, Peptide ~ Sample, value.var = "Intensity",
+                           fun.aggregate = function(x) median(x, na.rm = TRUE))
+      miss <- setdiff(samples_all, colnames(m))
+      if (length(miss)) {
+        m <- cbind(m, matrix(NA_real_, nrow(m), length(miss),
+                             dimnames = list(rownames(m), miss)))
+      }
+      m <- m[, samples_all, drop = FALSE]
+      mp <- suppressWarnings(stats::medpolish(m, na.rm = TRUE,
+                                              trace.iter = FALSE, maxiter = 10))
+      as.numeric(mp$overall + mp$col)
+    })
+    final_matrix0 <- do.call(rbind, est_rows)
+    colnames(final_matrix0) <- samples_all
+    final_df <- tibble::as_tibble(final_matrix0, rownames = "Protein")
   }
   
   # 4. Final Formatting

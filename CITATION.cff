@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use ProteoAnalystR, please cite the software and the accompanying paper."
+title: "ProteoAnalystR: backend R functions for the ProteoAnalyst platform"
+type: software
+authors:
+  - given-names: Jeff
+    family-names: Xia
+    email: jeff.xia@mcgill.ca
+    affiliation: "McGill University"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"  # TODO authors: add ORCID
+  - given-names: Guangyan
+    family-names: Zhou
+    email: guangyan.zhou@mail.mcgill.ca
+    affiliation: "McGill University"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"  # TODO authors: add ORCID
+version: "1.0.0"
+date-released: "2026-08-22"  # TODO: set to the actual v1.0.0 tag date at release
+license: MIT
+url: "https://www.proteoanalyst.ca"
+repository-code: "https://github.com/xia-lab/ProteoAnalystR"
+keywords:
+  - proteomics
+  - phosphoproteomics
+  - mass spectrometry
+  - differential expression
+  - functional enrichment
+  - R package
+  - bioinformatics
+# doi: "10.5281/zenodo.XXXXXXX"  # TODO: add the Zenodo version DOI once minted

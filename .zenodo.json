@@ -1,0 +1,28 @@
+{
+  "title": "ProteoAnalystR: backend R functions for the ProteoAnalyst platform",
+  "description": "The statistical and visualization backend R package that powers the ProteoAnalyst web platform. Provides readers for common upstream proteomics/phosphoproteomics outputs (MaxQuant, FragPipe, DIA-NN, Spectronaut, MSstats/MSstatsPTM long tables), normalization, peptide-to-protein summarization, imputation, differential expression (limma / DEqMS / edgeR / DESeq2), protein-adjusted PTM/occupancy analysis, functional and kinase enrichment, WGCNA/co-expression, PPI network construction, and biomarker/ROC analysis. Manuscript release v1.0.0.",
+  "upload_type": "software",
+  "version": "1.0.0",
+  "license": "MIT",
+  "creators": [
+    { "name": "Xia, Jeff", "affiliation": "McGill University" },
+    { "name": "Zhou, Guangyan", "affiliation": "McGill University" }
+  ],
+  "keywords": [
+    "proteomics",
+    "phosphoproteomics",
+    "mass spectrometry",
+    "differential expression",
+    "functional enrichment",
+    "R package",
+    "bioinformatics"
+  ],
+  "related_identifiers": [
+    {
+      "relation": "isSupplementTo",
+      "identifier": "10.1093/nar/XXXXXXX",
+      "scheme": "doi",
+      "resource_type": "publication-article"
+    }
+  ]
+}

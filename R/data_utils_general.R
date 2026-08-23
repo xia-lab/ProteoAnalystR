@@ -126,7 +126,11 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
   paramSet$jointpa.lib.path <- jointpa.lib.path;
 
   if(!.on.public.web) {
-    paramSet$sqlite.path <- paste0(getwd(), "/");
+    # Local / standalone-package mode: use the SQLite path resolved above (which
+    # honours OMICS_LIB_DIR and the standard install locations) so annotation /
+    # enrichment / PPI / kinase database lookups work. Fall back to the working
+    # directory only when no database directory could be resolved.
+    paramSet$sqlite.path <- if (nzchar(sqlite.path)) sqlite.path else paste0(getwd(), "/");
     paramSet$lib.path <- "https://www.proteoanalyst.ca/ProteoAnalyst/resources/data/";
     paramSet <<- paramSet;
   }else{
@@ -212,9 +216,16 @@ RegisterData <- function(dataSet, output=1){
         }
         return(output);
     }else{
+        # Local / standalone-package mode. Initialise the in-memory registry if
+        # absent (previously this errored with "object 'dataSets' not found"),
+        # persist to disk like the other branches, and return the same `output`
+        # status the web/api branches return (callers expect a status, not the
+        # whole dataSets list).
+        if (!exists("dataSets", envir = .GlobalEnv)) dataSets <<- list();
+        ov_qs_save(dataSet, file = replace_extension_with_qs(dataName));
         dataSets[[dataName]] <- dataSet;
         dataSets <<- dataSets;
-        return(dataSets);
+        return(output);
     }
   }
 } 
