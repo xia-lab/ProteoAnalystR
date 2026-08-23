@@ -350,7 +350,7 @@ PlotCochranQ <- function(imgNm){
 
     Qvals <- f.Q.NA(ES[,3,],ES[,4,]);
 
-    Cairo(file=imgNm, width=400, height=400, type="png", bg="white");
+    Cairo::Cairo(file=imgNm, width=400, height=400, type="png", bg="white");
     # histgram
     # hist(Qvals, breaks = 50, col = "red");
     # QQ plot
@@ -395,7 +395,7 @@ PerformBatchCorrection <- function(){
     ), bridge_in, preset = "fast")
     on.exit(unlink(c(bridge_in, bridge_out)), add = TRUE)
 
-    run_func_via_rsclient(
+    run_func_via_microservice(
       func = function(wd, bridge_in, bridge_out) {
         setwd(wd)
         require(sva)

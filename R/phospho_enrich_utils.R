@@ -1352,7 +1352,7 @@ PlotMotifEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20, b
   }
 
   imgNm <- paste0(imgName, "dpi", dpi, ".", format)
-  Cairo(file = imgNm, width = w, height = h, unit = "in",
+  Cairo::Cairo(file = imgNm, width = w, height = h, unit = "in",
         dpi = dpi, bg = "white", type = format)
   print(p)
   invisible(dev.off())
@@ -2003,7 +2003,7 @@ PlotPhosphoOccupancyProfile <- function(dataName, imageName, siteId,
     ggtitle(trunc.id, subtitle = paste("Protein:", prot.id))
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = 5, height = 5, unit = "in", dpi = dpi, bg = "white", type = format)
+  Cairo::Cairo(file = imgName, width = 5, height = 5, unit = "in", dpi = dpi, bg = "white", type = format)
   invisible(print(myplot))
   invisible(dev.off())
   return(invisible(1))

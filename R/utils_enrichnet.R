@@ -79,7 +79,17 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
   
   # layout
   pos.xy <- layout_nicely(g);
-  
+
+  # Cache the plot inputs (graph, layout, counts, significance, labels) to disk
+  # under netNm so a static enrichment-map image matching this interactive
+  # network can be rendered later without recomputing the layout.
+  tryCatch(saveRDS(list(g = g, layout = pos.xy, counts = cnt2,
+                        signif = -log10(pmax(pvalue[V(g)$name], 1e-300)),
+                        labels = V(g)$name),
+                   paste0(netNm, "_plot_inputs.rds")),
+           error = function(e) message("[enrichnet] caching plot inputs for ",
+                                       netNm, " failed: ", conditionMessage(e)));
+
   # now create the json object
   nodes <- vector(mode="list");
   node.nms <- V(g)$name;

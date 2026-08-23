@@ -249,15 +249,33 @@ PrepareSqliteDB <- function(sqlite_Path, onweb = TRUE) {
   if(file.exists(sqlite_Path)) {return(TRUE)};
 
   dbNM <- basename(sqlite_Path);
+  # TODO(distribution): serve reference DBs from durable registry.omicsverse.com/R2
   DonwloadLink <- paste0("https://www.xialab.ca/resources/sqlite/", dbNM);
-  download.file(DonwloadLink, sqlite_Path);
-  return(TRUE)
+  ok <- tryCatch({
+    download.file(DonwloadLink, sqlite_Path, mode = "wb");
+    file.exists(sqlite_Path) && file.info(sqlite_Path)$size > 0;
+  }, error = function(e) FALSE, warning = function(w) FALSE);
+  if(!ok){
+    if(file.exists(sqlite_Path)) unlink(sqlite_Path);  # drop partial/empty download
+    AddErrMsg(paste0("Reference database '", dbNM, "' unavailable — check internet, or use the bundled image / mount OMICS_LIB_DIR."));
+    return(FALSE);
+  }
+  return(TRUE);
 }
 
 queryGeneDB <- function(table.nm, data.org){
   paramSet <- readSet(paramSet, "paramSet");  
   if(length(table.nm) == 0){
     table.nm <- "";
+  }
+
+  # Session-level cache, same key format as the definition in data_idanot_utils.R.
+  # This file is sourced AFTER that one in the onedata, onedata_phospho, metadata and
+  # proteinlist modules, so this definition wins there; without the cache every
+  # annotation lookup re-opened the organism SQLite and re-read the whole gene table.
+  cache.key <- paste0(".genedb_cache_", table.nm, "_", data.org);
+  if (exists(cache.key, envir = .GlobalEnv)) {
+    return(get(cache.key, envir = .GlobalEnv));
   }
 
   if(table.nm == "custom" || data.org == "custom"){
@@ -278,6 +296,9 @@ queryGeneDB <- function(table.nm, data.org){
     db.map <- dbReadTable(conv.db, table.nm);
     dbDisconnect(conv.db); cleanMem();
   }
+  # Cache successes only - the two early return(0) paths above are failures and must
+  # stay retryable.
+  assign(cache.key, db.map, envir = .GlobalEnv);
   return(db.map)
 }
 

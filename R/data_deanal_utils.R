@@ -218,12 +218,13 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
     fst.cls = dataSet$fst.cls,
     analysisVar = dataSet$analysisVar,
     block = dataSet$block,
+    adj.frame = dataSet$adj.frame,
     anal.type = anal.type,
     par1 = par1
   ), bridge_in, preset = "fast")
   on.exit(unlink(c(bridge_in, bridge_out)), add = TRUE)
 
-  run_func_via_rsclient(
+  run_func_via_microservice(
     func = function(wd, bridge_in, bridge_out) {
       setwd(wd)
       require(DESeq2)
@@ -233,6 +234,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
       fst.cls <- input$fst.cls
       analysisVar <- input$analysisVar
       block <- input$block
+      adj.frame <- input$adj.frame
       anal.type <- input$anal.type
       par1 <- input$par1
       data.anot <- input$data.anot
@@ -260,12 +262,16 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
 
       colData <- data.frame(condition = factor(fst.cls, levels = all_conditions))
 
-      if (!is.null(block)) {
-        colData$block <- factor(block)
-        design <- ~ block + condition
-      } else {
-        design <- ~ condition
+      # Covariates first, then block, then condition — condition stays LAST so every
+      # results(dds, contrast = c("condition", ...)) call below keeps working untouched.
+      adj.nms <- character(0)
+      if (!is.null(adj.frame) && ncol(adj.frame) > 0) {
+        adj.nms <- make.names(colnames(adj.frame))
+        for (i in seq_along(adj.nms)) colData[[adj.nms[i]]] <- adj.frame[[i]]
       }
+      if (!is.null(block)) colData$block <- factor(block)
+      rhs <- c(adj.nms, if (!is.null(block)) "block", "condition")
+      design <- stats::as.formula(paste("~", paste(rhs, collapse = " + ")))
 
       if (anal.type == "default") {
         n_conditions <- length(all_conditions)
@@ -333,7 +339,13 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
       # intercept-only (or block-only) reduced model — "does any group differ".
       omni.res <- NULL
       if (length(contrast_list) > 1) {
-        reduced.fml <- if ("block" %in% colnames(colData)) ~ block else ~ 1
+        # Reduced model = full model minus condition. Hardcoding ~ block dropped any
+        # covariate from the null, which makes the LRT test condition AND the covariates
+        # jointly rather than condition alone.
+        red.terms <- setdiff(all.vars(design), "condition")
+        reduced.fml <- if (length(red.terms) > 0)
+                         stats::as.formula(paste("~", paste(red.terms, collapse = " + ")))
+                       else ~ 1
         dds.lrt <- tryCatch(DESeq(dds, test = "LRT", reduced = reduced.fml),
                             error = function(e) NULL)
         if (!is.null(dds.lrt)) {
@@ -590,14 +602,29 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
     grp.fac <- factor(dataSet$cls)
 
+    if (is.null(attr(design, "assign")))
+      edger.design <- model.matrix(~ 0 + grp.fac)
+    else
+      edger.design <- design
+
     if (!is.null(dataSet$block)) {
+      # Append the blocking factor to the design that is ALREADY column-aligned with
+      # contrast.matrix, rather than rebuilding an intercept design from scratch. The old
+      # ~ grp.fac + blk.fac rebuild produced 1 + (g-1) + (b-1) columns while contrast.matrix
+      # (built by prepareEdgeRContrast over ~ 0 + cls_syn) has g rows, so for any real blocking
+      # factor glmLRT was handed a contrast whose length did not match ncol(design) and stopped.
+      # A blocked proteomics run could therefore never complete in edgeR.
       blk.fac <- factor(dataSet$block)
-      edger.design <- model.matrix(~ grp.fac + blk.fac)
-    } else {
-      if (is.null(attr(design, "assign")))
-        edger.design <- model.matrix(~ 0 + grp.fac)
-      else
-        edger.design <- design
+      if (nlevels(blk.fac) > 1) {
+        blk.mm <- stats::model.matrix(~ blk.fac)[, -1, drop = FALSE]   # drop intercept => b-1 cols
+        edger.design <- cbind(edger.design, blk.mm)
+        # The block coefficients are nuisance: they belong in the FIT but carry zero weight in
+        # every group contrast, so pad rather than rebuild. Keeps the leading columns — and hence
+        # every existing contrast row — exactly as the unblocked path leaves them.
+        pad <- matrix(0, nrow = ncol(blk.mm), ncol = ncol(contrast.matrix),
+                      dimnames = list(colnames(blk.mm), colnames(contrast.matrix)))
+        contrast.matrix <- rbind(contrast.matrix, pad)
+      }
     }
 
     # edgeR pipeline — isolate in subprocess
@@ -1190,12 +1217,40 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
 
 
+# Stamp the primary factor and the covariate frame onto the dataset, so that every DE engine
+# below fits an additive ~ primary + cov1 + cov2 + ... model. Mirrors ExpressAnalystR's
+# SetCovariateVars, under a distinct name for the same shared-global-environment reason as above.
+SetProteoCovariateVars <- function(dataName = "", primaryVar = "", adjVarsCsv = "") {
+  dataSet <- readDataset(dataName);
+  dataSet$adj.frame <- NULL; dataSet$adj.vars <- NULL; dataSet$rmidx <- NULL;
+  # Covariates live IN the design, so the separate blocking machinery must be off: the caller
+  # folds an assigned block into the covariate set, and leaving dataSet$block set would model
+  # that same variable a second time (limma duplicateCorrelation / the edgeR blk.mm columns /
+  # DESeq2's ~ block term). Express clears it here for exactly this reason.
+  dataSet$block <- NULL;
+  # Sample selection and covariate typing come from the shared resolver, so proteo and express
+  # cannot drift apart on which samples are modelled or how a continuous covariate is treated.
+  setup <- ov_covariate_setup(dataSet$meta.info, primaryVar,
+                              trimws(unlist(strsplit(adjVarsCsv, ","))), dataSet$cont.inx);
+  if (is.null(setup)) return(character(0));
+  dataSet$cls <- setup$cls; dataSet$fst.cls <- setup$cls;
+  dataSet$analysisVar <- primaryVar;
+  dataSet$rmidx <- setup$rmidx;
+  if (!is.null(setup$adj.frame)) {
+    dataSet$adj.frame <- setup$adj.frame; dataSet$adj.vars <- setup$adj.vars;
+  }
+  RegisterData(dataSet, setup$levels);
+  return(setup$levels);
+}
+
 SetupDesignMatrix<-function(dataName="", deMethod){
   dataSet <- readDataset(dataName);
   paramSet <- readSet(paramSet, "paramSet");
   cls <- dataSet$cls; 
-  design <- model.matrix(~ 0 + cls) # no intercept
-  colnames(design) <- levels(cls);
+  # Additive covariate adjustment when SetProteoCovariateVars stamped an adj.frame; identical
+  # to the old ~ 0 + cls when it did not. prepareContrast consumes dataSet$design unchanged,
+  # so this one line carries the adjustment into both limma and DEqMS.
+  design <- ov_design_matrix(cls, dataSet$adj.frame)
   dataSet$design <- design;
   dataSet$de.method <- deMethod;
   dataSet$pval <- 0.05;
@@ -1781,8 +1836,9 @@ prepareEdgeRContrast <- function(dataSet,
   dataSet$comp.type <- anal.type
   dataSet$par1      <- par1
 
-  design <- model.matrix(~ 0 + cls_syn)
-  colnames(design) <- syn_levels
+  # Same additive covariate columns as the limma/DEqMS design above, so the winner compares
+  # three engines fitted to the SAME model rather than one adjusted and two not.
+  design <- ov_design_matrix(cls_syn, dataSet$adj.frame)
 
   # helper: map a UI label (raw or syn) into sanitized
   to_syn <- function(x) {

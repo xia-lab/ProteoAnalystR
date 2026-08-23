@@ -46,6 +46,7 @@
 #' @license MIT License
 
 ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneDataAnalType="default", path="", dataFormat="default") {
+  try(RecordRCommand(paste0("ReadTabExpressData(\"", fileName, "\")")), silent = TRUE)
   #msg("[ReadTabExpressData] start file=", fileName, " metaContain=", metaContain, " path=", path, " dataFormat=", dataFormat)
   is.maxquant <- dataFormat == "maxquant" || grepl("proteinGroups", fileName, ignore.case = TRUE)
   is.fragpipe <- dataFormat == "fragpipe" || grepl("fragpipe", fileName, ignore.case = TRUE) || grepl("fragpipe", metafileName, ignore.case = TRUE)
@@ -309,6 +310,19 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     
   }
   
+  # merge duplicate protein/feature IDs (user-selected statistic) so downstream
+  # DE never hits duplicate rownames
+  if (anyDuplicated(rownames(data.proc)) && exists("ov_merge_duplicate_features")) {
+    dres <- ov_merge_duplicate_features(data.proc);
+    if (!is.null(dres$data)) {
+      data.proc <- dres$data;
+      msgSet$current.msg <- paste0(msgSet$current.msg, "; ", dres$msg);
+    } else {
+      AddErrMsg(dres$msg);
+      return(0);
+    }
+  }
+
   # save processed data for download user option
   data.proc <- sanitizeSmallNumbers(data.proc);
   fast.write(sanitizeSmallNumbers(data.proc), file="data_original.csv");
@@ -1631,6 +1645,20 @@ SetSpectronautOptions <- function(inputType = "protein") {
         mydata$`#NAME` <- mydata[["Raw file"]]
       } else if ("R.FileName" %in% colnames(mydata)) {
         mydata$`#NAME` <- mydata$R.FileName
+      } else if (ncol(mydata) >= 2 &&
+                 length(intersect(
+                   trimws(as.character(mydata[[1]])),
+                   trimws(if (is.matrix(datOrig)) colnames(datOrig) else colnames(datOrig)[-1]))) > 0) {
+        # No explicit identifier header. A metadata sheet saved with row names
+        # (write.csv / fast.write(row.names = TRUE)) has an EMPTY first-column header,
+        # which fread auto-names "V1". .readMetaData ITSELF writes exactly such a file
+        # (fast.write(meta.info, "metadata_processed.csv", row.names = TRUE) below), so a
+        # saved project re-fed through "Start a new analysis" would otherwise fail to
+        # round-trip: the reader rejected the file it just wrote, meta.info came back
+        # NULL, and ReadTabExpressData fell back to .synthesizeMetaFromRuns() — one group
+        # per sample (the primary factor collapses to the sample IDs). Treat the first
+        # column as the sample identifier when its values match the data's sample columns.
+        colnames(mydata)[1] <- "#NAME"
       } else {
         msgSet$current.msg <- "Metadata file must contain a sample identifier column (#NAME, SampleID, Sample, Run, Raw.file, Raw file, or R.FileName).";
         saveSet(msgSet, "msgSet");
@@ -1769,6 +1797,16 @@ SetSpectronautOptions <- function(inputType = "protein") {
     match.msg <- paste0(match.msg, "Columns ",paste(names(meta.info)[rmcol],collapse = ", ")," are removed due to lack of replicates!   " )
   }
   
+  # Removal and re-ordering are separate concerns. Folding them into one guard made the message
+  # above true only half the time: rmcol columns are announced as removed whenever any exist, but
+  # the cbind that removed them ran only when a continuous column happened to be present. A column
+  # dropped here also disappears from colnames(meta.info), which is what the covariate resolver
+  # intersects against, so a covariate assigned to it was discarded silently.
+  if(length(rmcol) > 0){
+    meta.info <- meta.info[, -rmcol, drop=FALSE];
+    disc.inx  <- disc.inx[colnames(meta.info)];
+    cont.inx  <- cont.inx[colnames(meta.info)];
+  }
   if(sum(cont.inx)>0){
     # make sure the discrete data is on the left side
     meta.info <- cbind(meta.info[,disc.inx, drop=FALSE], meta.info[,cont.inx, drop=FALSE]);

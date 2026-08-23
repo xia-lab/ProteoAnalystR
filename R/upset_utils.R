@@ -454,6 +454,13 @@ PlotPairwiseUpsetPNG <- function(dataName  = "",
       return(invisible(NULL))
     }
 
+    # Method-standard: persist the figure's underlying data table (per-protein
+    # binary membership across the contrasts) so the AI "Refine" control can
+    # re-plot from data and users can regenerate the figure in any tool. Helper
+    # lives in wf_method.R; guard so the public package still runs
+    # standalone.
+    if (exists("WfSaveFigureData")) tryCatch(WfSaveFigureData("upset", upset.df), error = function(e) NULL)
+
     n.sets <- min(length(sig.sets), max.sets)
     w.in <- max(8, 0.45 * n.sets + 6)
     h.in <- 6

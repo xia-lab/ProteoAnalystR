@@ -22,6 +22,7 @@
 #'
 
 MapListIds <- function(listNm, geneIDs, org, idType){
+  try(RecordRCommand(paste0("MapListIds(\"", listNm, "\")")), silent = TRUE)
   #print("maplistids");
   # Parse geneIDs to vector
   paramSet <- readSet(paramSet, "paramSet");

@@ -38,7 +38,9 @@ my.build.cemi.net <- function(dataName,
                               cor_method  = "pearson",
                               verbose     = FALSE,
                               classCol    = NULL,
-                              auto_impute = TRUE) {   # <-- optional: auto-impute NAs before analysis
+                              auto_impute = TRUE,     # <-- optional: auto-impute NAs before analysis
+                              force_beta  = FALSE) {  # take the best available soft threshold when
+                                                      # no power reaches scale-free topology
   tryCatch({
 
     ## 1 · load dataset -------------------------------------------------
@@ -329,53 +331,48 @@ my.build.cemi.net <- function(dataName,
     # FIX: Suppress Quartz popup on macOS - completely disable plotting during cemitool
     # We'll generate plots separately using the other functions
 
-    # Use RSclient to run CEMiTool in isolated Rserve fork to reduce memory bandwidth
-    # This prevents memory bloat in the main Rserve process
-
-    if (requireNamespace("RSclient", quietly = TRUE)) {
-      msg("Using RSclient subprocess...");
-      # Run cemitool in separate process with stdout/stderr capture
-      result <- run_func_via_rsclient(
-        func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose) {
-          suppressPackageStartupMessages({
-            library(CEMiTool)
-            library(WGCNA)
-          })
-
-          # Disable threading in subprocess too
-          WGCNA::disableWGCNAThreads()
-
-          message("[rsclient subprocess] Starting CEMiTool with ", nrow(expr_mat), " features x ", ncol(expr_mat), " samples")
-          message("[rsclient subprocess] Parameters: filter=", filter, ", min_ngen=", min_ngen, ", cor_method=", cor_method)
-
-          cem <- cemitool(expr              = expr_mat,
-                          annot             = annot_df,
-                          filter            = filter,
-                          min_ngen          = min_ngen,
-                          cor_method        = cor_method,
-                          class_column      = classCol,
-                          verbose           = verbose,
-                          plot              = FALSE,
-                          plot_diagnostics  = FALSE)
-
-          message("[rsclient subprocess] CEMiTool completed successfully")
-          return(cem)
-        },
-        args = list(
-          expr_mat   = expr_mat,
-          annot_df   = annot_df,
-          filter     = filter,
-          min_ngen   = min_ngen,
-          cor_method = cor_method,
-          classCol   = classCol,
-          verbose    = verbose
-        ),
-        timeout_sec = 180
-      )
-
-      cem <- result
-    } else {
-      msg("Running in-process (RSclient not available)");
+    # Run CEMiTool in an isolated, short-lived subprocess to reduce memory bandwidth
+    # in the main process. Data is exchanged via a BRIDGE FILE: run_func_via_microservice
+    # returns NULL (a subprocess cannot pass a value back), so the closure writes its result
+    # to bridge_out and we read it back. The wrapper falls back to in-process automatically
+    # if the subprocess helper is unavailable (the closure still writes bridge_out).
+    bridge_out <- file.path(tempdir(), paste0("cem_", paste0(sample(letters, 8), collapse = ""), ".qs"))
+    on.exit(if (file.exists(bridge_out)) unlink(bridge_out), add = TRUE)
+    run_func_via_microservice(
+      func = function(expr_mat, annot_df, filter, min_ngen, cor_method, classCol, verbose, bridge_out, force_beta) {
+        suppressPackageStartupMessages({
+          library(CEMiTool)
+          library(WGCNA)
+        })
+        WGCNA::disableWGCNAThreads()
+        cem <- cemitool(expr              = expr_mat,
+                        annot             = annot_df,
+                        filter            = filter,
+                        min_ngen          = min_ngen,
+                        cor_method        = cor_method,
+                        class_column      = classCol,
+                        verbose           = verbose,
+                        force_beta        = force_beta,
+                        plot              = FALSE,
+                        plot_diagnostics  = FALSE)
+        ov_qs_save(cem, bridge_out)
+      },
+      args = list(
+        expr_mat   = expr_mat,
+        annot_df   = annot_df,
+        filter     = filter,
+        min_ngen   = min_ngen,
+        cor_method = cor_method,
+        classCol   = classCol,
+        verbose    = verbose,
+        bridge_out = bridge_out,
+        force_beta = force_beta
+      ),
+      timeout_sec = 180
+    )
+    cem <- if (file.exists(bridge_out)) ov_qs_read(bridge_out) else NULL
+    if (is.null(cem)) {
+      msg("Isolated CEMiTool returned nothing; running in-process");
       cem <- cemitool(expr              = expr_mat,
                       annot             = annot_df,
                       filter            = filter,
@@ -383,6 +380,7 @@ my.build.cemi.net <- function(dataName,
                       cor_method        = cor_method,
                       class_column      = classCol,
                       verbose           = verbose,
+                      force_beta        = force_beta,
                       plot              = FALSE,           # Disable all plotting
                       plot_diagnostics  = FALSE)
     }
@@ -502,7 +500,7 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
     # FIX: Suppress Quartz popup on macOS - close any existing devices first
     while (dev.cur() > 1) dev.off()
 
-    Cairo(file, width = width_in, height = height_in, dpi = dpi,
+    Cairo::Cairo(file, width = width_in, height = height_in, dpi = dpi,
           bg = "white", type = format, units = "in")
 
     oldMar <- par("mar"); par(mar = oldMar + c(0, 0, 0, 4))
@@ -542,7 +540,11 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
 
     ids   <- colnames(ME)
     pal   <- setNames(rainbow(length(ids)), ids)
-    idVec <- setNames(ids, ids)
+    # The colour vector must hold COLOURS keyed by leaf name. Passing the ids
+    # as their own values handed strings like "MEM2" to plotDendroAndColors,
+    # which rejects them as invalid colour names, so the module dendrogram
+    # never rendered.
+    idVec <- pal
 
     file <- sprintf("%s_module_dendro_dpi%d.%s", imgName, dpi, format)
     plotDendroColoured(hc, idVec, "modules", file, pal)
@@ -724,6 +726,19 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     textMat <- paste0(formatC(corMat, 2), "\n(",
                       formatC(pMat , 1, format = "e"), ")")
 
+    ## ── 4b · save the statistics shown in the heatmap  ------------
+    # Long-format table of the eigengene-group correlations and their
+    # p-values, with BH adjustment across all module x group tests.
+    statsTbl <- data.frame(
+      Module      = rep(rownames(corMat), times = ncol(corMat)),
+      Group       = rep(colnames(corMat), each  = nrow(corMat)),
+      Correlation = round(as.vector(corMat), 4),
+      P_value     = signif(as.vector(pMat), 4),
+      FDR         = signif(stats::p.adjust(as.vector(pMat), method = "BH"), 4),
+      stringsAsFactors = FALSE)
+    statsTbl <- statsTbl[order(statsTbl$P_value), , drop = FALSE]
+    utils::write.csv(statsTbl, "cem_module_trait_stats.csv", row.names = FALSE)
+
     ## ── 5 · device  (min 8 × 6 in)  -------------------------------
     colfun <- colorRampPalette(c("royalblue4", "white", "tomato"))
 
@@ -741,7 +756,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     while (dev.cur() > 1) dev.off()
 
     if (tolower(format) == "png") {
-      Cairo(file   = outFile,
+      Cairo::Cairo(file   = outFile,
             width  = width_in,
             height = height_in,
             dpi    = dpi,
@@ -749,7 +764,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
             type   = "png",
             units  = "in")
     } else {
-      Cairo(file   = outFile,
+      Cairo::Cairo(file   = outFile,
             width  = width_in,
             height = height_in,
             bg     = "white",
@@ -834,7 +849,7 @@ PlotCemiScaleFree <- function(imgName = "coexp_scalefree",
     # FIX: Suppress Quartz popup on macOS - close any existing devices first
     while (dev.cur() > 1) dev.off()
 
-    Cairo(file, width = width_in, height = height_in, dpi = dpi, bg = "white", type = format, units = "in")
+    Cairo::Cairo(file, width = width_in, height = height_in, dpi = dpi, bg = "white", type = format, units = "in")
   invisible(print(g))    # ggplot draw
   invisible(dev.off())
     imgSet <- readSet(imgSet, "imgSet");

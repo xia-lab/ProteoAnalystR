@@ -70,6 +70,7 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
   paramSet$mdata.all <- list();
   paramSet$anal.type <- "onedata";
   paramSet$api.bool <- F;
+  # kept http:// — api.xialab.ca has no valid TLS cert; https would break this. TODO(distribution): durable https host.
   paramSet$api.base <<- "http://api.xialab.ca" #dose response
   # Default the enrichment background to the measured proteome/phosphoproteome
   # (the features actually detected in the experiment), not the whole gene-set
@@ -88,7 +89,7 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
   #  sqlite.path <- "/data/sqlite/";  #vip server
   #}else 
   if(nzchar(Sys.getenv("OMICS_LIB_DIR", "")) && dir.exists(Sys.getenv("OMICS_LIB_DIR", "")) && any(file.info(list.files(Sys.getenv("OMICS_LIB_DIR", ""), pattern = "\\.sqlite$", full.names = TRUE))$size > 0, na.rm = TRUE)){
-    sqlite.path <- paste0(sub("/+$", "", Sys.getenv("OMICS_LIB_DIR", "")), "/");  # Docker shared library mount (OMICS_LIB_DIR)
+    sqlite.path <- paste0(sub("/+$", "", Sys.getenv("OMICS_LIB_DIR", "")), "/");  # shared sqlite library directory
   }else if(file.exists("/home/glassfish/sqlite/")){
     sqlite.path <- "/home/glassfish/sqlite/";  #public server
   }else if(file.exists("/Users/xialab/Dropbox/sqlite/")){
@@ -135,7 +136,28 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
     paramSet <<- paramSet;
   }else{
     paramSet$sqlite.path <- sqlite.path;
-    paramSet$lib.path <- paste0(path, dataPath);
+    # Reference-data (geneset .rds, localization .qs) lives in the SHARED, consolidated
+    # <app>/resources/data. lib.path used to be RELATIVE ("../../../../resources/data/"),
+    # which only resolves when the run cwd sits at <app>/<tool>/resources/users/<user>. On
+    # OmicsVerse run dirs live in a SEPARATE storage volume, so R's physical ".." walks out
+    # of the app and every enrichment read failed with "cannot open the connection" (error
+    # 127). Derive the ABSOLUTE shared data dir from a loader-set anchor (.rscripts.abs.path,
+    # set in _script_loader.R before Init.Data; else the shared .ov.shared.rscripts.dir set by
+    # SharedRSession); fall back to the relative path only when neither anchor is available.
+    shared.data <- tryCatch({
+      a <- get0(".rscripts.abs.path", envir = globalenv(), ifnotfound = NA_character_)
+      if (length(a) == 1 && !is.na(a) && nzchar(a)) {
+        file.path(dirname(dirname(dirname(a))), "resources", "data")
+      } else {
+        sd <- get0(".ov.shared.rscripts.dir", envir = globalenv(), ifnotfound = NA_character_)
+        if (length(sd) == 1 && !is.na(sd) && nzchar(sd)) file.path(dirname(sd), "data") else NA_character_
+      }
+    }, error = function(e) NA_character_);
+    if (!is.na(shared.data) && dir.exists(file.path(shared.data, "libs"))) {
+      paramSet$lib.path <- paste0(shared.data, "/");
+    } else {
+      paramSet$lib.path <- paste0(path, dataPath);
+    }
   }
   print(paste("sqlitePath:", sqlite.path));
 
@@ -591,8 +613,17 @@ GetSysMessages <- function(){
 setResourceDir <- function(path){
   resource.dir <<- paste0(path, "/");
   paramSet <- readSet(paramSet, "paramSet");
-  
-  paramSet$lib.path <- paste0(resource.dir,"data/");
+
+  # Standalone ProteoAnalyst keeps reference data under its own
+  # <resource.dir>/data. The hosted app shares ONE data dir across all tools,
+  # so there resource.dir (".../<tool>/resources/") is two levels below it.
+  # on.ov marks the hosted environment; derive the path from resource.dir
+  # rather than a relative literal so it does not depend on the R cwd.
+  if (isTRUE(tryCatch(get("on.ov", envir = globalenv()), error = function(e) FALSE))) {
+    paramSet$lib.path <- paste0(dirname(dirname(resource.dir)), "/resources/data/");
+  } else {
+    paramSet$lib.path <- paste0(resource.dir,"data/");
+  }
   print(paramSet$lib.path);
   saveSet(paramSet, "paramSet");
 }

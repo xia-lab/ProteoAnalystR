@@ -192,12 +192,19 @@ ImputeMissingVar <- function(dataName="", method="min"){
   msgSet$current.msg <- current.msg;
   saveSet(msgSet, "msgSet");
 
+  # Record the imputation method alongside the other processing options, so the
+  # report and slides can state it. Until now the chosen method survived only inside
+  # msgSet$current.msg, which is free text, and both surfaces looked up an
+  # impute.opt that nothing ever wrote.
+  paramSet$impute.opt <- method;
+  saveSet(paramSet, "paramSet");
+
   data.missed <- as.data.frame(new.mat);
   rownames(data.missed) <- row.nms;
 
   saveDataQs(data.missed, "data.missed.qs", paramSet$anal.type, dataName);
   dataSet$data.norm <- data.missed
-  
+
   RegisterData(dataSet);
 }
 
@@ -342,6 +349,9 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min") {
   fast.write(sanitizeSmallNumbers(new.mat), file="data_imputed.csv");
   msgSet$current.msg <- current.msg;
   saveSet(msgSet, "msgSet");
+  # Same record as ImputeMissingVar, so a phospho run states its imputation method
+  # on the report and slides too.
+  paramSet$impute.opt <- method;
   saveSet(paramSet, "paramSet");
   return(RegisterData(dataSet));
 }

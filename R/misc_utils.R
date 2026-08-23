@@ -644,70 +644,83 @@ PerformSetOperation_DataEnr <- function(nms, operation, refNm){
   return(com.symbols);
 }
 
-#' Execute function in isolated RSclient fork
-#' @param func Function to run in forked Rserve child
-#' @param args List of arguments passed via do.call
-#' @param timeout_sec Hard timeout before child is killed
-#' @return Result of do.call(func, args)
-run_func_via_rsclient <- function(func, args = list(), timeout_sec = 60) {
-  # Docker self-host: a NESTED RSclient connection (an Rserve session opening a
-  # connection back to Rserve on 6311) reliably crashes the spawned worker with
-  # "Fatal error: unable to initialize the JIT", which leaves the caller looping.
-  # The subprocess buys nothing here, so run the function in-process. `func` is a
-  # self-contained closure that exchanges data through its bridge files via the
-  # globally-defined ov_qs_* helpers, so it behaves identically here or in a worker.
-  if (file.exists("/.dockerenv")) {
-    setTimeLimit(elapsed = timeout_sec, transient = TRUE)
-    on.exit(setTimeLimit(elapsed = Inf), add = TRUE)
-    return(invisible(do.call(func, args)))
+
+# Backward-compatible alias: external/community callers of the old name still resolve.
+run_func_via_rc_microservice <- function(...) run_func_via_microservice(...)
+
+run_func_via_microservice <- function(func, args = list(), timeout_sec = 60) {
+  # RSclient has been retired — always run in a fresh callr subprocess (falling
+  # back to in-process below); never dispatch to the nested RSclient fork.
+  # Run the closure in a fresh, short-lived R process (a microservice), which then exits and reclaims
+  # all memory it used plus any packages it attached. Replaces the old nested Rserve-client path, which
+  # reliably crashed the worker with "Fatal error: unable to initialize the JIT" (Rserve error 127) —
+  # the failure that left count normalization (logcount/RLE/TMM/MORlog) throwing and downstream DE
+  # running on raw counts. Falls back to in-process if callr is unavailable or the child errors, so a
+  # caller never breaks. `func` is a self-contained closure that exchanges data via ov_qs_* bridge
+  # files, so the child only needs those helpers defined; the result travels back through the files.
+  if (requireNamespace("callr", quietly = TRUE)) {
+    child_failed <- FALSE
+    res <- tryCatch(
+      callr::r(
+        func = function(func, args) {
+          ov_qs_read <- function(file, ...) {
+            if (file.exists(file)) { r <- try(qs2::qs_read(file, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(file, ...)) }
+            if (endsWith(tolower(file), ".qs")) { v2 <- paste0(substr(file, 1, nchar(file) - 3L), ".qs2"); if (file.exists(v2)) { r <- try(qs2::qs_read(v2, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v2, ...)) } }
+            else if (endsWith(tolower(file), ".qs2")) { v1 <- paste0(substr(file, 1, nchar(file) - 4L), ".qs"); if (file.exists(v1)) { r <- try(qs2::qs_read(v1, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v1, ...)) } }
+            stop("ov_qs_read: neither .qs2 nor .qs found for: ", file, call. = FALSE)
+          }
+          ov_qs_save <- function(obj, file, ...) { .a <- list(...); for (.k in c("preset", "nthreads", "check_hash")) .a[[.k]] <- NULL; do.call(qs2::qs_save, c(list(object = obj, file = file), .a)); invisible(file) }
+          ov_qs_exists <- function(file) { if (file.exists(file)) return(TRUE); if (endsWith(tolower(file), ".qs")) return(file.exists(paste0(substr(file, 1, nchar(file) - 3L), ".qs2"))); if (endsWith(tolower(file), ".qs2")) return(file.exists(paste0(substr(file, 1, nchar(file) - 4L), ".qs"))); FALSE }
+          assign("ov_qs_read", ov_qs_read, globalenv()); assign("ov_qs_save", ov_qs_save, globalenv()); assign("ov_qs_exists", ov_qs_exists, globalenv())
+          do.call(func, args)
+        },
+        args = list(func = func, args = args), timeout = timeout_sec, show = FALSE
+      ),
+      error = function(e) { message("[rc_microservice] child failed (", conditionMessage(e), "); running in-process"); child_failed <<- TRUE; NULL })
+    if (!child_failed) return(res)
   }
-  conn <- RSclient::RS.connect(host = "localhost", port = 6311)
-  on.exit(try(RSclient::RS.close(conn), silent = TRUE))
-  # Inject the qs wrapper helpers into the subprocess R session. Mirrors the
-  # definitions in _script_loader.R / XiaLabPro/R/ov_persistence.R so callers
-  # writing `ov_qs_read(f)` / `ov_qs_save(obj, f)` inside their subprocess func
-  # body work transparently — the subprocess is a fresh R session and does not
-  # inherit master-session helpers otherwise.
-  RSclient::RS.eval(conn, quote({
-    ov_qs_read <- function(file, ...) {
-      if (file.exists(file)) {
-        r <- try(qs2::qs_read(file, ...), silent = TRUE)
-        if (!inherits(r, "try-error")) return(r)
-        return(qs::qread(file, ...))
-      }
-      if (endsWith(tolower(file), ".qs")) {
-        v2 <- paste0(substr(file, 1, nchar(file) - 3L), ".qs2")
-        if (file.exists(v2)) { r <- try(qs2::qs_read(v2, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v2, ...)) }
-      } else if (endsWith(tolower(file), ".qs2")) {
-        v1 <- paste0(substr(file, 1, nchar(file) - 4L), ".qs")
-        if (file.exists(v1)) { r <- try(qs2::qs_read(v1, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v1, ...)) }
-      }
-      stop("ov_qs_read: neither .qs2 nor .qs found for: ", file, call. = FALSE)
-    }
-    ov_qs_save <- function(obj, file, ...) {
-      .args <- list(...)
-      for (.k in c("preset", "nthreads", "check_hash")) .args[[.k]] <- NULL
-      do.call(qs2::qs_save, c(list(object = obj, file = file), .args))
-      invisible(file)
-    }
-    ov_qs_exists <- function(file) {
-      if (file.exists(file)) return(TRUE)
-      if (endsWith(tolower(file), ".qs"))  return(file.exists(paste0(substr(file, 1, nchar(file) - 3L), ".qs2")))
-      if (endsWith(tolower(file), ".qs2")) return(file.exists(paste0(substr(file, 1, nchar(file) - 4L), ".qs")))
-      FALSE
-    }
-  }))
-  RSclient::RS.assign(conn, ".exec_wd", getwd())
-  RSclient::RS.assign(conn, ".exec_func", func)
-  RSclient::RS.assign(conn, ".exec_args", args)
-  RSclient::RS.assign(conn, ".exec_timeout", timeout_sec)
-  RSclient::RS.eval(conn, quote({
-    setwd(.exec_wd)
-    setTimeLimit(elapsed = .exec_timeout, transient = TRUE)
-    on.exit(setTimeLimit(elapsed = Inf))
-    do.call(.exec_func, .exec_args)
-  }))
+  # Fallback: run in-process (correct result; no separate-process memory reclaim).
+  setTimeLimit(elapsed = timeout_sec, transient = TRUE)
+  on.exit(setTimeLimit(elapsed = Inf), add = TRUE)
+  invisible(do.call(func, args))
 }
+
+# Run a self-contained closure in an ISOLATED R subprocess and return its result
+# through qs bridge files. ExpressAnalystR/ProteoAnalystR CALL this (dim-reduction
+# PCA diagnostics, normalization, DE, report) but historically did NOT define it —
+# only microbiome/mirnet/metabo/oa/on did — so express/proteo sessions failed with
+# `could not find function "rsclient_isolated_exec"` and those figures errored.
+# It routes through run_func_via_microservice above, which uses a fresh callr
+# subprocess when on.ov is TRUE (this deployment; a nested RSclient fork is
+# unstable here) and falls back to in-process otherwise. The name is legacy — the
+# executor is callr here, not RSclient.
+rsclient_isolated_exec <- function(func_body, input_data, packages = character(0),
+                                   timeout = 180, output_type = "qs") {
+  bridge_tmp <- file.path(tempdir(), "rsclient_bridge")
+  if (!dir.exists(bridge_tmp)) dir.create(bridge_tmp, recursive = TRUE)
+  uid <- paste0(sample(letters, 6), collapse = "")
+  input_path  <- file.path(bridge_tmp, paste0(uid, "_in.qs"))
+  output_path <- file.path(bridge_tmp, paste0(uid, "_out.qs"))
+  ov_qs_save(input_data, input_path, preset = "fast"); Sys.sleep(0.02)
+  on.exit({ for (p in c(input_path, output_path)) if (file.exists(p)) unlink(p) }, add = TRUE)
+  result <- run_func_via_microservice(
+    func = function(input_path, output_path, func_body, pkgs) {
+      tryCatch({
+        for (pkg in pkgs) suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+        res <- func_body(ov_qs_read(input_path))
+        ov_qs_save(res, output_path, preset = "fast"); Sys.sleep(0.02)
+        list(success = TRUE)
+      }, error = function(e) list(success = FALSE, message = e$message))
+    },
+    args = list(input_path = input_path, output_path = output_path,
+                func_body = func_body, pkgs = packages),
+    timeout_sec = timeout)
+  if (file.exists(output_path)) return(ov_qs_read(output_path))
+  msg <- if (!is.null(result$message)) result$message else "isolated exec subprocess failed"
+  message("[rsclient_isolated_exec] ", msg)
+  return(list(success = FALSE, message = msg))
+}
+
 
 #' Execute heavy package function in isolated RSclient fork
 #' @param func_body Function(input_data) to run in child
@@ -717,7 +730,35 @@ run_func_via_rsclient <- function(func, args = list(), timeout_sec = 60) {
 #' @param output_type "qs" for complex objects, "arrow" for data frames
 #' @return Result from child process
 
+# Round numerics on CSV export. A double carries ~15 significant digits; for normalized
+# intensities, log-CPM and p-values that is roughly ten digits of arithmetic noise, and it
+# dominates the file: a 16354 x 134 normalized matrix wrote 37.6 MB, 58% of which was
+# trailing digits. Applied per COLUMN, never to a whole data.frame -- signif() over a
+# character column errors -- and only to doubles, so integer counts and IDs stay exact.
+# Digits come from an option so the precision can be tuned without editing every package:
+#   options(ov.csv.signif = 8)   # more precision
+#   options(ov.csv.signif = 0)   # disable, write full precision
+# Any failure returns the input untouched: rounding must never be able to break a write.
+.ov_signif_cols <- function(dat, digits = getOption("ov.csv.signif", 6)) {
+    tryCatch({
+        if (is.null(dat)) return(dat);
+        if (is.null(digits) || !is.numeric(digits) || length(digits) != 1 ||
+            is.na(digits) || digits <= 0) return(dat);
+        if (is.matrix(dat)) {
+            if (is.double(dat)) dat <- signif(dat, digits);
+            return(dat);
+        }
+        if (is.data.frame(dat)) {
+            for (.j in seq_along(dat)) {
+                if (is.double(dat[[.j]])) dat[[.j]] <- signif(dat[[.j]], digits);
+            }
+        }
+        dat;
+    }, error = function(e) dat);
+}
+
 fast.write <- function(dat, file, row.names=TRUE){
+    dat <- .ov_signif_cols(dat);
     tryCatch(
         {
            if(is.data.frame(dat)){
@@ -736,6 +777,7 @@ fast.write <- function(dat, file, row.names=TRUE){
 }
 
 fast.write.csv <- function(dat, file, row.names=TRUE){
+    dat <- .ov_signif_cols(dat);
     tryCatch(
         {
            if(is.data.frame(dat)){
@@ -1370,9 +1412,18 @@ PrepareSqliteDB <- function(sqlite_Path, onweb = TRUE) {
   if(file.exists(sqlite_Path)) {return(TRUE)};
 
   dbNM <- basename(sqlite_Path);
+  # TODO(distribution): serve reference DBs from durable registry.omicsverse.com/R2
   DonwloadLink <- paste0("https://www.xialab.ca/resources/sqlite/", dbNM);
-  download.file(DonwloadLink, sqlite_Path);
-  return(TRUE)
+  ok <- tryCatch({
+    download.file(DonwloadLink, sqlite_Path, mode = "wb");
+    file.exists(sqlite_Path) && file.info(sqlite_Path)$size > 0;
+  }, error = function(e) FALSE, warning = function(w) FALSE);
+  if(!ok){
+    if(file.exists(sqlite_Path)) unlink(sqlite_Path);  # drop partial/empty download
+    AddErrMsg(paste0("Reference database '", dbNM, "' unavailable — check internet, or use the bundled image / mount OMICS_LIB_DIR."));
+    return(FALSE);
+  }
+  return(TRUE);
 }
 
 saveDataQs <-function(data, name, module.nm, dataName){
@@ -1622,7 +1673,8 @@ BuildCEMiNet <- function(dataName,
                          min_ngen    = 30,
                          cor_method  = "pearson",
                          verbose     = TRUE,
-                         auto_impute = TRUE) {  # <-- Auto-impute NAs by default
+                         auto_impute = TRUE,     # <-- Auto-impute NAs by default
+                         force_beta  = FALSE) {  # <-- take the best available soft threshold
 
   ## Call the implementation (loaded at session init)
   res <- my.build.cemi.net(
@@ -1631,7 +1683,8 @@ BuildCEMiNet <- function(dataName,
     min_ngen    = min_ngen,
     cor_method  = cor_method,
     verbose     = verbose,
-    auto_impute = auto_impute  # <-- Pass through auto_impute parameter
+    auto_impute = auto_impute, # <-- Pass through auto_impute parameter
+    force_beta  = force_beta
   )
   return(res);
 }

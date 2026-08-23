@@ -139,6 +139,12 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
   paramSet$norm.opt   <- norm.opt
   paramSet$var.perc   <- var.thresh
   paramSet$abun.perc  <- count.thresh
+  # The valid-value filter is what actually removes proteins here, so the report and the deck
+  # need it too. Only the two percentile knobs were recorded, which is why those surfaces could
+  # describe filtering that was off while saying nothing about the filter that ran.
+  paramSet$remove.missing  <- isTRUE(removeMissing) || identical(removeMissing, "true") ||
+                              identical(removeMissing, "TRUE")
+  paramSet$missing.percent <- suppressWarnings(as.numeric(missingPercent))
 
   if (identical(norm.opt, "MORlog")) {
 
@@ -696,7 +702,31 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
     }
     zero.ind <- !is.na(data) & data == 0
     miss.ind <- miss.ind | zero.ind
-    miss.frac <- rowMeans(miss.ind)
+    # GROUP-AWARE. Proteomics missingness is not random: a protein below the detector limit in
+    # one condition and abundant in the other is absent from half the samples BY BIOLOGY, and
+    # that is the "turn-on" case an experiment exists to find. Judged across all samples it is
+    # 50% missing and gets dropped at any threshold under 50 -- the same defect as filtering
+    # RNA-seq counts on their mean across groups.
+    #
+    # The fraction is therefore taken WITHIN each group and the BEST group decides. With the
+    # threshold at 30 this keeps a protein present in at least 70% of the samples of at least
+    # one group, and the parameter keeps its existing meaning ("% missing tolerated").
+    grp <- dataSet$cls
+    if (is.null(grp) || length(grp) != ncol(data)) {
+      grp <- tryCatch(dataSet$meta.info[colnames(data), 1], error = function(e) NULL)
+    }
+    if (!is.null(grp) && length(grp) == ncol(data) &&
+        length(unique(grp[!is.na(grp)])) > 1) {
+      gf <- droplevels(factor(grp))
+      per.grp <- vapply(levels(gf), function(lv) {
+        cols <- which(gf == lv)
+        if (!length(cols)) rep(1, nrow(miss.ind)) else rowMeans(miss.ind[, cols, drop = FALSE])
+      }, numeric(nrow(miss.ind)))
+      if (is.null(dim(per.grp))) per.grp <- matrix(per.grp, nrow = nrow(miss.ind))
+      miss.frac <- apply(per.grp, 1, min, na.rm = TRUE)   # the group where it is best observed
+    } else {
+      miss.frac <- rowMeans(miss.ind)                     # no usable grouping -> previous behaviour
+    }
 
     rm.miss <- miss.frac > (miss.pct.num/100)
 
@@ -705,6 +735,16 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
       rm.miss.msg <- paste("Removed", sum(rm.miss), "features with >", miss.pct.num, "% missing values.")
       msg <- paste(msg, rm.miss.msg)
     }
+  }
+
+  # Constant features come out ALWAYS, independently of the variance threshold. A feature with
+  # one distinct value has nothing for VSN's mean-variance fit, no correlation and no model to
+  # estimate, and disabling the percentile cut must not silently disable this too.
+  const.inx <- apply(data, 1, function(x) { u <- unique(x[!is.na(x)]); length(u) <= 1L })
+  const.inx[is.na(const.inx)] <- TRUE
+  if (any(const.inx) && sum(!const.inx) >= 2) {
+    data <- data[!const.inx, , drop = FALSE]
+    msg <- paste(msg, "Removed", sum(const.inx), "constant features.", collapse = " ")
   }
 
   # Check if we have data left after filtering
@@ -1827,7 +1867,7 @@ PlotProteinProfile <- function(dataName = "", protein_id = "", imgName = "prot_p
   if (tolower(type) == "pdf") {
     grDevices::pdf(file = finalImg, width = 12, height = 6)
   } else {
-    grDevices::png(filename = finalImg, width = 900, height = 450, res = dpi)
+    grDevices::png(filename = finalImg, width = 900, height = 450, res = dpi, type = "cairo")
   }
   p <- ggplot()
   if (nrow(pep_df) > 0) {
@@ -3557,7 +3597,7 @@ PlotProteoformIntensityProfile <- function(dataName, imageName, isoA, isoB,
   p3 <- make_group_plot(df.total, "", "Aggregate signal", abundance.ylim)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = 12.8, height = 5.2, unit = "in",
+  Cairo::Cairo(file = imgName, width = 12.8, height = 5.2, unit = "in",
         dpi = dpi, bg = "white", type = format)
   grid.newpage()
   # Convert to gtables and equalize per-row heights so every sub-plot's panel
@@ -3752,7 +3792,7 @@ PlotProteoformOverview <- function(dataName, isoformGroup, imageName,
 
   img.width <- max(8, 2.5 * n.iso + 2.5)
   imgName   <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = img.width, height = 5.2, unit = "in",
+  Cairo::Cairo(file = imgName, width = img.width, height = 5.2, unit = "in",
         dpi = dpi, bg = "white", type = format)
   grid.newpage()
   n.cols <- length(panels) + 1L
@@ -4155,7 +4195,7 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
     ggtitle(trunc.seq, subtitle = mod.label)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
-  Cairo(file = imgName, width = 5, height = 5, unit = "in", dpi = dpi, bg = "white", type = format)
+  Cairo::Cairo(file = imgName, width = 5, height = 5, unit = "in", dpi = dpi, bg = "white", type = format)
   invisible(print(myplot))
   invisible(dev.off())
   return(invisible(1))
@@ -4240,7 +4280,7 @@ PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
   imgNm <- paste0(imageName, "dpi", dpi, ".", format)
   h <- max(3, nrow(summary_df) * 1.1 + 1.5)
   require(Cairo)
-  Cairo(file = imgNm, width = 6.5, height = h, unit = "in", dpi = dpi, bg = "white",
+  Cairo::Cairo(file = imgNm, width = 6.5, height = h, unit = "in", dpi = dpi, bg = "white",
         type = if (format == "pdf") "pdf" else "png")
   print(p)
   dev.off()

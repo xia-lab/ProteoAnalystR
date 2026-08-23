@@ -1,3 +1,25 @@
+# Open a device that matches the requested format.
+#
+# The filename already honoured `format` (paste0(imgName, ".", format)) while the device was
+# always png(), so asking for a PDF produced a PNG carrying a .pdf name. The export control
+# reads formals() to decide what to offer, so it advertised PDF and delivered a broken file.
+#
+# dpi is deliberately dropped to 72 for vector formats: Cairo treats dpi on a vector device as
+# a scale against 72, so passing 300 there renders an 8x6in page at 1.92x1.44in and the plot
+# dies with "figure margins too large".
+.ov_open_fig_dev <- function(file, width, height, dpi = 150, format = "png") {
+  fmt <- if (is.null(format) || !nzchar(format[1])) "png" else tolower(format[1])
+  if (fmt == "png") {
+    png(file, width = width, height = height, units = "in", res = dpi,
+        type = "cairo", bg = "white")
+    return(invisible(NULL))
+  }
+  vec <- fmt %in% c("pdf", "svg", "ps", "eps", "postscript")
+  Cairo::Cairo(file = file, width = width, height = height, unit = "in",
+               dpi = if (vec) 72 else dpi, type = fmt, bg = "white")
+  invisible(NULL)
+}
+
 ##################################################
 ## R script for ProteoAnalyst
 ## Description: Functions for enrichment analysis (GSEA and ORA)
@@ -155,8 +177,26 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   res.mat[,5] <- p.adjust(raw.pvals, "fdr");
   
   # now, clean up result, synchronize with hit.query
-  res.mat <- res.mat[hit.num>0,,drop = F];
-  hits.query <- hits.query[hit.num>0];
+  # Drop pathways with too few query hits. The threshold mirrors the
+  # RIDGE_MIN_HITS=3L convention in utils_ridgeline.R so EVERY enrichment
+  # surface (enr.mat, hits_query, enrichment_<lib>.csv/.json, ridgeline)
+  # shows the same pathway set. This is applied AFTER p.adjust() above, so
+  # FDR is still computed over all tested gene sets (multiple-testing
+  # correction is unchanged) — we only filter the DISPLAYED/exported set.
+  min.hits <- 3L;
+  keep.inx <- hit.num >= min.hits;
+  if(sum(keep.inx) == 0){
+    # Filtering to >=min.hits would empty the result; fall back to the
+    # previous (hits>0) behaviour so the step does not blow up / blank.
+    message("[performEnrichAnalysis] no pathway has >= ", min.hits,
+            " query hits; keeping all pathways with >=1 hit.");
+    keep.inx <- hit.num > 0;
+  }
+  res.mat <- res.mat[keep.inx,,drop = F];
+  hits.query <- hits.query[keep.inx];
+  # Re-save the >=min.hits filtered hit list so hits_query.qs on disk matches
+  # the exported enr.mat/csv/json (the earlier save held the unfiltered list).
+  ov_qs_save(hits.query, "hits_query.qs");
 
   if(nrow(res.mat)> 1){
     # order by p value
@@ -189,14 +229,14 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
 
     if(sum(imp.inx) < 20){ # too little left, give the top ones
       topn <- ifelse(nrow(res.mat) > 20, 20, nrow(res.mat));
-      res.mat <- res.mat[1:topn,];
+      res.mat <- res.mat[1:topn,,drop=FALSE];
       hits.query <- hits.query[1:topn];
     }else{
-      res.mat <- res.mat[imp.inx,];
+      res.mat <- res.mat[imp.inx,,drop=FALSE];
       hits.query <- hits.query[imp.inx];
       if(sum(imp.inx) > 120){
         # now, clean up result, synchronize with hit.query
-        res.mat <- res.mat[1:120,];
+        res.mat <- res.mat[1:120,,drop=FALSE];
         hits.query <- hits.query[1:120];
       }
     }
@@ -210,7 +250,6 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   if(any(duplicated(rownames(res.mat)))) {
     res.mat <- res.mat[!duplicated(rownames(res.mat)), ]
     hits.query <- hits.query[match(rownames(res.mat), names(hits.query))]
-    print("Duplicates in enr.mat were removed.")
   } else {
     res.mat <- res.mat
   }
@@ -852,9 +891,37 @@ FindCommunities <- function(method = "walktrap",
 
   seed.expr   <- paramSet$seed.expr
   ppi.comps <- analSet$ppi.comps
-  current.net <- ppi.comps[[current.net.nm]]
-  
-  if (igraph::vcount(current.net) < 2L) return("NA||Graph too small")
+  # Resolve the current network from the PERSISTED paramSet, not the loose
+  # `current.net.nm` global. On an AI result-view / project-restore the network
+  # JSON renders from disk but the network-drawing function never re-runs, so the
+  # global is absent and `ppi.comps[[current.net.nm]]` errored with
+  # "object 'current.net.nm' not found" — the interactive Module Explorer then
+  # returned NA for every algorithm. Mirror graph_utils_general.R, which already
+  # reads paramSet$current.net.nm, with a fallback to the first component.
+  cur.net.nm <- paramSet$current.net.nm
+  if (is.null(cur.net.nm) || !(cur.net.nm %in% names(ppi.comps))) {
+    if (exists("current.net.nm") && !is.null(current.net.nm) && current.net.nm %in% names(ppi.comps)) {
+      cur.net.nm <- current.net.nm
+    } else {
+      cur.net.nm <- names(ppi.comps)[1]
+    }
+  }
+  current.net <- if (!is.null(cur.net.nm)) ppi.comps[[cur.net.nm]] else NULL
+
+  if (is.null(current.net) || igraph::vcount(current.net) < 2L) return("NA||Graph too small")
+
+  # Symbol lookup table for community labels. `ppi.net` is a loose global set
+  # only while the network is drawn in-session; after a restore it is absent, so
+  # resolve it defensively and fall back to the graph's own vertex attributes.
+  node.data.map <- if (exists("ppi.net") && !is.null(ppi.net[["node.data"]])) {
+    ppi.net[["node.data"]]
+  } else {
+    nm <- igraph::V(current.net)$name
+    lbl <- igraph::V(current.net)$Label
+    if (is.null(nm)) nm <- as.character(seq_len(igraph::vcount(current.net)))
+    if (is.null(lbl)) lbl <- nm
+    data.frame(Id = as.character(nm), Label = as.character(lbl), stringsAsFactors = FALSE)
+  }
   
   # ---- choose component(s) ----------------------------------------------------
   pick_largest <- function(g) {
@@ -898,8 +965,8 @@ FindCommunities <- function(method = "walktrap",
     }
     
     # symbol mapping with fallback to name
-    hit.x <- match(vnames, ppi.net[["node.data"]][, 1])
-    sybls <- ppi.net[["node.data"]][hit.x, 2]
+    hit.x <- match(vnames, node.data.map[, 1])
+    sybls <- node.data.map[hit.x, 2]
     sybls[is.na(sybls)] <- vnames[is.na(sybls)]
     names(sybls) <- vnames
     
@@ -1083,8 +1150,8 @@ PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width
     cat("[PlotEnrichNetworkPNG] enr.mat.qs exists:", file.exists("enr.mat.qs"), "\n")
     qs_files <- list.files(pattern = "\\.qs$")
     cat("[PlotEnrichNetworkPNG] qs files in wd:", paste(qs_files, collapse=", "), "\n")
-    enr.mat <- qs::qread("enr.mat.qs")
-    hits.query <- qs::qread("hits_query.qs")
+    enr.mat <- ov_qs_read("enr.mat.qs")
+    hits.query <- ov_qs_read("hits_query.qs")
     if (is.null(enr.mat) || nrow(enr.mat) == 0) return(0)
     if ("FDR" %in% colnames(enr.mat)) {
       ord.inx <- order(enr.mat[, "FDR"])
@@ -1107,7 +1174,7 @@ PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width
     l <- layout_with_graphopt(g)
     imgPath <- paste0(imgName, ".", format)
     w.val <- if (is.na(width)) 8 else width/dpi
-    png(imgPath, width=w.val, height=w.val*0.75, units="in", res=dpi)
+    .ov_open_fig_dev(imgPath, width=w.val, height=w.val*0.75, dpi=dpi, format=format)
     par(mar=c(1,1,2,1)); plot(g, layout=l, main="Enrichment Network (KEGG)"); dev.off()
     return(1)
   }, error = function(e) { message("PlotEnrichNetworkPNG error: ", e$message); return(0) })
@@ -1116,8 +1183,8 @@ PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width
 # ── Server-side PNG: Gene-Pathway Enrichment Heatmap (ProteoAnalyst version) ──
 PlotEnrichHeatmapPNG <- function(dataName, imgName, format="png", dpi=150, width=NA) {
   tryCatch({
-    enr.mat <- qs::qread("enr.mat.qs")
-    current.geneset <- if (file.exists("current_featureset.qs")) qs::qread("current_featureset.qs") else NULL
+    enr.mat <- ov_qs_read("enr.mat.qs")
+    current.geneset <- if (file.exists("current_featureset.qs")) ov_qs_read("current_featureset.qs") else NULL
     if (is.null(enr.mat) || nrow(enr.mat) < 2 || is.null(current.geneset)) return(0)
 
     # PA stores UniProt IDs in prot.mat; use analSet$uniprot_to_entrez_map for Entrez IDs
@@ -1157,7 +1224,7 @@ PlotEnrichHeatmapPNG <- function(dataName, imgName, format="png", dpi=150, width
     imgPath <- paste0(imgName, ".", format)
     w.val <- if (is.na(width)) max(7, ncol(gp.mat)*0.6+3) else width/dpi
     h.val <- max(5, nrow(gp.mat)*0.25+2)
-    png(imgPath, width=w.val, height=h.val, units="in", res=dpi, bg="white")
+    .ov_open_fig_dev(imgPath, width=w.val, height=h.val, dpi=dpi, format=format)
     par(mar=c(1, 8, max(4, max(nchar(colnames(gp.mat)))*0.3), 1))
     nr <- nrow(gp.mat); nc <- ncol(gp.mat)
     plot(NA, xlim=c(0,nc), ylim=c(0,nr), xaxt="n", yaxt="n", xlab="", ylab="", bty="n", asp=NA)

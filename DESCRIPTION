@@ -24,19 +24,20 @@ biocViews: Proteomics, MassSpectrometry, DifferentialExpression, Normalization,
 Imports:
     data.table, qs, qs2, jsonlite, RJSONIO, rjson,
     dplyr, tidyr, tibble, reshape2, reshape, readr,
-    Matrix, matrixStats, S4Vectors,
+    Matrix, matrixStats, S4Vectors, lattice,
     limma, DEqMS, edgeR, DESeq2, sva, MSstats, MSstatsConvert, metagenomeSeq,
     impute, imputeLCMD, preprocessCore,
-    igraph, WGCNA, fastcluster, fgsea,
+    igraph, WGCNA, fastcluster, fgsea, CEMiTool,
     ggplot2, RColorBrewer, scales, ggrepel, gridExtra, ggdendro, Cairo, UpSetR,
+    plotly, rgl, ggpubr, ggridges, see, graphlayouts, alphashape3d, ks,
     pROC, ROCR, caret, randomForest, e1071, pls, lars, MASS, boot, caTools,
     pcaMethods, Rtsne, uwot, RSQLite, RSclient, curl, pryr, png, xtable,
     RhpcBLASctl, arrow
 Suggests:
-    ggpubr, ggridges, patchwork, see, graphlayouts, plotly, rgl,
-    PhosR, CEMiTool, backbone,
+    patchwork, PhosR, backbone,
     multiUS, SeqKnn, rrcovNA,
     BiocManager
 Remotes:
     github::xia-lab/XiaLabCppLib
+Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
