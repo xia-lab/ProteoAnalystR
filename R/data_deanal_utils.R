@@ -1243,10 +1243,40 @@ SetProteoCovariateVars <- function(dataName = "", primaryVar = "", adjVarsCsv = 
   return(setup$levels);
 }
 
+# Build the differential-expression design matrix. Base is the no-intercept group
+# design `model.matrix(~ 0 + cls)` with columns named by the class levels (so
+# makeContrasts() in prepareContrast can reference "GroupB-GroupA"). When an additive
+# covariate frame is supplied (SetProteoCovariateVars -> dataSet$adj.frame), its columns
+# are folded in additively for covariate-adjusted DE. With adj.frame NULL/empty this is
+# byte-identical to the historical `model.matrix(~ 0 + cls); colnames <- levels(cls)`.
+ov_design_matrix <- function(cls, adj.frame = NULL) {
+  cls <- factor(cls)
+  design <- stats::model.matrix(~ 0 + cls)
+  colnames(design) <- levels(cls)
+  if (is.null(adj.frame) || !is.data.frame(adj.frame) || ncol(adj.frame) == 0) {
+    return(design)                       # no covariates: exactly the old behaviour
+  }
+  # Fold additive covariates (numeric or factor) into the design.
+  adj <- as.data.frame(adj.frame, stringsAsFactors = FALSE)
+  colnames(adj) <- make.names(colnames(adj), unique = TRUE)
+  cov.mm <- tryCatch(
+    stats::model.matrix(
+      stats::as.formula(paste("~", paste(colnames(adj), collapse = " + "))),
+      data = adj, na.action = stats::na.pass),
+    error = function(e) NULL)
+  if (is.null(cov.mm)) return(design)
+  cov.mm <- cov.mm[, colnames(cov.mm) != "(Intercept)", drop = FALSE]
+  # Only append when rows stay aligned with the group design (guard against NA-dropped rows).
+  if (nrow(cov.mm) == nrow(design) && ncol(cov.mm) > 0 && !anyNA(cov.mm)) {
+    design <- cbind(design, cov.mm)
+  }
+  design
+}
+
 SetupDesignMatrix<-function(dataName="", deMethod){
   dataSet <- readDataset(dataName);
   paramSet <- readSet(paramSet, "paramSet");
-  cls <- dataSet$cls; 
+  cls <- dataSet$cls;
   # Additive covariate adjustment when SetProteoCovariateVars stamped an adj.frame; identical
   # to the old ~ 0 + cls when it did not. prepareContrast consumes dataSet$design unchanged,
   # so this one line carries the adjustment into both limma and DEqMS.
