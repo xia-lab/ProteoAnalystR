@@ -24,7 +24,7 @@ list(train, test) with covariate effects removed
 Estimate covariate-removal coefficients from TRAINING samples only
 (least-squares fit of expression on the primary condition + covariates), then
 subtract the covariate contribution from both the training and the held-out
-test samples. The held-out fold contributes only its covariate *values* (used
+test samples. The held-out fold contributes only its covariate \emph{values} (used
 to build \code{cov.test}); its expression and outcome are never used to fit the
 adjustment, so the resulting cross-validation performance is not inflated by
 information leakage. This is the fold-wise analogue of limma::removeBatchEffect.

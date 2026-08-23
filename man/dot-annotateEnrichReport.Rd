@@ -5,8 +5,8 @@
 \title{Attach standardized statistics-reporting columns to an enrichment result
 table so every row records how the test was powered and thresholded.
 Adds: N_Sig_Tested, N_Background, DE_Sig_Cutoff, DE_log2FC_Cutoff,
-      Enrich_FDR_Cutoff, Significant (FDR-driven).
-Assumes the table already carries raw `P_value` and BH-adjusted `FDR`.}
+Enrich_FDR_Cutoff, Significant (FDR-driven).
+Assumes the table already carries raw \code{P_value} and BH-adjusted \code{FDR}.}
 \usage{
 .annotateEnrichReport(df, paramSet, n_tested, n_background, enrich_fdr = 0.05)
 }
@@ -14,6 +14,6 @@ Assumes the table already carries raw `P_value` and BH-adjusted `FDR`.}
 Attach standardized statistics-reporting columns to an enrichment result
 table so every row records how the test was powered and thresholded.
 Adds: N_Sig_Tested, N_Background, DE_Sig_Cutoff, DE_log2FC_Cutoff,
-      Enrich_FDR_Cutoff, Significant (FDR-driven).
-Assumes the table already carries raw `P_value` and BH-adjusted `FDR`.
+Enrich_FDR_Cutoff, Significant (FDR-driven).
+Assumes the table already carries raw \code{P_value} and BH-adjusted \code{FDR}.
 }

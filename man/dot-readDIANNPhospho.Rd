@@ -10,11 +10,13 @@
 \item{filePath}{Path to DIA-NN report file}
 
 \item{opts}{List with filtering options:
-- loc.prob: Minimum PTM.Site.Confidence (default 0.75)
-- peptide.fdr: Maximum Q.Value (default 0.01)
-- protein.fdr: Maximum Global.PG.Q.Value (default 0.01)
-- removeContaminants: Remove contaminants (default TRUE)
-- removeDecoys: Remove decoys (default TRUE)}
+\itemize{
+\item loc.prob: Minimum PTM.Site.Confidence (default 0.75)
+\item peptide.fdr: Maximum Q.Value (default 0.01)
+\item protein.fdr: Maximum Global.PG.Q.Value (default 0.01)
+\item removeContaminants: Remove contaminants (default TRUE)
+\item removeDecoys: Remove decoys (default TRUE)
+}}
 }
 \value{
 List with data, data_orig, type, format, meta.info, feature.info
@@ -24,14 +26,16 @@ Parse DIA-NN phospho report.tsv file
 }
 \details{
 Expected columns:
-  - Run (sample name)
-  - Protein.Group (protein ID)
-  - Modified.Sequence (peptide with modifications, e.g. PEPT(Phospho)IDE)
-  - Precursor.Id (unique peptide+charge ID)
-  - Stripped.Sequence (unmodified peptide)
-  - Genes (gene names)
-  - Precursor.Quantity or Precursor.Normalised (intensity)
-  - Q.Value (peptide FDR)
-  - Global.PG.Q.Value (protein FDR)
-  - PTM.Site.Confidence (localization probability, 0-1)
+\itemize{
+\item Run (sample name)
+\item Protein.Group (protein ID)
+\item Modified.Sequence (peptide with modifications, e.g. PEPT(Phospho)IDE)
+\item Precursor.Id (unique peptide+charge ID)
+\item Stripped.Sequence (unmodified peptide)
+\item Genes (gene names)
+\item Precursor.Quantity or Precursor.Normalised (intensity)
+\item Q.Value (peptide FDR)
+\item Global.PG.Q.Value (protein FDR)
+\item PTM.Site.Confidence (localization probability, 0-1)
+}
 }

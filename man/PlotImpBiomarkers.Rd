@@ -12,13 +12,13 @@ mdl.inx, measure = "freq", feat.num = 15)
 
 \item{format}{elect the image format, "png", of "pdf".}
 
-\item{dpi}{Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
+\item{dpi}{Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images,
 the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.}
 
-\item{mdl.inx}{Model index, -1 selects the model with the best AUC, input 1-6 to 
+\item{mdl.inx}{Model index, -1 selects the model with the best AUC, input 1-6 to
 view the important features of one of the top six models}
 
-\item{measure}{Choose to rank features by the frequency of being selected "freq", or the 
+\item{measure}{Choose to rank features by the frequency of being selected "freq", or the
 mean importance measure "mean"}
 
 \item{feat.num}{Input the number of features to include in the plot, by default it is 15.}

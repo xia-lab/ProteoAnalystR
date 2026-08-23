@@ -4,7 +4,7 @@
 \alias{GetTrainTestSplitMat}
 \title{Make random partitions}
 \usage{
-GetTrainTestSplitMat(y, propTraining = 2/3, nRuns = 30)
+GetTrainTestSplitMat(y, propTraining = 2/3, nRuns = 30, rseed = 28051968)
 }
 \arguments{
 \item{y}{Input the data}
@@ -12,6 +12,8 @@ GetTrainTestSplitMat(y, propTraining = 2/3, nRuns = 30)
 \item{propTraining}{By default set to 2/3}
 
 \item{nRuns}{By default set to 30}
+
+\item{rseed}{Input the random seed}
 }
 \description{
 Make random partitions, returns matrices indicating

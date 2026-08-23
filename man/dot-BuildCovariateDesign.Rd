@@ -18,7 +18,7 @@ list(primary.design, covariate.design) or NULL covariate.design if none
 }
 \description{
 Construct the design matrices used to regress covariate/batch
-effects out of biomarker data. Only covariate *values* (e.g. age, sex, batch)
+effects out of biomarker data. Only covariate \emph{values} (e.g. age, sex, batch)
 are used here; the outcome/expression is never touched, so this is safe to
 build once from all samples and subset per fold without leaking held-out
 information. The intercept is dropped from the covariate design because

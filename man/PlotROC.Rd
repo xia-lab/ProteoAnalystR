@@ -12,14 +12,14 @@ avg.method, show.conf, show.holdout, focus="fpr", cutoff = 1.0)
 
 \item{format}{Select the image format, "png", of "pdf".}
 
-\item{dpi}{Input the dpi. If the image format is "pdf", 
-users need not define the dpi. For "png" images, 
+\item{dpi}{Input the dpi. If the image format is "pdf",
+users need not define the dpi. For "png" images,
 the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.}
 
-\item{mdl.inx}{Model index, 0 means to compare all models, 
+\item{mdl.inx}{Model index, 0 means to compare all models,
 input 1-6 to plot a ROC curve for one of the top six models}
 
-\item{avg.method}{Input the method to compute the average ROC curve, 
+\item{avg.method}{Input the method to compute the average ROC curve,
 either "threshold", "vertical" or "horizontal"}
 
 \item{show.conf}{Logical, if 1, show confidence interval, if 0 do not show}
@@ -28,7 +28,7 @@ either "threshold", "vertical" or "horizontal"}
 
 \item{focus}{"fpr"}
 
-\item{cutoff}{Input the threshold to limit the calculation of the 
+\item{cutoff}{Input the threshold to limit the calculation of the
 ROC curve, the number must be between 0 and 1.}
 
 \item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}

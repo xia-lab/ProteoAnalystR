@@ -13,13 +13,15 @@ summarize_peptides(
 )
 }
 \arguments{
-\item{peptide_matrix}{A numeric matrix or data frame of peptide intensities. 
+\item{peptide_matrix}{A numeric matrix or data frame of peptide intensities.
 Rows = Peptides, Cols = Samples.
 ASSUMPTION: Data is already Log2 transformed (typical for normalization steps).}
 
 \item{peptide_to_protein_map}{A data frame with two columns: 'Peptide' and 'Protein'.}
 
-\item{method}{The summarization method: "median_polish", "top_n", "mean", "median", "sum".}
+\item{method}{The summarization method: "median_polish" (fast median-sweep
+approximation of Tukey's; default), "tukey" (true iterative Tukey median
+polish), "top_n", "mean", "median", "sum".}
 
 \item{top_n_count}{Integer. Number of peptides to use for "top_n" method.}
 

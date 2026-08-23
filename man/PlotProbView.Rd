@@ -11,7 +11,7 @@ PlotProbView(mSetObj=NA, imgName, format="png", dpi=default.dpi, mdl.inx, show, 
 
 \item{format}{Select the image format, "png", of "pdf".}
 
-\item{dpi}{Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
+\item{dpi}{Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images,
 the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.}
 
 \item{mdl.inx}{Model index, 0 means to compare all models, -1 means to use the best model, input 1-6 to plot a ROC curve for one of the top six models}
@@ -23,8 +23,8 @@ the default dpi is 72. It is suggested that for high-resolution images, select a
 \item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}
 }
 \description{
-Plot of predicted class probabilities. On the x-axis is the proability, 
-and the y-axis is the index of each predicted sample based on the probility. 
+Plot of predicted class probabilities. On the x-axis is the proability,
+and the y-axis is the index of each predicted sample based on the probility.
 The samples are turned into separations at the x-axis.
 This plot can be created for multivariate ROC curve analysis using SVM, PLS, and RandomForest.
 Please note that sometimes, not all samples will be tested, instead they will be plotted

@@ -55,7 +55,7 @@ A vector with c(sig.num, nonSig) - number of significant and non-significant fea
 Result is saved in analSet object.
 }
 \description{
-This function performs a covariate scatter analysis to visualize the effect of 
+This function performs a covariate scatter analysis to visualize the effect of
 covariate adjustment on p-values. It generates a JSON file for interactive visualization.
 
 This function performs a covariate scatter analysis based on the specified parameters.

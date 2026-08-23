@@ -21,8 +21,8 @@ Parse DIA-NN Modified.Sequence to extract phosphosite positions
 }
 \details{
 DIA-NN format examples:
-  "PEPT(Phospho (STY))IDE"  -> Phospho on T at position 4
-  "PEPS(UniMod:21)EQRES(UniMod:21)" -> Two phosphosites (UniMod:21 = Phospho)
-  "M(Oxidation (M))PEPTIDE" -> Oxidation (not phospho, skip)
-  "(UniMod:1)PEPS(UniMod:21)TIDE" -> N-term acetyl + phospho
+"PEPT(Phospho (STY))IDE"  -> Phospho on T at position 4
+"PEPS(UniMod:21)EQRES(UniMod:21)" -> Two phosphosites (UniMod:21 = Phospho)
+"M(Oxidation (M))PEPTIDE" -> Oxidation (not phospho, skip)
+"(UniMod:1)PEPS(UniMod:21)TIDE" -> N-term acetyl + phospho
 }

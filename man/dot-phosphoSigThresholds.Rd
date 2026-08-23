@@ -8,7 +8,7 @@ define the input set of significant phosphosites.}
 .phosphoSigThresholds(paramSet)
 }
 \value{
-list(fdr, fc, selection) where `selection` is "FDR-adjusted" or "raw".
+list(fdr, fc, selection) where \code{selection} is "FDR-adjusted" or "raw".
 }
 \description{
 Read the differential-expression significance thresholds that were used to

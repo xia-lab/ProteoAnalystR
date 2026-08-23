@@ -3,11 +3,13 @@
 \name{SampleNorm_PQN}
 \alias{SampleNorm_PQN}
 \title{Probabilistic Quotient Normalization (PQN)
-1. Perform an integral normalization (sum normalization)
-2. Choose/calculate a reference spectrum (median across samples)
-3. Calculate the quotients of all variables of interest relative to the reference
-4. Calculate the median of these quotients for each sample
-5. Divide all variables of each sample by this median quotient}
+\enumerate{
+\item Perform an integral normalization (sum normalization)
+\item Choose/calculate a reference spectrum (median across samples)
+\item Calculate the quotients of all variables of interest relative to the reference
+\item Calculate the median of these quotients for each sample
+\item Divide all variables of each sample by this median quotient
+}}
 \usage{
 SampleNorm_PQN(data)
 }
@@ -19,9 +21,11 @@ Normalized matrix
 }
 \description{
 Probabilistic Quotient Normalization (PQN)
-1. Perform an integral normalization (sum normalization)
-2. Choose/calculate a reference spectrum (median across samples)
-3. Calculate the quotients of all variables of interest relative to the reference
-4. Calculate the median of these quotients for each sample
-5. Divide all variables of each sample by this median quotient
+\enumerate{
+\item Perform an integral normalization (sum normalization)
+\item Choose/calculate a reference spectrum (median across samples)
+\item Calculate the quotients of all variables of interest relative to the reference
+\item Calculate the median of these quotients for each sample
+\item Divide all variables of each sample by this median quotient
+}
 }

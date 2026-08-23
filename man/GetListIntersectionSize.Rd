@@ -8,16 +8,16 @@ GetListIntersectionSize()
 }
 \value{
 Non-negative integer. 0 when fewer than 2 datalists exist or
- when the intersection is empty.
+when the intersection is empty.
 }
 \description{
 Returns the number of feature IDs (post-MapListIds, so entrez
- / mapped IDs) that are present in every datalist1..N created by
- MapListIds from a "//"-separated multi-list paste. Used by the AI
- workflow orchestrator to decide whether to queue an "overlap" batch
- pass: if the intersection is empty, the orchestrator marks the pass
- as skipped with a clear reason instead of letting downstream steps
- (enrichment, ridgeline, heatmap) fail with cryptic empty-input errors.
+/ mapped IDs) that are present in every datalist1..N created by
+MapListIds from a "//"-separated multi-list paste. Used by the AI
+workflow orchestrator to decide whether to queue an "overlap" batch
+pass: if the intersection is empty, the orchestrator marks the pass
+as skipped with a clear reason instead of letting downstream steps
+(enrichment, ridgeline, heatmap) fail with cryptic empty-input errors.
 }
 \author{
 Jeff Xia \email{jeff.xia@mcgill.ca}

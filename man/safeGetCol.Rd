@@ -20,7 +20,9 @@ Column values as vector, or NA vector if extraction fails
 }
 \description{
 Provides safe column extraction during Arrow migration by:
-1. Trying named column access first (preferred)
-2. Falling back to index if name doesn't exist (with warning)
-3. Returning NA vector with error if both fail
+\enumerate{
+\item Trying named column access first (preferred)
+\item Falling back to index if name doesn't exist (with warning)
+\item Returning NA vector with error if both fail
+}
 }
