@@ -461,7 +461,6 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
 .paProteinDiagLog <- function(...) {
   txt <- paste0(...)
   line <- paste0(format(Sys.time(), "%Y-%m-%d %H:%M:%S"), " ", txt)
-  try(message(line), silent = TRUE)
   try(cat(line, "\n", file = "protein_localization_diagnostics.log", append = TRUE), silent = TRUE)
 }
 
