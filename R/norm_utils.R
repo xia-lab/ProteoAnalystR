@@ -759,7 +759,7 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
   } else if(var.thresh > 0){
     data.before.var <- data
     filter.val <- apply(data, 1, IQR, na.rm=T);
-    nm <- "Interquantile Range";
+    nm <- "Interquartile Range";
     filter.val <- -filter.val
     rk <- rank(filter.val, ties.method='random');
     # remove constant values
