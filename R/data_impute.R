@@ -279,22 +279,49 @@ ImputeMissingVar <- function(dataName="", method="min"){
 }
 
 # Phosphoproteomics-specific imputation (operates on dataSet$data.norm)
-ImputeMissingVarPhospho <- function(dataName = "", method = "min") {
+ImputeMissingVarPhospho <- function(dataName = "", method = "min", min.obs.per.group = 2) {
   dataSet <- readDataset(dataName);
   msgSet <- readSet(msgSet, "msgSet");
   paramSet <- readSet(paramSet, "paramSet");
 
   int.mat <- dataSet$data.norm;
-  # Treat strict zeros as missing (common in proteomics/phospho exports)
-  int.mat[int.mat == 0] <- NA
   if (is.null(int.mat)) {
     msgSet$current.msg <- c(msgSet$current.msg, "No phospho matrix available for imputation.");
     saveSet(msgSet, "msgSet");
     return(0);
   }
+  # Treat strict zeros as missing (common in proteomics/phospho exports)
+  int.mat[int.mat == 0] <- NA
 
   current.msg <- msgSet$current.msg;
   new.mat <- NULL;
+
+  # DETECTION FILTER (before imputation). Phospho/MaxQuant exports are zero-inflated:
+  # a site quantified in only one condition (e.g. one SILAC channel) is otherwise carried
+  # into min/LoD imputation, which fabricates an extreme fold change (a one-channel site
+  # -> log2FC ~ -20) that can pass FDR spuriously. Requiring the site to be genuinely
+  # observed in >= min.obs.per.group samples within EACH group level removes these on/off
+  # artifacts up front (validated on PXD005536: nested-interaction FDR hits 3 -> 0).
+  # Group = the first (primary) metadata factor; fail-open if absent.
+  grp <- tryCatch({
+    mi <- dataSet$meta.info
+    if (!is.null(mi) && NCOL(mi) >= 1) { g <- as.character(mi[[1]]); names(g) <- rownames(mi); g[colnames(int.mat)] } else NULL
+  }, error = function(e) NULL)
+  if (!is.null(grp) && !all(is.na(grp)) && is.numeric(min.obs.per.group) && min.obs.per.group > 0) {
+    lvls <- unique(grp[!is.na(grp)])
+    obs.ok <- sapply(lvls, function(L) {
+      cols <- which(grp == L)
+      if (!length(cols)) rep(TRUE, nrow(int.mat)) else rowSums(!is.na(int.mat[, cols, drop = FALSE])) >= min.obs.per.group
+    })
+    keep <- if (is.matrix(obs.ok)) rowSums(obs.ok) == length(lvls) else obs.ok
+    n.drop <- sum(!keep)
+    if (n.drop > 0 && sum(keep) > 0) {
+      int.mat <- int.mat[keep, , drop = FALSE]
+      current.msg <- c(current.msg, paste0(
+        "Detection filter removed ", n.drop, " phosphosite(s) not observed in at least ",
+        min.obs.per.group, " samples in every group (before imputation)."))
+    }
+  }
 
   if(method=="exclude"){
     # OPTIMIZED: Use rowSums instead of apply for 60-100x speedup
