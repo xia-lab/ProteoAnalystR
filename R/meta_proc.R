@@ -681,7 +681,9 @@ SanityCheckMetaData <- function(){
 #' Returns 1 to indicate successful completion of checks and updates.
 #'
 #' @examples
+#' \dontrun{
 #' CheckMetaIntegrity()
+#' }
 #'
 #' @author Guangyan Zhou \email{guangyan.zhou@mail.mcgill.ca}
 #'

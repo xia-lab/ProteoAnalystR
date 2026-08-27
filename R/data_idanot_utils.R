@@ -482,6 +482,17 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
   result <- rep(NA_character_, length(ids))
   names(result) <- ids
 
+  # Deterministic / offline mode: skip the online UniProt REST lookup entirely.
+  # It only fills display gene symbols; unmapped accessions fall back to the
+  # UniProt ID, so results (and protein counts) are unchanged. Enables
+  # network-independent, reproducible benchmarking. Toggle via the
+  # PROTEOANALYST_OFFLINE environment variable or a global `pa.offline` flag.
+  if (nzchar(Sys.getenv("PROTEOANALYST_OFFLINE")) ||
+      (exists("pa.offline", envir = .GlobalEnv) && isTRUE(get("pa.offline", envir = .GlobalEnv)))) {
+    .paProteinDiagLog("[UniProtFallback] offline mode: skipping online UniProt symbol lookup");
+    return(result);
+  }
+
   old.timeout <- getOption("timeout")
   options(timeout = max(10, old.timeout))
   on.exit(options(timeout = old.timeout), add = TRUE)

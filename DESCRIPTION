@@ -30,13 +30,13 @@ Imports:
     igraph, WGCNA, fastcluster, fgsea, CEMiTool,
     ggplot2, RColorBrewer, scales, ggrepel, gridExtra, ggdendro, Cairo, UpSetR,
     plotly, rgl, ggpubr, ggridges, see, graphlayouts, alphashape3d, ks,
-    pROC, ROCR, caret, randomForest, e1071, pls, lars, MASS, boot, caTools,
+    pROC, ROCR, caret, randomForest, e1071, pls, lars, glmnet, MASS, boot, caTools,
     pcaMethods, Rtsne, uwot, RSQLite, RSclient, curl, pryr, png, xtable,
     RhpcBLASctl, arrow
 Suggests:
     patchwork, PhosR, backbone,
     multiUS, SeqKnn, rrcovNA,
-    BiocManager
+    callr, BiocManager
 Remotes:
     github::xia-lab/XiaLabCppLib
 Roxygen: list(markdown = TRUE)

@@ -239,6 +239,13 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
 
   min.score <- .roundScore(confThresh)
 
+  # Persist the PPI query parameters so downstream reporting (analysis_summary.txt)
+  # can state which database and confidence cutoff were used.
+  paramSet$ppi.db.name     <- dbName
+  paramSet$ppi.conf        <- confThresh
+  paramSet$ppi.require.exp <- requireExp
+  saveSet(paramSet, "paramSet")
+
   # Determine if this database uses UniProt IDs (ppi_uniprot.sqlite) or Entrez IDs (ppi.sqlite).
   # Routing is per-database, not based on file existence.
   UNIPROT_DBS <- c("intact", "huri", "rolland", "irefinx")

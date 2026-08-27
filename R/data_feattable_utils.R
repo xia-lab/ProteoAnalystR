@@ -28,7 +28,15 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   analSet <- readSet(analSet, "analSet");
   dataSet <- readDataset(dataName);
 
-  paramSet$use.fdr <- as.logical(FDR);
+  # Persist the exact feature-selection rule used to construct sig.mat. The
+  # downstream enrichment pages read these fields to report the input p-value
+  # type and thresholds, so they must track the user's current selection rather
+  # than the initialization defaults.
+  use.fdr <- identical(tolower(as.character(FDR)[1]), "true")
+  paramSet$use.fdr <- use.fdr
+  paramSet$pval.selection <- if (use.fdr) "fdr" else "raw"
+  paramSet$BHth <- as.numeric(p.lvl)
+  paramSet$fc.thresh <- as.numeric(fc.lvl)
   total <- nrow(dataSet$comp.res);
   resTable <- dataSet$comp.res;
   filename <- dataSet$filename;
@@ -182,7 +190,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   orig.resTable <- resTable;
   # select based on p-value
   #msg("[GetSigfeatures] DEBUG: About to filter by p-value (FDR=", FDR, ", p.lvl=", p.lvl, ")...")
-  if(FDR == "true"){
+  if (use.fdr) {
       hit.inx.p <- resTable$adj.P.Val <= p.lvl;
   } else {
       hit.inx.p <- resTable$P.Value <= p.lvl;
@@ -431,7 +439,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
 
     resTable <- resTable[!is.na(resTable[, 1]), , drop = FALSE]
 
-    deg.pass <- if (FDR == "true")  resTable$adj.P.Val <= p.lvl
+    deg.pass <- if (use.fdr)  resTable$adj.P.Val <= p.lvl
                 else                resTable$P.Value   <= p.lvl
 
     lfc.pass <- abs(resTable[ , "logFC"]) >= fc.lvl

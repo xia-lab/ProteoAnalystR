@@ -140,10 +140,15 @@ ImputeMissingVar <- function(dataName="", method="min"){
         # SeqKNN: sequential K-nearest neighbors (MAR/mixed)
         has.seqknn <- FALSE
 
+        # SeqKNN imputes each feature from its k nearest feature rows (like
+        # impute.knn), so the features x samples matrix is passed untransposed;
+        # transposing starves the neighbor pool and errors on small datasets.
+        k.seqknn <- min(10L, nrow(int.mat) - 1L)
+
         # Try multiUS package first (CRAN available)
         if (requireNamespace("multiUS", quietly = TRUE)) {
           tryCatch({
-            new.mat <- t(multiUS::seqKNNimp(t(int.mat), k = 10))
+            new.mat <- multiUS::seqKNNimp(int.mat, k = k.seqknn)
             has.seqknn <- TRUE
             current.msg <- c(current.msg, "Missing variables were imputed using SeqKNN (sequential KNN via multiUS)");
           }, error = function(e) {
@@ -154,7 +159,7 @@ ImputeMissingVar <- function(dataName="", method="min"){
         # Fallback to SeqKnn package if multiUS not available
         if (!has.seqknn && requireNamespace("SeqKnn", quietly = TRUE)) {
           tryCatch({
-            new.mat <- t(SeqKnn::SeqKNN(t(int.mat), k = 10))
+            new.mat <- SeqKnn::SeqKNN(int.mat, k = k.seqknn)
             has.seqknn <- TRUE
             current.msg <- c(current.msg, "Missing variables were imputed using SeqKNN (sequential KNN via SeqKnn)");
           }, error = function(e) {
@@ -334,10 +339,14 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min") {
     new.mat = t(new.mat)
     current.msg <- c(current.msg, "Missing variables were imputed using SVD Impute");
   }else if(method=="seqknn"){
-    if (!requireNamespace("imputeLCMD", quietly = TRUE)) {
-      AddErrMsg("SeqKNN requires the 'imputeLCMD' package."); return(0);
+    # imputeLCMD has no sequential-KNN implementation; use multiUS like the
+    # non-phospho path. SeqKNN imputes each feature from its k nearest feature
+    # rows, so the features x samples matrix is passed untransposed.
+    if (!requireNamespace("multiUS", quietly = TRUE)) {
+      AddErrMsg("SeqKNN requires the 'multiUS' package. Install with: install.packages('multiUS')"); return(0);
     }
-    new.mat <- t(imputeLCMD::impute.SequentialKNN(t(int.mat), allowMissing = TRUE))
+    k.seqknn <- min(10L, nrow(int.mat) - 1L)
+    new.mat <- multiUS::seqKNNimp(int.mat, k = k.seqknn)
     current.msg <- c(current.msg, "Missing variables were imputed using SeqKNN.");
   }else{
     new.mat<- suppressWarnings(ReplaceMissingByLoD(int.mat));

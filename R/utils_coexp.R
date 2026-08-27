@@ -432,6 +432,21 @@ my.build.cemi.net <- function(dataName,
     } else {
       n_modules <- length(unique(mod$modules))
       msg("Network construction successful: ", n_modules, " modules found");
+
+      # Persist the co-expression parameters so downstream reporting
+      # (analysis_summary.txt) can state how the network was built.
+      tryCatch({
+        paramSet <- readSet(paramSet, "paramSet")
+        paramSet$coexp.cor.method  <- cor_method
+        paramSet$coexp.min.ngen    <- min_ngen
+        paramSet$coexp.n.modules   <- n_modules
+        paramSet$coexp.soft.power  <- tryCatch({
+          b <- cem@parameters$beta
+          if (is.null(b) || length(b) == 0) NA else b
+        }, error = function(e) NA)
+        saveSet(paramSet, "paramSet")
+      }, error = function(e) NULL)
+
       return("OK")
     }
   }, error = function(e) {

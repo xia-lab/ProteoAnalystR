@@ -1267,6 +1267,13 @@ SummarizeProteomicsData <- function(dataName = "",
   msgSet$current.msg <- paste0("Peptide summarization (", method, ") completed: ",
                                nrow(prot.mat), " proteins x ", ncol(prot.mat), " samples.")
 
+  # Persist summarization/imputation parameters for analysis_summary.txt reporting.
+  paramSet$summ.method <- method
+  paramSet$summ.topn   <- top_n
+  paramSet$summ.minpep <- min_peptides
+  paramSet$summ.impute <- if (is.null(peptide.impute) || !nzchar(as.character(peptide.impute))) "none" else as.character(peptide.impute)
+  saveSet(paramSet, "paramSet")
+
   # Perform protein-level annotation using UniProt IDs derived above
   dataSet <- PerformDataAnnotInternal(dataSet,
                                       dataName,
@@ -1761,8 +1768,36 @@ library(tibble)
     final_matrix0 <- do.call(rbind, est_rows)
     colnames(final_matrix0) <- samples_all
     final_df <- tibble::as_tibble(final_matrix0, rownames = "Protein")
+
+  } else if (method == "top_n") {
+    # --- Top-N peptides (Hi3/Top3: mean of the N most-intense peptides) ---
+    # Silva et al. 2006 (Mol Cell Proteomics 5:144): the average signal of the N
+    # (default 3) most-intense peptides is proportional to protein abundance.
+    # Rank peptides within each protein by mean linear intensity across samples,
+    # keep the top N, then take the ARITHMETIC MEAN of their linear intensities per
+    # sample and return log2. (Mean, not sum, so proteins with < N observed peptides
+    # are on the same scale as those with N.)
+    n_keep <- max(1L, as.integer(top_n_count))
+    top_peptides <- filtered_data %>%
+      mutate(LinearIntensity = 2^Intensity) %>%
+      group_by(Protein, Peptide) %>%
+      summarise(RankVal = mean(LinearIntensity, na.rm = TRUE), .groups = "drop") %>%
+      filter(is.finite(RankVal)) %>%
+      group_by(Protein) %>%
+      slice_max(order_by = RankVal, n = n_keep, with_ties = FALSE) %>%
+      ungroup() %>%
+      select(Protein, Peptide)
+
+    final_df <- filtered_data %>%
+      inner_join(top_peptides, by = c("Protein", "Peptide")) %>%
+      mutate(LinearIntensity = 2^Intensity) %>%
+      group_by(Protein, Sample) %>%
+      summarise(MeanLinear = mean(LinearIntensity, na.rm = TRUE), .groups = "drop") %>%
+      mutate(Log2Intensity = log2(MeanLinear)) %>%
+      select(Protein, Sample, Log2Intensity) %>%
+      pivot_wider(names_from = Sample, values_from = Log2Intensity)
   }
-  
+
   # 4. Final Formatting
   # Convert back to matrix
   final_matrix <- final_df %>%

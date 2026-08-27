@@ -2213,6 +2213,32 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   }
   msg("[R DEBUG] Found ", length(peptides), " peptides for protein ", proteinID)
 
+  # Cross-ID fallback: network viewers pass Entrez IDs while the peptide index
+  # is keyed by the dataset's own protein IDs (often UniProt). Translate and
+  # retry before the fuzzy substring match below (which is unsafe for short
+  # numeric Entrez IDs).
+  if (length(peptides) == 0) {
+    for (aid in tryCatch(.paCrossMapFeatureIds(proteinID), error = function(e) character(0))) {
+      cand <- cache$exact.index[[aid]]
+      if (is.null(cand) || length(cand) == 0) {
+        aid.norm <- .paNormalizeProteinId(aid)
+        if (!is.na(aid.norm)) {
+          cand <- cache$norm.index[[aid.norm]]
+          if (!is.null(cand) && length(cand) > 0 &&
+              !is.null(cache$protein.by.norm[[aid.norm]])) {
+            aid <- cache$protein.by.norm[[aid.norm]][1]
+          }
+        }
+      }
+      if (!is.null(cand) && length(cand) > 0) {
+        peptides <- cand
+        matched.protein.id <- aid
+        msg("[R DEBUG] Matched via cross-mapped ID: ", proteinID, " -> ", matched.protein.id)
+        break
+      }
+    }
+  }
+
   # If no exact match, try to find similar protein IDs
   if (length(peptides) == 0) {
     msg("[R DEBUG] No exact match for protein ", proteinID)
@@ -2238,6 +2264,10 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
 
   # Extract protein DE stats
   prot.lookup.id <- original.protein.id
+  if (!(prot.lookup.id %in% rownames(prot.res)) &&
+      matched.protein.id %in% rownames(prot.res)) {
+    prot.lookup.id <- matched.protein.id
+  }
   if (!(prot.lookup.id %in% rownames(prot.res))) {
     rn <- rownames(prot.res)
     rn.norm <- vapply(rn, .paNormalizeProteinId, character(1))
@@ -2316,6 +2346,13 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
   pep.res <- cache$pep.res
   pep.rownms <- rownames(pep.res)
 
+  # Resolve org once so the cross-map fallback below is an O(1) index lookup
+  # per ID rather than a paramSet read plus full-table scan per ID.
+  cross.org <- tryCatch({
+    ps <- readSet(paramSet, "paramSet")
+    ps$data.org
+  }, error = function(e) NULL)
+
   out <- setNames(vector("list", length(proteinIDs)), as.character(proteinIDs))
 
   for (pid in as.character(proteinIDs)) {
@@ -2324,6 +2361,23 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
     if (is.null(peptides)) peptides <- character(0)
     if (length(peptides) == 0 && !is.na(pid.norm)) {
       peptides <- cache$norm.index[[pid.norm]]
+      if (is.null(peptides)) peptides <- character(0)
+    }
+    # Cross-ID fallback (Entrez <-> UniProt), same as GetProteinPeptideMapping:
+    # network viewers request by Entrez while the index uses dataset protein IDs.
+    if (length(peptides) == 0) {
+      for (aid in tryCatch(.paCrossMapFeatureIds(pid, org = cross.org),
+                           error = function(e) character(0))) {
+        cand <- cache$exact.index[[aid]]
+        if (is.null(cand) || length(cand) == 0) {
+          aid.norm <- .paNormalizeProteinId(aid)
+          if (!is.na(aid.norm)) cand <- cache$norm.index[[aid.norm]]
+        }
+        if (!is.null(cand) && length(cand) > 0) {
+          peptides <- cand
+          break
+        }
+      }
       if (is.null(peptides)) peptides <- character(0)
     }
     peptides <- unique(peptides)

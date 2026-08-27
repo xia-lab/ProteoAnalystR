@@ -32,8 +32,8 @@
 
 #' Attach standardized statistics-reporting columns to an enrichment result
 #' table so every row records how the test was powered and thresholded.
-#' Adds: N_Sig_Tested, N_Background, DE_Sig_Cutoff, DE_log2FC_Cutoff,
-#'       Enrich_FDR_Cutoff, Significant (FDR-driven).
+#' Adds: N_Sig_Tested, N_Background, DE_Sig_Type, DE_Sig_Cutoff,
+#'       DE_log2FC_Cutoff, Enrich_FDR_Cutoff, Significant (FDR-driven).
 #' Assumes the table already carries raw `P_value` and BH-adjusted `FDR`.
 .annotateEnrichReport <- function(df, paramSet, n_tested, n_background,
                                   enrich_fdr = 0.05) {
@@ -41,6 +41,7 @@
   th <- .phosphoSigThresholds(paramSet)
   df$N_Sig_Tested      <- as.integer(n_tested)
   df$N_Background      <- as.integer(n_background)
+  df$DE_Sig_Type       <- th$selection
   df$DE_Sig_Cutoff     <- signif(th$fdr, 3)
   df$DE_log2FC_Cutoff  <- signif(th$fc, 3)
   df$Enrich_FDR_Cutoff <- signif(enrich_fdr, 3)
@@ -77,7 +78,17 @@
   "term(s)"
 }
 
-#' Perform kinase enrichment analysis on significant phosphosites
+#' Kinase substrate-set analysis of phosphosite results
+#'
+#' Computes two complementary statistics per kinase:
+#' (1) over-representation (hypergeometric) of significant phosphosites among
+#'     the kinase's substrates, against the measured phosphoproteome; and
+#' (2) a signed KSEA z-score (Casado et al. 2013; Wiredja et al. 2017) from the
+#'     substrate log2 fold changes, using protein-adjusted site fold changes
+#'     (MSstatsPTM-style delta-method adjustment) when a protein reference is
+#'     available, otherwise site-level logFC (labeled in KSEA_Input).
+#' Both reflect coordinated substrate phosphorylation change, not a direct
+#' measurement of kinase activity.
 #'
 #' @param dataName Dataset name
 #' @param database Kinase-substrate database to use (matches files in resources/data/ksea, or "all")
@@ -117,6 +128,18 @@ PerformKinaseEnrichment <- function(dataName, database = "phosphositeplus") {
     #        paste(head(all_sites), collapse=", "))
   }
 
+  # Resolve the effective database (auto/default -> a concrete DB) and persist
+  # it, so the kinase-substrate network is later built from the SAME database
+  # that enrichment actually used (the currently selected db) rather than
+  # re-defaulting independently.
+  avail_dbs <- tryCatch(.listAvailableKseaDBs(paramSet, include_all = FALSE),
+                        error = function(e) character(0))
+  if (is.null(database) || database == "" || tolower(database) == "auto") {
+    database <- if (length(avail_dbs) > 0) avail_dbs[1] else "auto"
+  }
+  paramSet$kinase.db.used <- database
+  saveSet(paramSet, "paramSet")
+
   # Load kinase-substrate database
   ks_db <- .loadKinaseSubstrateDB(database, paramSet)
 
@@ -149,6 +172,21 @@ PerformKinaseEnrichment <- function(dataName, database = "phosphositeplus") {
     return(0)
   }
 
+  # Signed KSEA z-score on top of the ORA columns: computed on protein-adjusted
+  # site fold changes when a protein reference is available, otherwise on
+  # site-level logFC (labeled in KSEA_Input).
+  ksea.stats <- .getKseaSiteStats(dataName, dataSet, paramSet)
+  enrichment_results <- .appendKseaZScores(enrichment_results, ks_db, all_sites,
+                                           converted, ksea.stats)
+
+  # Rank by KSEA significance when directional scores exist (NA last, ORA
+  # p-value as tie-breaker); otherwise keep the ORA ordering.
+  if (any(is.finite(enrichment_results$KSEA_Z))) {
+    enrichment_results <- enrichment_results[
+      order(is.na(enrichment_results$KSEA_P), enrichment_results$KSEA_P,
+            enrichment_results$P_value), ]
+  }
+
   # Attach standardized statistics-reporting columns (features tested,
   # enrichment background, DE FDR/FC cutoffs, FDR-driven significance flag).
   n_tested     <- length(sig_sites)
@@ -166,12 +204,29 @@ PerformKinaseEnrichment <- function(dataName, database = "phosphositeplus") {
   fast.write(enrichment_results, file = "kinase_enrichment.csv", row.names = FALSE)
 
   n_enriched <- sum(suppressWarnings(as.numeric(enrichment_results$FDR)) < 0.05, na.rm = TRUE)
+  okz <- is.finite(enrichment_results$KSEA_Z)
+  ksea.msg <- if (any(okz)) {
+    zsig  <- okz & suppressWarnings(as.numeric(enrichment_results$KSEA_FDR)) < 0.05
+    n.up   <- sum(zsig & enrichment_results$Direction == "Up",   na.rm = TRUE)
+    n.down <- sum(zsig & enrichment_results$Direction == "Down", na.rm = TRUE)
+    src <- enrichment_results$KSEA_Input[which(okz)[1]]
+    ctr <- if (!is.null(ksea.stats) && !is.na(ksea.stats$contrast))
+      paste0(" (", ksea.stats$contrast, ")") else ""
+    paste0(" Signed KSEA z-scores were computed from ", src,
+           " log2 fold changes", ctr, " for ", sum(okz), " kinase(s): ",
+           n.up, " up- and ", n.down,
+           " down-regulated substrate set(s) at KSEA FDR < 0.05.")
+  } else {
+    paste0(" Signed KSEA z-scores could not be computed",
+           " (no usable per-site fold changes).")
+  }
   msgSet$current.msg <- paste0(
     .phosphoEnrichSummary(paramSet, "Kinase enrichment",
                           n_class = nrow(enrichment_results),
                           n_tested = n_tested, n_background = n_background,
                           enrich_fdr = 0.05),
-    " ", n_enriched, " kinase(s) reached FDR < 0.05."
+    " ", n_enriched, " kinase(s) reached ORA FDR < 0.05.",
+    ksea.msg
   )
   saveSet(msgSet, "msgSet")
 
@@ -183,6 +238,14 @@ PerformKinaseEnrichment <- function(dataName, database = "phosphositeplus") {
 GetAvailableKinaseDBs <- function() {
   paramSet <- readSet(paramSet, "paramSet")
   .listAvailableKseaDBs(paramSet, include_all = TRUE)
+}
+
+#' Database the most recent kinase enrichment actually used (currently selected
+#' db). Empty string until enrichment has been run.
+GetSelectedKinaseDb <- function() {
+  paramSet <- readSet(paramSet, "paramSet")
+  db <- paramSet$kinase.db.used
+  if (is.null(db) || !nzchar(db)) "" else as.character(db)[1]
 }
 
 #' Load kinase-substrate database
@@ -496,16 +559,15 @@ GetAvailableKinaseDBs <- function() {
   stats_df$Fold_Enrichment <- (stats_df$Substrates_Sig / total_sig_size) / 
                               (stats_df$Substrates_Total / total_bg_size)
   
-  # 8. Filter and Clean up
-  # Remove kinases with 0 significant hits (optional, but cleaner)
-  stats_df <- stats_df[stats_df$Substrates_Sig > 0, ]
-  
   if (nrow(stats_df) == 0) {
     #msg("[.enrichmentFromListDB] No enriched kinases found")
     return(NULL)
   }
-  
-  # Adjust FDR
+
+  # 8. Adjust FDR across ALL tested kinases. Kinases with zero significant
+  # substrates are kept (ORA p = 1): the signed KSEA z-score added downstream
+  # can still detect coordinated sub-threshold substrate shifts for them, and
+  # keeping every tested kinase makes the BH universe transparent.
   stats_df$FDR <- p.adjust(stats_df$P_value, method = "BH")
   
   # Sort
@@ -518,6 +580,122 @@ GetAvailableKinaseDBs <- function() {
   return(stats_df)
 }
 
+
+# ---------------------------------------------------------------------------
+# Signed KSEA z-score (Casado et al. 2013, Sci Signal; Wiredja et al. 2017,
+# KSEAapp). For a kinase with m quantified substrates:
+#     z = (mean(substrate log2FC) - mean(all site log2FC)) * sqrt(m) / sd(all)
+# Positive z = coordinated substrate hyper-phosphorylation; negative z =
+# hypo-phosphorylation. Two-sided normal p-values, BH-adjusted across kinases.
+# When a protein reference is available the z-score is computed on the
+# protein-adjusted site fold changes (the same MSstatsPTM-style delta-method
+# adjustment as DetectPhosphoOccupancyBySite), so kinase scores are not
+# confounded by parent-protein abundance changes.
+# ---------------------------------------------------------------------------
+
+#' Per-site log2 fold changes feeding the KSEA z-score.
+#' Prefers the protein-adjusted fold changes from DetectPhosphoOccupancyBySite;
+#' if a protein reference is loaded but the adjustment has not been run yet, it
+#' is computed on the fly. Falls back to site-level logFC from the differential
+#' comparison when no protein reference is available.
+#' @return list(fc = named numeric (site id -> log2FC), source, contrast), or
+#'   NULL when no usable fold changes exist.
+.getKseaSiteStats <- function(dataName, dataSet, paramSet) {
+  occ.file <- "ptm_occupancy_results.qs"
+  if (!file.exists(occ.file) &&
+      isTRUE(paramSet$has.protein.ref) && !is.null(paramSet$protein.ref)) {
+    tryCatch(DetectPhosphoOccupancyBySite(dataName), error = function(e) NULL)
+  }
+  if (file.exists(occ.file)) {
+    occ <- tryCatch(ov_qs_read(occ.file), error = function(e) NULL)
+    if (!is.null(occ) && all(c("Peptide", "Delta.Occupancy") %in% colnames(occ))) {
+      fc <- suppressWarnings(as.numeric(occ$Delta.Occupancy))
+      names(fc) <- as.character(occ$Peptide)
+      fc <- fc[is.finite(fc)]
+      if (length(fc) >= 10) {
+        contrast <- if (all(c("Cond1.Label", "Cond2.Label") %in% colnames(occ))) {
+          paste(occ$Cond2.Label[1], "vs", occ$Cond1.Label[1])
+        } else NA_character_
+        return(list(fc = fc, source = "protein-adjusted", contrast = contrast))
+      }
+    }
+  }
+  cr <- dataSet$comp.res
+  if (!is.null(cr)) {
+    fc.col <- intersect(c("logFC", "log2FC", "coefficient"), colnames(cr))[1]
+    if (!is.na(fc.col)) {
+      fc <- suppressWarnings(as.numeric(cr[[fc.col]]))
+      names(fc) <- rownames(cr)
+      fc <- fc[is.finite(fc)]
+      if (length(fc) >= 10) {
+        return(list(fc = fc, source = "site-level", contrast = NA_character_))
+      }
+    }
+  }
+  NULL
+}
+
+#' Attach signed KSEA z-score columns to the ORA kinase table.
+#' Adds: KSEA_Z, KSEA_Substrates (m: substrates with a fold change),
+#'       KSEA_P, KSEA_FDR, Direction (Up/Down/"-"), KSEA_Input
+#'       ("protein-adjusted" / "site-level" / "not available").
+#' @param res ORA result table with a Kinase column
+#' @param ks_db kinase-substrate DB (list kinase -> substrate ids, or data frame)
+#' @param all_sites background substrate ids (converted ids when available)
+#' @param converted output of .convertSitesToSymbols, or NULL if raw ids used
+#' @param ksea.stats output of .getKseaSiteStats, or NULL
+.appendKseaZScores <- function(res, ks_db, all_sites, converted, ksea.stats,
+                               min_m = 3) {
+  if (is.null(res) || nrow(res) == 0) return(res)
+  res$KSEA_Z          <- NA_real_
+  res$KSEA_Substrates <- NA_integer_
+  res$KSEA_P          <- NA_real_
+  res$KSEA_FDR        <- NA_real_
+  res$Direction       <- "-"
+  res$KSEA_Input      <- "not available"
+  if (is.null(ksea.stats)) return(res)
+
+  # Move the per-site fold changes into the substrate-id namespace used by the
+  # enrichment test (site rows sharing one substrate id are averaged).
+  fc <- ksea.stats$fc
+  if (!is.null(converted)) {
+    key.map <- converted$all_sites          # names: site ids -> "ACC;S123;"
+    common  <- intersect(names(fc), names(key.map))
+    if (length(common) == 0) return(res)
+    agg <- tapply(fc[common], as.character(key.map[common]), mean)
+    fc  <- setNames(as.numeric(agg), names(agg))
+  }
+  fc <- fc[names(fc) %in% all_sites]
+  if (length(fc) < 10) return(res)
+
+  p.mean <- mean(fc)
+  p.sd   <- stats::sd(fc)
+  if (!is.finite(p.sd) || p.sd <= 0) return(res)
+
+  if (is.data.frame(ks_db)) {
+    if (!all(c("Kinase", "Substrate") %in% colnames(ks_db))) return(res)
+    ks_db <- split(as.character(ks_db$Substrate), as.character(ks_db$Kinase))
+  }
+  if (!is.list(ks_db)) return(res)
+
+  res$KSEA_Input <- ksea.stats$source
+  for (i in seq_len(nrow(res))) {
+    subs <- unique(as.character(ks_db[[as.character(res$Kinase[i])]]))
+    s <- fc[names(fc) %in% subs]
+    m <- length(s)
+    if (m < min_m) next
+    res$KSEA_Z[i]          <- round((mean(s) - p.mean) * sqrt(m) / p.sd, 3)
+    res$KSEA_Substrates[i] <- m
+  }
+  ok <- is.finite(res$KSEA_Z)
+  if (any(ok)) {
+    res$KSEA_P[ok]    <- signif(2 * pnorm(-abs(res$KSEA_Z[ok])), 4)
+    res$KSEA_FDR[ok]  <- signif(p.adjust(res$KSEA_P[ok], method = "BH"), 4)
+    res$Direction[ok] <- ifelse(res$KSEA_Z[ok] > 0, "Up",
+                                ifelse(res$KSEA_Z[ok] < 0, "Down", "-"))
+  }
+  res
+}
 
 #' Count overlaps between phosphosite IDs and kinase substrate list
 #' @param site_ids Vector of phosphosite IDs (format: PROTEIN_RES_POS like P12345_S_123)
@@ -1191,6 +1369,7 @@ GetMotifEnrichmentResults <- function() {
       Example_Sites = character(),
       N_Sig_Tested = integer(),
       N_Background = integer(),
+      DE_Sig_Type = character(),
       DE_Sig_Cutoff = numeric(),
       DE_log2FC_Cutoff = numeric(),
       Enrich_FDR_Cutoff = numeric(),
@@ -1373,8 +1552,15 @@ GetKinaseEnrichmentResults <- function() {
       P_value = numeric(),
       Fold_Enrichment = numeric(),
       FDR = numeric(),
+      KSEA_Z = numeric(),
+      KSEA_Substrates = integer(),
+      KSEA_P = numeric(),
+      KSEA_FDR = numeric(),
+      Direction = character(),
+      KSEA_Input = character(),
       N_Sig_Tested = integer(),
       N_Background = integer(),
+      DE_Sig_Type = character(),
       DE_Sig_Cutoff = numeric(),
       DE_log2FC_Cutoff = numeric(),
       Enrich_FDR_Cutoff = numeric(),
@@ -1385,7 +1571,7 @@ GetKinaseEnrichmentResults <- function() {
   return(analSet$kinase.enrich)
 }
 
-#' Plot kinase enrichment bubble chart
+#' Plot kinase enrichment (KSEA lollipop chart, or ORA bubble fallback)
 #'
 #' @param imgName Image file name
 #' @param dpi DPI for image
@@ -1403,6 +1589,72 @@ PlotKinaseEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20) 
   }
 
   results <- analSet$kinase.enrich
+
+  # Signed KSEA lollipop chart when directional z-scores are available
+  # (dot size = number of quantified substrates m); otherwise fall back to
+  # the ORA bubble plot.
+  z.vec <- if ("KSEA_Z" %in% colnames(results)) {
+    suppressWarnings(as.numeric(results$KSEA_Z))
+  } else {
+    rep(NA_real_, nrow(results))
+  }
+  if (any(is.finite(z.vec))) {
+    results$KSEA_Z <- z.vec
+    results <- results[is.finite(results$KSEA_Z), , drop = FALSE]
+    results <- results[order(-abs(results$KSEA_Z)), , drop = FALSE]
+    if (nrow(results) > top_n) results <- results[1:top_n, ]
+    results <- results[order(results$KSEA_Z), , drop = FALSE]
+    results$Kinase <- factor(results$Kinase, levels = results$Kinase)
+
+    zsig <- is.finite(suppressWarnings(as.numeric(results$KSEA_FDR))) &
+      suppressWarnings(as.numeric(results$KSEA_FDR)) < 0.05
+    results$Category <- ifelse(results$KSEA_Z > 0,
+                               ifelse(zsig, "Up (FDR < 0.05)", "Up"),
+                               ifelse(zsig, "Down (FDR < 0.05)", "Down"))
+    bar.cols <- c("Up (FDR < 0.05)"   = "#b2182b", "Up"   = "#f4a582",
+                  "Down (FDR < 0.05)" = "#2166ac", "Down" = "#92c5de")
+    input.lbl <- if ("KSEA_Input" %in% colnames(results) &&
+                     identical(as.character(results$KSEA_Input[1]), "protein-adjusted")) {
+      "z-scores from protein-adjusted site log2FC"
+    } else {
+      "z-scores from site-level log2FC"
+    }
+
+    results$SubstrateCount <- if ("KSEA_Substrates" %in% colnames(results)) {
+      pmax(suppressWarnings(as.numeric(results$KSEA_Substrates)), 1)
+    } else {
+      rep(1, nrow(results))
+    }
+
+    p <- ggplot(results, aes(x = KSEA_Z, y = Kinase, color = Category)) +
+      geom_vline(xintercept = 0, color = "gray30", linewidth = 0.4) +
+      geom_vline(xintercept = c(-1.96, 1.96), linetype = "dashed", color = "gray70") +
+      geom_segment(aes(x = 0, xend = KSEA_Z, yend = Kinase), linewidth = 0.8) +
+      geom_point(aes(size = SubstrateCount)) +
+      scale_color_manual(values = bar.cols, name = NULL) +
+      scale_size_area(max_size = 8, name = "Substrates (m)") +
+      labs(x = "KSEA z-score", y = "Kinase", subtitle = input.lbl) +
+      theme_bw() +
+      theme(
+        plot.subtitle = element_text(size = 10, color = "#555555"),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        legend.text = element_text(size = 9),
+        legend.position = "right"
+      )
+
+    if (format == "png") {
+      ggsave(paste0(imgName, "dpi", dpi, ".", format), plot = p, dpi = as.numeric(dpi),
+             width = 7, height = 6, bg = "white")
+    } else {
+      ggsave(paste0(imgName, "dpi", dpi, ".", format), plot = p,
+             width = 7, height = 6, device = cairo_pdf, bg = "white")
+    }
+    imgSet <- readSet(imgSet, "imgSet")
+    imgSet$kinase_enrichment <- paste0(imgName, "dpi", dpi, ".", format)
+    saveSet(imgSet, "imgSet")
+    return(paste0(imgName, "dpi", dpi, ".", format))
+  }
 
   # Take top N kinases by significance
   results <- results[order(results$P_value), ]
@@ -1609,6 +1861,7 @@ GetCompartmentEnrichmentResults <- function() {
       FDR             = numeric(),
       N_Sig_Tested      = integer(),
       N_Background      = integer(),
+      DE_Sig_Type       = character(),
       DE_Sig_Cutoff     = numeric(),
       DE_log2FC_Cutoff  = numeric(),
       Enrich_FDR_Cutoff = numeric(),
@@ -1682,9 +1935,12 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
   return(imgNm)
 }
 
-# ── Phospho-site occupancy via protein reference ──────────────────────────────
+# ── Protein-adjusted phosphosite change via protein reference ─────────────────
 #
-# Computes per-site phosphorylation occupancy as log2(phosphosite / protein).
+# Computes a per-site, protein-adjusted RELATIVE phosphorylation change (MSstatsPTM-
+# style delta-method adjustment; site log2FC - protein log2FC). Per-condition value is
+# log2(phosphosite / protein). This is a relative measure, NOT absolute stoichiometry
+# or occupancy. (Output columns retain the historical "Occupancy" names.)
 # Requires paramSet$protein.ref (log2 protein abundances from proteinGroups.txt
 # or a DIA-NN pg_matrix).  Both MaxQuant-phospho and DIA-NN-phospho formats are
 # supported as long as the protein reference has been loaded.
@@ -1705,7 +1961,7 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     return(fail(paste0(
       "No protein reference available. ",
       "Please provide a total proteome file (MaxQuant proteinGroups.txt or DIA-NN pg_matrix.tsv) ",
-      "so phosphorylation occupancy can be estimated."
+      "so the protein-adjusted (relative) phosphosite change can be estimated."
     )))
 
   prot.ref <- paramSet$protein.ref   # log2 protein abundances: proteins × samples
@@ -1923,8 +2179,11 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
   fast.write(results,  "ptm_occupancy_results.csv")
 
   msgSet$current.msg <- paste0(
-    "Phosphorylation occupancy analysis complete. ", nrow(results), " site(s) analyzed."
+    "Protein-adjusted phosphosite analysis complete. ", nrow(results), " site(s) analyzed."
   )
+  # Persist occupancy parameters for analysis_summary.txt reporting.
+  paramSet$ptm.occ.n.sites  <- nrow(results)
+  paramSet$ptm.occ.contrast <- paste(uniq.grp[2], "vs", uniq.grp[1])
   saveSet(msgSet,  "msgSet")
   saveSet(paramSet, "paramSet")
   invisible(RegisterData(dataSet, output = 1L))

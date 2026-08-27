@@ -20,6 +20,13 @@ InitKinaseSubstrateNetwork <- function(dataName, database = "phosphositeplus", f
   analSet <- readSet(analSet, "analSet")
   msgSet <- readSet(msgSet, "msgSet")
 
+  # Build the network from the SAME database the enrichment actually used
+  # (persisted by PerformKinaseEnrichment). Otherwise enrichment and the network
+  # could resolve different defaults and no substrates would match.
+  if (!is.null(paramSet$kinase.db.used) && nzchar(paramSet$kinase.db.used)) {
+    database <- paramSet$kinase.db.used
+  }
+
   msg("[InitKinaseSubstrateNetwork] Starting kinase-substrate network initialization...")
   msg("[InitKinaseSubstrateNetwork] Database: ", database)
   msg("[InitKinaseSubstrateNetwork] FDR cutoff: ", fdr_cutoff)

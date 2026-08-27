@@ -2,7 +2,7 @@
 % Please edit documentation in R/phospho_enrich_utils.R
 \name{PerformKinaseEnrichment}
 \alias{PerformKinaseEnrichment}
-\title{Perform kinase enrichment analysis on significant phosphosites}
+\title{Kinase substrate-set analysis of phosphosite results}
 \usage{
 PerformKinaseEnrichment(dataName, database = "phosphositeplus")
 }
@@ -15,5 +15,13 @@ PerformKinaseEnrichment(dataName, database = "phosphositeplus")
 1 on success, 0 on failure
 }
 \description{
-Perform kinase enrichment analysis on significant phosphosites
+Computes two complementary statistics per kinase:
+(1) over-representation (hypergeometric) of significant phosphosites among
+the kinase's substrates, against the measured phosphoproteome; and
+(2) a signed KSEA z-score (Casado et al. 2013; Wiredja et al. 2017) from the
+substrate log2 fold changes, using protein-adjusted site fold changes
+(MSstatsPTM-style delta-method adjustment) when a protein reference is
+available, otherwise site-level logFC (labeled in KSEA_Input).
+Both reflect coordinated substrate phosphorylation change, not a direct
+measurement of kinase activity.
 }

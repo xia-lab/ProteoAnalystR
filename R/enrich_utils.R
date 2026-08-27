@@ -118,12 +118,35 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     }
   }
   
+  # The uploaded-data universe can be in the platform ID space (e.g. UniProt
+  # accessions for proteomics) while the pathway sets are Entrez. Convert it
+  # so the pathway/universe intersection below compares like with like —
+  # otherwise every pathway empties out and phyper() gets a NULL hit count.
+  univ.non.na <- current.universe[!is.na(current.universe)]
+  univ.entrez.like <- length(univ.non.na) > 0 && mean(grepl("^[0-9]+$", univ.non.na)) >= 0.8
+  if (!univ.entrez.like) {
+    norm.univ <- sub("_[A-Z]_\\d+$", "", trimws(current.universe))
+    norm.univ <- sub("-\\d+$", "", norm.univ)
+    uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
+    univ.entrez <- uniprot.map[match(norm.univ, uniprot.map[, "accession"]), "gene_id"]
+    univ.entrez <- unique(univ.entrez[!is.na(univ.entrez)])
+    if (length(univ.entrez) > 0) {
+      current.universe <- univ.entrez
+    }
+  }
+
   # also make sure pathways only contain features measured in experiment
   #if(!is.null(dataSet$data.anot)){
    if(file.exists("data.anot.qs")){
     current.featureset <- lapply(current.featureset, function(x){x[x %in% current.universe]})
     inds <- lapply(current.featureset, length) > 0
     current.featureset <- current.featureset[inds]
+  }
+
+  if (length(current.featureset) == 0) {
+    msgSet$current.msg <- "No pathway overlaps with the measured features; unable to compute enrichment.";
+    saveSet(msgSet, "msgSet");
+    return(0);
   }
 
   # prepare for the result table

@@ -664,10 +664,25 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
     }
   }
   
+  # The uploaded-data universe can be in the platform ID space (e.g. UniProt
+  # accessions) while ora.vec was converted to Entrez above — convert the
+  # universe too, or the %in% cut below silently empties the query.
+  univ.non.na <- current.universe[!is.na(current.universe)]
+  univ.entrez.like <- length(univ.non.na) > 0 && mean(grepl("^[0-9]+$", univ.non.na)) >= 0.8
+  if (!univ.entrez.like) {
+    norm.univ <- sub("_[A-Z]_\\d+$", "", trimws(current.universe))
+    norm.univ <- sub("-\\d+$", "", norm.univ)
+    univ.entrez <- uniprot.map[match(norm.univ, uniprot.map[, "accession"]), "gene_id"]
+    univ.entrez <- unique(univ.entrez[!is.na(univ.entrez)])
+    if (length(univ.entrez) > 0) {
+      current.universe <- univ.entrez
+    }
+  }
+
   hits.inx <- ora.vec %in% current.universe;
   ora.vec <- ora.vec[hits.inx];
   ora.nms <- ora.nms[hits.inx];
-  
+
   q.size<-length(ora.vec);
   
   # get the matched query for each pathway

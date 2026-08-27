@@ -117,15 +117,25 @@ rescale2NewRange <- function(qvec, a, b){
   unique(vals)
 }
 
-.paPrimaryCompartment <- function(broad.category = NA_character_, main.location = NA_character_) {
+.paPrimaryCompartment <- function(broad.category = NA_character_, main.location = NA_character_,
+                                  cat.freq = NULL) {
   raw.locations <- .paSplitCompartmentValues(main.location)
   raw.categories <- .paSplitCompartmentValues(broad.category)
-  normalized.raw <- unique(.normalizeBroadCategory(c(raw.categories, raw.locations)))
-  normalized.raw <- normalized.raw[!is.na(normalized.raw) & normalized.raw != "Unknown"]
+  # Main.location is the authoritative source for compartment membership;
+  # Broad.category only fills in when no main location maps to a compartment
+  # (e.g. callers that carry a precomputed category but no location strings).
+  # term.cats keeps one entry PER raw location term (not unique) so that the
+  # number of terms backing each compartment can act as an evidence count.
+  term.cats <- .normalizeBroadCategory(raw.locations)
+  term.cats <- term.cats[!is.na(term.cats) & term.cats != "Unknown"]
+  if (length(term.cats) == 0) {
+    term.cats <- .normalizeBroadCategory(raw.categories)
+    term.cats <- term.cats[!is.na(term.cats) & term.cats != "Unknown"]
+  }
+  normalized.raw <- unique(term.cats)
 
-  # Priority order: always applied when multiple categories are present.
-  # Ordered by functional specificity — more spatially restricted compartments rank higher
-  # so proteins with dual localization are assigned their most informative context.
+  # Static specificity ladder: last-resort tie-break when no proteome-wide
+  # frequency context is available (e.g. one-off calls outside a batch resolve).
   priority <- c(
     "Nucleus",
     "Mitochondria & metabolic organelles",
@@ -136,13 +146,30 @@ rescale2NewRange <- function(qvec, a, b){
     "Cytosol"
   )
 
-  if (length(normalized.raw) == 1) {
-    primary <- normalized.raw[1]
-  } else if (length(normalized.raw) > 1) {
-    hit <- priority[priority %in% normalized.raw]
-    primary <- if (length(hit) > 0) hit[1] else normalized.raw[1]
+  if (length(normalized.raw) <= 1) {
+    primary <- if (length(normalized.raw) == 1) normalized.raw[1] else "Unknown"
   } else {
-    primary <- "Unknown"
+    # Two-tier placement heuristic for multi-compartment proteins.
+    # Tier 1 (evidence dominance): the compartment backed by the most raw
+    # Main.location terms wins, e.g. "nucleoplasm; nucleolus; cytosol"
+    # -> Nucleus (2 terms) over Cytosol (1 term).
+    # Tier 2 (informativeness): among tied compartments, the one that is
+    # rarest across the proteome wins (inverse annotation frequency) —
+    # near-ubiquitous annotations such as Cytoplasm/Nucleus carry less
+    # positional information than e.g. Mitochondrion or Extracellular.
+    # The full membership is preserved in all_categories for pie-node wedges.
+    tb <- table(term.cats)
+    winners <- names(tb)[tb == max(tb)]
+    if (length(winners) == 1) {
+      primary <- winners[1]
+    } else if (!is.null(cat.freq)) {
+      wf <- as.numeric(cat.freq[winners])
+      wf[is.na(wf)] <- 0
+      primary <- winners[which.min(wf)]
+    } else {
+      hit <- priority[priority %in% winners]
+      primary <- if (length(hit) > 0) hit[1] else winners[1]
+    }
   }
 
   all.categories <- unique(c(primary, normalized.raw))
@@ -168,8 +195,18 @@ rescale2NewRange <- function(qvec, a, b){
   broad.categories <- rep(broad.categories, length.out = n)
   main.locations <- rep(main.locations, length.out = n)
 
+  # Batch-level annotation frequency: how often each broad compartment is backed
+  # by a Main.location term across all proteins in this call. Feeds the
+  # inverse-frequency tie-break in .paPrimaryCompartment so tied placements go
+  # to the less common (more informative) compartment.
+  cat.freq <- table(unlist(lapply(seq_len(n), function(i) {
+    cc <- .normalizeBroadCategory(.paSplitCompartmentValues(main.locations[i]))
+    cc[!is.na(cc) & cc != "Unknown"]
+  }), use.names = FALSE))
+  if (length(cat.freq) == 0) cat.freq <- NULL
+
   resolved <- lapply(seq_len(n), function(i) {
-    .paPrimaryCompartment(broad.categories[i], main.locations[i])
+    .paPrimaryCompartment(broad.categories[i], main.locations[i], cat.freq = cat.freq)
   })
 
   data.frame(
@@ -1027,6 +1064,12 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
   loc.map$All.categories <- comp.res$all_categories
   loc.map$All.locations <- comp.res$all_locations
   loc.map$Is.multilocalized <- comp.res$is_multi
+  # Placement uses the two-tier heuristic primary (evidence dominance, then
+  # inverse-frequency tie-break) computed in .paPrimaryCompartment. A protein's
+  # full compartment membership is retained in All.categories and drawn as
+  # multi-colour pie wedges on the node, so multilocalization stays visible
+  # while each compartment rectangle holds every protein annotated there.
+  # Counts remain once-per-protein and sum to the protein total.
   loc.map$Broad.category <- loc.map$Primary.category
 
   category.counts <- table(loc.map$Broad.category)
@@ -1274,6 +1317,17 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
 
   base.ids <- as.character(nodes)  # Always use Entrez IDs as primary node ID
 
+  # Seed (query) status from the source PPI graph (V(g)$is_query is set by
+  # CreateGraph); exported per node as seedArr so the viewer can highlight
+  # seed proteins, mirroring the NetworkAnalyst convention.
+  is.query.vec <- if (!is.null(igraph::V(overall.graph)$is_query) &&
+                      length(igraph::V(overall.graph)$is_query) == length(nodes)) {
+    as.logical(igraph::V(overall.graph)$is_query)
+  } else {
+    rep(FALSE, length(nodes))
+  }
+  is.query.vec[is.na(is.query.vec)] <- FALSE
+
   entrez.to.finalid <- base.ids
   names(entrez.to.finalid) <- as.character(nodes)
   node.groups <- split(seq_along(nodes), base.ids)
@@ -1331,7 +1385,8 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
       all_compartments = category.all,
       broad_category = category,
       type      = "gene",
-      location  = main.loc
+      location  = main.loc,
+      seedArr   = if (any(is.query.vec[idx])) "seed" else "notSeed"
     )
   })
 

@@ -15,7 +15,9 @@ different datasets intended for meta-analysis. It ensures that metadata
 is properly aligned, consistent, and categorized as discrete or continuous.
 }
 \examples{
+\dontrun{
 CheckMetaIntegrity()
+}
 
 }
 \author{

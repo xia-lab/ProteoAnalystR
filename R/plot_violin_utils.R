@@ -29,15 +29,107 @@ ResolveFeatureRowId <- function(mat, feature.id) {
   rn <- rownames(mat)
   if (feature.id %in% rn) return(feature.id)
 
+  # Normalizing every row name is O(nrow) regex work — compute it lazily and
+  # at most once (peptide matrices can have tens of thousands of rows).
+  rn.norm <- NULL
+  getRnNorm <- function() {
+    if (is.null(rn.norm)) rn.norm <<- vapply(rn, NormalizeFeatureId, character(1))
+    rn.norm
+  }
+
   feature.norm <- NormalizeFeatureId(feature.id)
   if (!is.na(feature.norm)) {
-    rn.norm <- vapply(rn, NormalizeFeatureId, character(1))
-    idx <- which(rn.norm == feature.norm)
+    idx <- which(getRnNorm() == feature.norm)
     if (length(idx) == 1) {
       return(rn[idx[1]])
     }
   }
+
+  # Cross-ID fallback: network viewers pass Entrez IDs while datasets are often
+  # keyed by UniProt accession (or vice versa). Translate through the
+  # entrez_uniprot table and retry against the row names before giving up.
+  for (aid in .paCrossMapFeatureIds(feature.id)) {
+    if (aid %in% rn) return(aid)
+    aid.norm <- NormalizeFeatureId(aid)
+    if (!is.na(aid.norm)) {
+      idx <- which(getRnNorm() == aid.norm)
+      if (length(idx) >= 1) return(rn[idx[1]])
+    }
+  }
   feature.id
+}
+
+# Translate a feature ID across the Entrez <-> UniProt boundary using the
+# organism's entrez_uniprot table. Returns candidate IDs in the other space
+# (possibly several accessions per gene), or character(0) when no mapping.
+# The table is queried once per org and cached with precomputed lookup columns
+# so repeated calls within a dialog/session are cheap.
+.pa_crossmap_cache <- new.env(parent = emptyenv())
+
+.paGetCrossMapTable <- function(org) {
+  key <- paste0("entrez_uniprot_", org)
+  if (exists(key, envir = .pa_crossmap_cache, inherits = FALSE)) {
+    return(get(key, envir = .pa_crossmap_cache, inherits = FALSE))
+  }
+  m <- tryCatch(queryGeneDB("entrez_uniprot", org), error = function(e) NULL)
+  if (!is.null(m) && is.data.frame(m) &&
+      all(c("gene_id", "accession") %in% colnames(m))) {
+    m <- data.frame(
+      gene_id = as.character(m$gene_id),
+      accession = as.character(m$accession),
+      acc_upper = toupper(sub("[-.].*$", "", as.character(m$accession))),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    m <- NULL
+  }
+  assign(key, m, envir = .pa_crossmap_cache)
+  m
+}
+
+# Hash indexes over the cross-map table (gene_id -> accessions, acc_upper ->
+# gene_ids), built once per org so per-ID lookups are O(1) instead of a full
+# table scan. Batch callers hit this thousands of times per request.
+.paGetCrossMapIndex <- function(org) {
+  key <- paste0("entrez_uniprot_index_", org)
+  if (exists(key, envir = .pa_crossmap_cache, inherits = FALSE)) {
+    return(get(key, envir = .pa_crossmap_cache, inherits = FALSE))
+  }
+  map <- .paGetCrossMapTable(org)
+  idx <- NULL
+  if (!is.null(map) && nrow(map) > 0) {
+    ok.gene <- !is.na(map$gene_id) & nzchar(map$gene_id)
+    ok.acc <- !is.na(map$acc_upper) & nzchar(map$acc_upper)
+    idx <- list(
+      by_gene = list2env(split(map$accession[ok.gene], map$gene_id[ok.gene]),
+                         parent = emptyenv()),
+      by_acc  = list2env(split(map$gene_id[ok.acc], map$acc_upper[ok.acc]),
+                         parent = emptyenv())
+    )
+  }
+  assign(key, idx, envir = .pa_crossmap_cache)
+  idx
+}
+
+.paCrossMapFeatureIds <- function(feature.id, org = NULL) {
+  out <- tryCatch({
+    if (is.null(org) || !nzchar(org)) {
+      paramSet <- readSet(paramSet, "paramSet")
+      org <- paramSet$data.org
+    }
+    idx <- if (is.null(org) || !nzchar(org)) NULL else .paGetCrossMapIndex(org)
+    if (is.null(idx)) {
+      character(0)
+    } else if (grepl("^[0-9]+$", as.character(feature.id))) {
+      hits <- idx$by_gene[[as.character(feature.id)]]
+      if (is.null(hits)) character(0) else hits
+    } else {
+      acc <- sub("[-.].*$", "", toupper(as.character(feature.id)))
+      hits <- idx$by_acc[[acc]]
+      if (is.null(hits)) character(0) else hits
+    }
+  }, error = function(e) character(0))
+  unique(out[!is.na(out) & nzchar(out)])
 }
 
 GetGroupPalette <- function(groups, paletteOpt = "default") {
@@ -130,14 +222,19 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
 
   pep.col <- if ("Peptide" %in% colnames(pep.map)) "Peptide" else colnames(pep.map)[1]
   prot.col <- if ("Protein" %in% colnames(pep.map)) "Protein" else colnames(pep.map)[2]
-  prot.norm <- NormalizeFeatureId(protein.id)
+  # Match peptides via both the caller-supplied ID and the resolved matrix row
+  # ID: network viewers pass Entrez while pep.map is keyed by the dataset's own
+  # protein IDs, and only the resolved ID matches in that case.
+  cand.ids <- unique(c(protein.id, protein.row.id))
+  cand.norm <- vapply(cand.ids, NormalizeFeatureId, character(1))
+  cand.norm <- cand.norm[!is.na(cand.norm) & nzchar(cand.norm)]
   map.prot.norm <- if ("Protein.norm" %in% colnames(pep.map)) {
     as.character(pep.map$Protein.norm)
   } else {
     vapply(pep.map[[prot.col]], NormalizeFeatureId, character(1))
   }
   map.prot.raw <- trimws(as.character(pep.map[[prot.col]]))
-  peps <- unique(as.character(pep.map[[pep.col]][map.prot.raw == protein.id | map.prot.norm == prot.norm]))
+  peps <- unique(as.character(pep.map[[pep.col]][map.prot.raw %in% cand.ids | map.prot.norm %in% cand.norm]))
   peps <- peps[!is.na(peps) & nzchar(peps)]
   peps <- peps[peps %in% rownames(pep.mat)]
   if (length(peps) == 0) {
@@ -224,6 +321,18 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
   plot.df$Feature <- factor(plot.df$Feature, levels = feature.levels)
   plot.df$Group <- factor(plot.df$Group)
   col <- GetGroupPalette(plot.df$Group, paletteOpt)
+
+  # Separate the protein summary from its peptides: each gets its own labeled
+  # facet so the protein column stands out instead of blending into the
+  # peptide columns.
+  peptide.panel.label <- if (peptide.count > length(peps)) {
+    sprintf("Peptides (showing %d of %d)", length(peps), peptide.count)
+  } else {
+    sprintf("Peptides (n = %d)", length(peps))
+  }
+  panel.levels <- c("Protein", if (length(peps) > 0) peptide.panel.label)
+  plot.df$Panel <- factor(ifelse(plot.df$Type == "Protein", "Protein", peptide.panel.label),
+                          levels = panel.levels)
   make_axis_expr <- function(lbl, is.protein = FALSE) {
     lbl <- as.character(lbl)
     lbl <- gsub("\\\\", "\\\\\\\\", lbl)
@@ -241,15 +350,28 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
   group.count <- length(group.levels)
   dodge.width <- if (group.count > 1) 0.72 else 0
 
-  n.feat <- length(feature.levels)
+  # Background bands: alternating grays behind the peptides (positions restart
+  # within each facet). The protein facet keeps the default panel background;
+  # it is already set apart by its own facet and bold label.
+  n.pep <- length(peps)
   band.df <- data.frame(
-    xmin = c(-Inf, seq_len(n.feat - 1) + 0.5),
-    xmax = c(seq_len(n.feat - 1) + 0.5, Inf),
-    ymin = -Inf,
-    ymax = Inf,
-    Fill = rep(c("#d9d9d9", "#ececec"), length.out = n.feat),
+    Panel = character(0),
+    xmin = numeric(0), xmax = numeric(0), ymin = numeric(0), ymax = numeric(0),
+    Fill = character(0),
     stringsAsFactors = FALSE
   )
+  if (n.pep > 0) {
+    band.df <- data.frame(
+      Panel = peptide.panel.label,
+      xmin = c(-Inf, seq_len(n.pep - 1) + 0.5),
+      xmax = c(seq_len(n.pep - 1) + 0.5, Inf),
+      ymin = -Inf,
+      ymax = Inf,
+      Fill = rep(c("#d9d9d9", "#ececec"), length.out = n.pep),
+      stringsAsFactors = FALSE
+    )
+  }
+  band.df$Panel <- factor(band.df$Panel, levels = panel.levels)
 
   plot.geom <- if (use.violin) {
     geom_violin(aes(color = Group),
@@ -284,7 +406,8 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
                  show.legend = FALSE) +
     scale_fill_manual(values = col) +
     scale_color_manual(values = col) +
-    scale_x_discrete(labels = parse(text = feature.labels)) +
+    scale_x_discrete(labels = function(br) parse(text = feature.labels[br])) +
+    facet_grid(. ~ Panel, scales = "free_x", space = "free_x") +
     theme_gray(base_size = 10) +
     theme(
       axis.title.x = element_blank(),
@@ -296,6 +419,9 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
       panel.grid.minor = element_blank(),
       panel.grid.major.y = element_line(color = "white", size = 0.35),
       panel.background = element_rect(fill = "#e5e5e5", color = NA),
+      panel.spacing.x = grid::unit(10, "pt"),
+      strip.text = element_text(face = "bold", size = 9, colour = "#333333"),
+      strip.background = element_rect(fill = "#d0d0d0", color = NA),
       plot.background = element_rect(fill = "white", color = NA),
       plot.title = element_blank()
     ) +

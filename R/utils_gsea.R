@@ -179,7 +179,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
   
   rownames(fgseaRes) <- make.names(fgseaRes$pathway, unique=TRUE)
   fgseaRes <- fgseaRes[,c("size","NES", "pval", "pathway", "padj")]
-  
+
   if(nrow(fgseaRes)<1){
     analSet <- SetListNms(dataSet);
     initsbls <- doEntrez2SymbolMapping(analSet$list.features, paramSet$data.org, paramSet$data.idType);
@@ -191,7 +191,15 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     sink();
     return(0);
   }
-  
+
+  # Persist GSEA parameters so analysis_summary.txt can report them.
+  tryCatch({
+    paramSet$gsea.lib      <- fun.type
+    paramSet$gsea.rank.opt <- if (nzchar(rankOpt)) rankOpt else paramSet$gseaRankOpt
+    paramSet$gsea.n.tested <- nrow(fgseaRes)
+    saveSet(paramSet, "paramSet")
+  }, error = function(e) NULL)
+
   fgseaRes <- fgseaRes[order(fgseaRes$pval),]
 
   # Limit to top 20 most significant pathways for network visualization

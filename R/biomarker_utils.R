@@ -908,6 +908,88 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
   list(train = train.adj, test = test.adj);
 }
 
+#'Project new/held-out samples into the covariate-adjusted space used for training
+#'@description When covariate/batch adjustment is active, the final biomarker model
+#' is trained on the globally-adjusted matrix (\code{dataSet$data.norm.transposed}).
+#' Genuinely new or unlabeled samples (rows whose class label is blank/Unknown) and
+#' user hold-out samples are stored UN-adjusted, so predicting them directly applies
+#' the model to inputs on a different feature scale -- a train/serve mismatch. This
+#' maps those samples through the SAME covariate removal, estimated on the labeled
+#' training samples only and applied via their covariate values (the leakage-free
+#' linear projection also used inside cross-validation). For the linear
+#' removeBatchEffect method this reproduces the global adjustment exactly; for ComBat
+#' it matches it up to the empirical-Bayes shrinkage. Rows with missing covariate
+#' metadata, or a batch/covariate level unseen in training, are returned unchanged
+#' with a warning (a new batch cannot be corrected from training data alone).
+#'@param dataSet The dataset object (must carry $cv.adjust when adjustment is active)
+#'@param new.mat Samples x features matrix of new/held-out samples to project
+#'@return new.mat with covariate effects removed (or unchanged if not applicable)
+.AdjustNewSamplesForPrediction <- function(dataSet, new.mat){
+  if(is.null(new.mat) || nrow(new.mat) == 0) return(new.mat);
+  ctx <- dataSet$cv.adjust;
+  if(!isTRUE(dataSet$covariate.adjusted) || is.null(ctx) ||
+     is.null(ctx$base.data) || is.null(ctx$adj.vec) || length(ctx$adj.vec) == 0){
+    return(new.mat);   # no covariate adjustment active -> nothing to match
+  }
+
+  meta.full <- dataSet$meta.info.original;
+  if(is.null(meta.full)) meta.full <- dataSet$meta.info;
+  rn <- rownames(new.mat);
+  if(is.null(rn) || is.null(meta.full) || !all(rn %in% rownames(meta.full))){
+    warning("Covariate adjustment not applied to prediction inputs (sample metadata unavailable); using un-adjusted values.");
+    return(new.mat);
+  }
+
+  prim <- ctx$primary.condition;
+  train.meta <- ctx$meta.info;             # labeled training rows (aligned to base.data)
+  new.meta   <- meta.full[rn, , drop=FALSE];
+
+  # New rows have no valid primary condition; assign a dummy training level purely
+  # so model.matrix builds. The primary block is never subtracted, so the dummy
+  # value cannot affect the covariate removal applied to the new rows.
+  prim.levels <- levels(factor(train.meta[[prim]]));
+  new.meta[[prim]] <- factor(prim.levels[1], levels=prim.levels);
+
+  # Align covariate factor levels to training; an unseen level cannot be corrected.
+  for(v in ctx$adj.vec){
+    if(is.numeric(train.meta[[v]])) next;
+    tl <- levels(factor(train.meta[[v]]));
+    nv <- as.character(new.meta[[v]]);
+    if(any(is.na(nv) | !(nv %in% tl))){
+      warning(paste0("Covariate adjustment not applied to prediction inputs (level of '", v,
+                     "' unseen in training); using un-adjusted values."));
+      return(new.mat);
+    }
+    new.meta[[v]]   <- factor(nv, levels=tl);
+    train.meta[[v]] <- factor(as.character(train.meta[[v]]), levels=tl);
+  }
+
+  # Build train + new designs on a COMBINED frame so covariate columns line up.
+  vars <- unique(c(prim, ctx$adj.vec));
+  comb.meta <- rbind(train.meta[, vars, drop=FALSE], new.meta[, vars, drop=FALSE]);
+  design.all <- .BuildCovariateDesign(comb.meta, prim, ctx$adj.vec);
+  if(is.null(design.all$covariate.design)) return(new.mat);   # no covariate columns to remove
+
+  n.tr   <- nrow(train.meta);
+  tr.idx <- seq_len(n.tr);
+  nw.idx <- (n.tr + 1):nrow(comb.meta);
+
+  feats <- intersect(colnames(ctx$base.data), colnames(new.mat));
+  if(length(feats) == 0) return(new.mat);
+  x.train <- ctx$base.data[, feats, drop=FALSE];
+  x.new   <- new.mat[, feats, drop=FALSE];
+
+  adj <- .RemoveCovariateEffectFold(
+            x.train, x.new,
+            design.all$primary.design[tr.idx, , drop=FALSE],
+            design.all$covariate.design[tr.idx, , drop=FALSE],
+            design.all$covariate.design[nw.idx, , drop=FALSE]);
+
+  out <- new.mat;
+  out[, feats] <- adj$test;
+  out;
+}
+
 #'Assemble the fold-wise covariate-adjustment context for CV, if active
 #'@description Returns NULL when no covariate adjustment was requested, in which
 #' case cross-validation runs on \code{dataSet$data.norm.transposed} unchanged.
@@ -1140,15 +1222,18 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
   auc.ci <- GetCIs(as.matrix(auc.vec));
   
   # if there is holdout sample, do prediction
+  # Project hold-out/new samples through the same covariate adjustment used to
+  # train `data`, so the model is applied on the matching feature scale (no-op
+  # when covariate adjustment is inactive).
   if(!is.null(dataSet$test.data)){
-    test.res <- Predict.class(data, cls, dataSet$test.data, method, lvNum);
+    test.res <- Predict.class(data, cls, .AdjustNewSamplesForPrediction(dataSet, dataSet$test.data), method, lvNum);
   }else{
     test.res <- NULL;
   }
-  
+
   # if there is new samples, do prediction
   if(!is.null(dataSet$new.data)){
-    new.res <<- Predict.class(data, cls, dataSet$new.data, method, lvNum);
+    new.res <<- Predict.class(data, cls, .AdjustNewSamplesForPrediction(dataSet, dataSet$new.data), method, lvNum);
   }else{
     new.res <- NULL;
   }
