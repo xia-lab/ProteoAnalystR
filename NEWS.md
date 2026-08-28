@@ -3,9 +3,9 @@
 ## Version 1.0.0 — 2026-08 (manuscript release)
 
 First versioned, installable release of the ProteoAnalyst analysis backend,
-accompanying the *Nucleic Acids Research* manuscript. Now a standard R package
+accompanying the *Protein Science* manuscript. Now a standard R package
 with `DESCRIPTION`, `NAMESPACE`, roxygen docs under `man/`, and a `testthat`
-suite. Archived to Zenodo for a citable DOI.
+suite. A citable Zenodo DOI will be minted for this release at publication.
 
 ### Readers & ingestion
 - Native MaxQuant `evidence.txt` ingestion at peptide/precursor level;

@@ -13,7 +13,7 @@
 ## reflects whatever the user has done so far and is regenerated whenever the
 ## Downloads page is opened.
 ##
-## Reporting fields requested for the NAR revision are stated explicitly:
+## Reporting fields requested in the reviewer revision are stated explicitly:
 ## number of features tested, raw and adjusted p-value columns, FDR threshold,
 ## fold-change threshold, enrichment multiple-testing correction, and the
 ## background/universe feature set used for enrichment.
