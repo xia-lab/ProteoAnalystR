@@ -339,7 +339,15 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min", min.obs.per.g
     }
   }
 
-  if(method=="exclude"){
+  if(method %in% c("none", "NA", "")){
+    # Keep missing values: the detection filter above still applies; limma
+    # handles remaining NAs per-feature. Avoids LoD fills inside high groups
+    # (a fill at the row floor inside an observed-high group explodes the
+    # within-group variance and destroys power under group-dependent
+    # missingness).
+    new.mat <- int.mat;
+    current.msg <- c(current.msg, "Imputation skipped ('none'); missing values retained for the model.");
+  }else if(method=="exclude"){
     # OPTIMIZED: Use rowSums instead of apply for 60-100x speedup
     good.inx<-rowSums(is.na(int.mat))==0
     new.mat<-int.mat[good.inx,, drop=FALSE];

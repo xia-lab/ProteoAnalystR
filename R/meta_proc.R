@@ -405,7 +405,24 @@ ReplaceMissingByLoD <- function(int.mat){
 
     rowNms <- rownames(int.mat);
     colNms <- colnames(int.mat);
-    int.mat <- t(apply(int.mat, 1, .replace.by.lod));
+    # Scale-aware: when the matrix is already log-transformed (values in a
+    # narrow band, as after log2 normalization), "1/5 of the minimum" must be
+    # applied on the LINEAR scale, i.e. min - log2(5) in log2 units. Dividing
+    # log values by 5 fabricates near-zero log-intensities many log2 units
+    # below the data, distorting group means and variances wherever
+    # missingness is non-trivial.
+    finite <- int.mat[is.finite(int.mat)];
+    is.log <- length(finite) > 0 && min(finite) > -50 && max(finite) < 50;
+    if (is.log) {
+        int.mat <- t(apply(int.mat, 1, function(x){
+            fin <- is.finite(x);
+            if (!any(fin)) return(x);
+            x[!fin] <- min(x[fin]) - log2(5);
+            x;
+        }));
+    } else {
+        int.mat <- t(apply(int.mat, 1, .replace.by.lod));
+    }
     rownames(int.mat) <- rowNms;
     colnames(int.mat) <- colNms;
     return (int.mat);

@@ -2067,9 +2067,13 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     mat  <- mat[keep, , drop = FALSE]
     fit  <- tryCatch(limma::lmFit(mat, des), error = function(e) NULL)
     if (is.null(fit)) return(NULL)
+    ## experiment hook (benchmarks; default off): PA_PTM_EBAYES=robust uses
+    ## intensity-trend + outlier-robust variance moderation, protecting noisy
+    ## endogenous background sites from over-shrinkage (anti-conservative t).
+    rb <- identical(Sys.getenv("PA_PTM_EBAYES"), "robust")
     fit2 <- tryCatch({
       f2 <- limma::contrasts.fit(fit, cmat)
-      limma::eBayes(f2)
+      limma::eBayes(f2, trend = rb, robust = rb)
     }, error = function(e) NULL)
     fit2
   }
@@ -2089,6 +2093,14 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
   # extract per-feature logFC, posterior SE, and total df from each fit
   .extractStats <- function(fit) {
     lfc  <- fit$coefficients[, 1]
+    if (identical(Sys.getenv("PA_PTM_EBAYES"), "ordinary")) {
+      ## experiment hook: unmoderated per-feature OLS variance (MSstatsPTM-
+      ## style) — no cross-feature shrinkage of SEs, residual df.
+      se  <- fit$sigma * fit$stdev.unscaled[, 1]
+      dft <- fit$df.residual
+      names(dft) <- rownames(fit)
+      return(list(lfc = lfc, se = se, df = dft))
+    }
     se   <- sqrt(fit$s2.post) * fit$stdev.unscaled[, 1]
     # df.total may be scalar (global eBayes) or vector (robust/trend)
     dft  <- if (length(fit$df.total) == 1) rep(fit$df.total, nrow(fit)) else fit$df.total
