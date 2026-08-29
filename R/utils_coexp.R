@@ -43,7 +43,7 @@ my.build.cemi.net <- function(dataName,
                                                       # no power reaches scale-free topology
   tryCatch({
 
-    ## 1 · load dataset -------------------------------------------------
+    ## 1 - load dataset -------------------------------------------------
     dataSet  <- readDataset(dataName)
 
     # Validate dataSet was loaded
@@ -57,7 +57,7 @@ my.build.cemi.net <- function(dataName,
       AddErrMsg(paste0("Dataset '", dataName, "' has no metadata (meta.info is NULL)")); return(0);
     }
 
-    expr_mat <- as.data.frame(dataSet$data.norm)    # features × samples
+    expr_mat <- as.data.frame(dataSet$data.norm)    # features x samples
 
     ## metadata: keep *all* columns, coerce factors -> character
     meta_df <- dataSet$meta.info
@@ -115,7 +115,7 @@ my.build.cemi.net <- function(dataName,
           " groups: ", paste(unique(class_values), collapse=", "))
     }
 
-    ## 2 · run CEMiTool -------------------------------------------------
+    ## 2 - run CEMiTool -------------------------------------------------
     suppressPackageStartupMessages({
       library(CEMiTool)
       library(WGCNA)
@@ -280,7 +280,7 @@ my.build.cemi.net <- function(dataName,
 
 
     # PRACTICAL LIMIT: Cap at top 5000 features by IQR to ensure reasonable computation time
-    # Co-expression analysis is computationally expensive (O(n²) for correlation matrix)
+    # Co-expression analysis is computationally expensive (O(n2) for correlation matrix)
     MAX_FEATURES <- 5000
     if (nrow(expr_mat) > MAX_FEATURES) {
       msg("Dataset contains ", nrow(expr_mat), " features, selecting top ", MAX_FEATURES, " by IQR...");
@@ -386,7 +386,7 @@ my.build.cemi.net <- function(dataName,
     }
 
 
-    ## 3 · save & return -----------------------------------------------
+    ## 3 - save & return -----------------------------------------------
     mod <- attr(cem, "module")
     expr_check <- attr(cem, "expression")
 
@@ -494,7 +494,7 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
     stop("'cem.qs' does not contain a valid CEMiTool object.")
 
   mode <- match.arg(mode)
-  expr <- attr(cem, "expression")       # features × samples
+  expr <- attr(cem, "expression")       # features x samples
   mod <- attr(cem, "module")
 
   ## helper ----------------------------------------------------------
@@ -527,7 +527,7 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
       addGuide     = TRUE,
       guideHang    = 0.05,
       main         = paste("Module dendrogram"),
-      ylab         = "1 − Pearson correlation")
+      ylab         = "1 \u2212 Pearson correlation")
 
     ## legend
     par(fig = c(0, 1, 0, 1), new = TRUE, mar = c(0, 0, 0, 0), xpd = NA)
@@ -544,7 +544,7 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
     invisible(dev.off())
   }
 
-  # ── MODULE dendrogram ────────────────────────────────────────────
+  # -- MODULE dendrogram --------------------------------------------
   if (mode == "module") {
     # Detect feature column name (genes vs features)
     feature_col_dendro <- if ("genes" %in% colnames(mod)) "genes" else "features";
@@ -566,7 +566,7 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
     return(1)
   }
 
-  # ── SAMPLE dendrogram ────────────────────────────────────────────
+  # -- SAMPLE dendrogram --------------------------------------------
   sa <- cem@sample_annotation
 
   ## choose metadata column sensibly
@@ -644,7 +644,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     sa <- cem@sample_annotation
     msg("Sample annotation has ", nrow(sa), " samples and ", ncol(sa), " columns: ", paste(colnames(sa), collapse=", "));
 
-    ## ── 1 · validate factorName  ----------------------------------
+    ## -- 1 - validate factorName  ----------------------------------
     # Default: use first metadata column (column 2, since column 1 is SampleName)
     if (is.na(factorName) || is.null(factorName) || factorName == "NA" || factorName == "") {
       if (ncol(sa) < 2) {
@@ -695,12 +695,12 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
 
     fac <- as.factor(fac)
 
-    ## ── 2 · dummy matrix  -----------------------------------------
+    ## -- 2 - dummy matrix  -----------------------------------------
     mm <- model.matrix(~ 0 + fac)
     colnames(mm) <- levels(fac)
     rownames(mm) <- sa$SampleName
 
-    ## ── 3 · module eigenfeatures  ------------------------------------
+    ## -- 3 - module eigenfeatures  ------------------------------------
     expr   <- attr(cem, "expression")
     modTbl <- attr(cem, "module")
 
@@ -735,13 +735,13 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
 
     mm <- mm[rownames(MEs), , drop = FALSE]
 
-    ## ── 4 · correlations  -----------------------------------------
+    ## -- 4 - correlations  -----------------------------------------
     corMat <- cor(MEs, mm, use = "p")
     pMat   <- corPvalueStudent(corMat, nSamples = nrow(MEs))
     textMat <- paste0(formatC(corMat, 2), "\n(",
                       formatC(pMat , 1, format = "e"), ")")
 
-    ## ── 4b · save the statistics shown in the heatmap  ------------
+    ## -- 4b - save the statistics shown in the heatmap  ------------
     # Long-format table of the eigengene-group correlations and their
     # p-values, with BH adjustment across all module x group tests.
     statsTbl <- data.frame(
@@ -754,7 +754,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     statsTbl <- statsTbl[order(statsTbl$P_value), , drop = FALSE]
     utils::write.csv(statsTbl, "cem_module_trait_stats.csv", row.names = FALSE)
 
-    ## ── 5 · device  (min 8 × 6 in)  -------------------------------
+    ## -- 5 - device  (min 8 x 6 in)  -------------------------------
     colfun <- colorRampPalette(c("royalblue4", "white", "tomato"))
 
     outFile <- sprintf("%sdpi%d.%s", imgName, dpi, match.arg(format))
@@ -800,7 +800,7 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
                    setStdMargins   = FALSE,
                    cex.text        = 0.7,
                    zlim            = c(-1, 1),
-                   main            = paste("Module ×", colLabel, "Levels"))
+                   main            = paste("Module \u00d7", colLabel, "Levels"))
 
     # FIX: Suppress Quartz popup on macOS
     invisible(dev.off())

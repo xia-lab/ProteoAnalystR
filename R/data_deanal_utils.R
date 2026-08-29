@@ -267,7 +267,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
 
       colData <- data.frame(condition = factor(fst.cls, levels = all_conditions))
 
-      # Covariates first, then block, then condition — condition stays LAST so every
+      # Covariates first, then block, then condition -- condition stays LAST so every
       # results(dds, contrast = c("condition", ...)) call below keeps working untouched.
       adj.nms <- character(0)
       if (!is.null(adj.frame) && ncol(adj.frame) > 0) {
@@ -324,7 +324,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
           results_list[[contrast_name]] <- topFeatures
         }
       } else {
-        # Inline .get.interaction.results() — not available in child
+        # Inline .get.interaction.results() -- not available in child
         interaction_name <- grep("factorA.*factorB.*", resultsNames(dds), value = TRUE)
         if (length(interaction_name) == 0) {
           stop("No interaction term found in model.")
@@ -341,7 +341,7 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
       }
 
       # Multi-group overall test: likelihood-ratio test of the full model vs the
-      # intercept-only (or block-only) reduced model — "does any group differ".
+      # intercept-only (or block-only) reduced model -- "does any group differ".
       omni.res <- NULL
       if (length(contrast_list) > 1) {
         # Reduced model = full model minus condition. Hardcoding ~ block dropped any
@@ -526,7 +526,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
 .perform_limma_edger <- function(dataSet, robustTrend = FALSE) {
   ## ------------------------------------------------------------------ ##
-  ## 1 · Input checks & dependencies                                    ##
+  ## 1 - Input checks & dependencies                                    ##
   ## ------------------------------------------------------------------ ##
   require(limma)
 
@@ -606,7 +606,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
   } else if (dataSet$de.method == "edger") {
 
-    # Data prep (lightweight — always in Master)
+    # Data prep (lightweight -- always in Master)
     set.seed(1)
     cnt.mat <- .get.annotated.data()
     if (length(dataSet$rmidx) > 0)
@@ -631,15 +631,15 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
         blk.mm <- stats::model.matrix(~ blk.fac)[, -1, drop = FALSE]   # drop intercept => b-1 cols
         edger.design <- cbind(edger.design, blk.mm)
         # The block coefficients are nuisance: they belong in the FIT but carry zero weight in
-        # every group contrast, so pad rather than rebuild. Keeps the leading columns — and hence
-        # every existing contrast row — exactly as the unblocked path leaves them.
+        # every group contrast, so pad rather than rebuild. Keeps the leading columns -- and hence
+        # every existing contrast row -- exactly as the unblocked path leaves them.
         pad <- matrix(0, nrow = ncol(blk.mm), ncol = ncol(contrast.matrix),
                       dimnames = list(colnames(blk.mm), colnames(contrast.matrix)))
         contrast.matrix <- rbind(contrast.matrix, pad)
       }
     }
 
-    # edgeR pipeline — isolate in subprocess
+    # edgeR pipeline -- isolate in subprocess
     result.list <- tryCatch({
       .res. <- rsclient_isolated_exec(
         func_body = function(input_data) {
@@ -884,7 +884,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   }
 
   ## ------------------------------------------------------------------ ##
-  ## 1 · Standard limma workflow                                        ##
+  ## 1 - Standard limma workflow                                        ##
   ## ------------------------------------------------------------------ ##
   fit <- tryCatch({
     if (is.null(dataSet$block)) {
@@ -924,7 +924,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   if (is.null(fit2)) return(0)
 
   ## ------------------------------------------------------------------ ##
-  ## 2 · Extract PSM/peptide/spectra count information                  ##
+  ## 2 - Extract PSM/peptide/spectra count information                  ##
   ## ------------------------------------------------------------------ ##
   # Try to find PSM count column from original data or annotations
   psm.count <- NULL
@@ -1103,11 +1103,11 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   psm.count[!usable.count] <- 1
 
   ## ------------------------------------------------------------------ ##
-  ## 3 · Apply DEqMS variance adjustment                                ##
+  ## 3 - Apply DEqMS variance adjustment                                ##
   ## ------------------------------------------------------------------ ##
   fit2$count <- psm.count
 
-  # spectraCounteBayes is the only DEqMS call — isolate in subprocess
+  # spectraCounteBayes is the only DEqMS call -- isolate in subprocess
   fit2 <- tryCatch({
     .res. <- rsclient_isolated_exec(
       func_body = function(input_data) {
@@ -1166,7 +1166,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   }
 
   ## ------------------------------------------------------------------ ##
-  ## 4 · Extract adjusted results                                       ##
+  ## 4 - Extract adjusted results                                       ##
   ## ------------------------------------------------------------------ ##
   result.list <- list()
   contrast.names <- colnames(contrast.matrix)
@@ -2131,7 +2131,7 @@ HasPeptideLevelData <- function() {
   return(file.exists("peptide_level_data.qs"))
 }
 
-# Thin limma wrapper for peptide matrices — bypasses strict df.residual==0 guard
+# Thin limma wrapper for peptide matrices -- bypasses strict df.residual==0 guard
 # and guarantees positional alignment of data columns to design rows.
 .perform_limma_peptide <- function(dataSet) {
   require(limma)
@@ -2319,7 +2319,7 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
       msg("[R DEBUG] Error reading peptide_de_results.qs")
     }
   } else {
-    msg("[R DEBUG] peptide_de_results.qs does not exist — will show NA for peptide stats")
+    msg("[R DEBUG] peptide_de_results.qs does not exist \u2014 will show NA for peptide stats")
   }
 
   cached <- list(
@@ -2458,7 +2458,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     msg("[R DEBUG] Protein ", matched.protein.id, " not found in DE results")
   }
 
-  # Extract peptide DE stats — include all peptides; use NA when pep.res is absent
+  # Extract peptide DE stats -- include all peptides; use NA when pep.res is absent
   if (!is.null(pep.res) && length(peptides) > 0) {
     idx <- match(peptides, rownames(pep.res))
     pep.fc  <- ifelse(is.na(idx), NA_real_, pep.res[idx, "logFC"])

@@ -4,7 +4,7 @@
 \alias{PlotTestAccuracy}
 \title{Plot classification performance using different features for Biomarker Tester}
 \usage{
-PlotTestAccuracy(mSetObj=NA, imgName, format="png", dpi=default.dpi)
+PlotTestAccuracy(dataName = "", imgName, format="png", dpi=default.dpi)
 }
 \arguments{
 \item{imgName}{Input a name for the plot}
@@ -14,7 +14,7 @@ PlotTestAccuracy(mSetObj=NA, imgName, format="png", dpi=default.dpi)
 \item{dpi}{Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images,
 the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.}
 
-\item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}
+\item{dataName}{Input the name of the dataset (see \code{Init.Data})}
 }
 \description{
 Plot of the accuracy of classification with an increasing number of features.

@@ -571,7 +571,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     }
 
   # UpSet plot: pairwise sig-feature intersections for multi-group limma runs.
-  # Requires comp.res.list (≥2 contrasts) — dose-response / two-group skip.
+  # Requires comp.res.list (>=2 contrasts) -- dose-response / two-group skip.
   if (dataSet$de.method == "limma" &&
       !is.null(dataSet$comp.res.list) && length(dataSet$comp.res.list) >= 2) {
     PlotPairwiseUpsetPNG(dataName = dataName, imgName = "upset_pairwise_0",
@@ -606,7 +606,7 @@ dataSet$comp.res.list <- lapply(dataSet$comp.res.list, function(tbl) {
   rbind(sig, rest)
 })
 
-## Rebuild the combined table with “sig first” and sorted by p
+## Rebuild the combined table with "sig first" and sorted by p
 # p column for the combined table
 pcol <- if (paramSet$use.fdr && "adj.P.Val" %in% names(resTable)) "adj.P.Val"
         else if ("padj" %in% names(resTable)) "padj"
@@ -618,7 +618,7 @@ resTable <- resTable[order(as.numeric(resTable[[pcol]]),
                            na.last = NA),
                      , drop = FALSE]
 
-# the remainder (“other”), ordered too
+# the remainder ("other"), ordered too
 other <- dataSet$comp.res[!(rownames(dataSet$comp.res) %in% rownames(resTable)), , drop = FALSE]
 if (nrow(other) > 0 && pcol %in% names(other)) {
   # pick tie-break column for 'other'

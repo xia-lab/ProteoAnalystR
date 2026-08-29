@@ -1,20 +1,20 @@
 
 # ====================================================================
-# BuildIgraphFromCEM  —  make a data-derived gene–gene network
+# BuildIgraphFromCEM  --  make a data-derived gene-gene network
 # --------------------------------------------------------------------
-# file        : path to the qs-saved CEMiTool object (“cem.qs”)
+# file        : path to the qs-saved CEMiTool object ("cem.qs")
 # thresh      : numeric, keep edges with weight > thresh
 # return      : igraph object with vertex/edge attributes
 # ====================================================================
 BuildIgraphFromCEM <- function(thresh    = 0.05,
                                layoutFun = igraph::layout_nicely) {
 
-  ## ── 0 · packages ─────────────────────────────────────────────────
+  ## -- 0 - packages -------------------------------------------------
   library(CEMiTool)
   library(igraph)
   library(reshape2)
 
-  ## ── 1 · read the CEMiTool object ────────────────────────────────
+  ## -- 1 - read the CEMiTool object --------------------------------
   if (!file.exists("cem.qs")) {
     AddErrMsg("cem.qs file not found. Run CEMiTool analysis first.");
     return(0);
@@ -26,21 +26,21 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
     stop(paste("Failed to read cem.qs:", conditionMessage(e)));
   })
   
-  ## ── 2 · make sure we have an adjacency matrix -------------------
-  ##     (CEMiTool stores β only if you explicitly asked for it.)
+  ## -- 2 - make sure we have an adjacency matrix -------------------
+  ##     (CEMiTool stores beta only if you explicitly asked for it.)
   get_beta <- function(cem) {
-    # 1) try stored β
+    # 1) try stored beta
     if (!is.null(cem@parameters$beta))
       return(as.numeric(cem@parameters$beta))
     
-    # 2) try default scale-free heuristic (≥ v1.29)
+    # 2) try default scale-free heuristic (>= v1.29)
     beta <- tryCatch({
-      get_cemitool_r2_beta(cem)[2]   # returns c(R2, β)
+      get_cemitool_r2_beta(cem)[2]   # returns c(R2, beta)
     }, error = function(e) NA)
     
     # 3) last-resort: WGCNA pickSoftThreshold on the expression matrix
     if (is.na(beta)) {
-      expr <- CEMiTool:::get_expression(cem)   # matrix features × samples
+      expr <- CEMiTool:::get_expression(cem)   # matrix features x samples
       sft  <- WGCNA::pickSoftThreshold(t(expr), verbose = 0)
       beta <- sft$powerEstimate
       if (is.na(beta)) beta <- 6              # fallback default
@@ -55,7 +55,7 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
     beta <- get_beta(cem)
     cem  <- get_adj(cem, beta = beta)
   }
-  adj <- adj_data(cem)                        # square features × features
+  adj <- adj_data(cem)                        # square features x features
 
   cat(sprintf("[BuildIgraphFromCEM] Adjacency matrix: %d x %d\n", nrow(adj), ncol(adj)))
   cat(sprintf("[BuildIgraphFromCEM] Sample adj rownames: %s\n", paste(head(rownames(adj), 5), collapse=", ")))
@@ -72,7 +72,7 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
     cat(sprintf("[BuildIgraphFromCEM] After setting, sample adj rownames: %s\n", paste(head(rownames(adj), 5), collapse=", ")))
   }
 
-  ## ── 3 · build edge list above threshold -------------------------
+  ## -- 3 - build edge list above threshold -------------------------
   edge.df <- melt(adj)
   # Convert factors to characters to preserve names correctly
   edge.df$Var1 <- as.character(edge.df$Var1)
@@ -108,7 +108,7 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
 
   
   
-  ## ── 4 · add vertex-level annotations ----------------------------
+  ## -- 4 - add vertex-level annotations ----------------------------
   mod.df <- cem@module                       # cols: features, modules
 
   # Debug: check module assignments
@@ -159,7 +159,7 @@ ldeg  <- log10(deg + 1)                       # stabilise high degrees
 # rescale helper
 resc <- function(x) (x - min(x)) / (max(x) - min(x))
 
-# colour ramp: yellow → dark red (works on white & black)
+# colour ramp: yellow -> dark red (works on white & black)
 pal <- colorRampPalette(c("#FFD54F", "#FFA726", "#EF5350", "#B71C1C"))(10)
 
 V(g)$color  <- pal[ ceiling( resc(ldeg) * 9 ) + 1 ]   # for light bg
@@ -171,7 +171,7 @@ V(g)$colorw <- V(g)$color                             # same for dark bg
   V(g)$size <- rescale(log10(degree(g) + 1))
   #V(g)$size <- 8;
 
-  ## ── 5 · 2-D layout coordinates ----------------------------------
+  ## -- 5 - 2-D layout coordinates ----------------------------------
   xy <- layoutFun(g)
   V(g)$posx <- xy[, 1]
   V(g)$posy <- xy[, 2]
@@ -496,7 +496,7 @@ CorrIgraph2SigmaJS <- function(g,
   })
   
   
-  ## ── edges with rescaled size 0.5–2.5  ----------------------------
+  ## -- edges with rescaled size 0.5-2.5  ----------------------------
   el <- igraph::as_data_frame(g, what = "edges")       # from, to, weight
 
   wMin <- min(el$weight)
@@ -797,7 +797,7 @@ CorrIgraph2SigmaJS <- function(g,
 
   ppi.net[["node.data"]] <- data.frame(Id=V(g)$name, Label=unname(initsbls));
   ppi.net <<- ppi.net;
-  ## ── 3 · assemble JSON payload -----------------------------------
+  ## -- 3 - assemble JSON payload -----------------------------------
   netData <- list(nodes            = nodes,
                   edges            = edges,
                   backgroundColor  = list("#f5f5f5", "#0066CC"),
@@ -903,7 +903,7 @@ GenerateCEMModuleNetworks <- function(fileName  = "coexp_network",
   sub.stats <- unlist(lapply(comps, vcount));
 
   
-  ## ── 3 · write JSON for *only the first* module in the list ─────
+  ## -- 3 - write JSON for *only the first* module in the list -----
   firstMod <- names(g.byMod)[1]              # e.g. "M1"
   netNm <- fileName;
   analSet$ppi.comps <- comps;
@@ -953,7 +953,7 @@ BuildNodeTable <- function(g,
 
   # PERFORMANCE FIX (Issue #8): Adaptive betweenness calculation
   # For large networks (>1000 nodes), use cutoff to limit path length
-  # Reduces complexity from O(V³) to approximately O(V²) for dense graphs
+  # Reduces complexity from O(V3) to approximately O(V2) for dense graphs
   n_nodes <- vcount(g)
   if (n_nodes < 1000) {
     # Small networks: use exact betweenness (fast enough)
@@ -1066,13 +1066,13 @@ ComputeSubnetStats <- function(comps){
   return(net.stats);
 }
 # ====================================================================
-# filterNetByThresh  —  edge-weight filtering for an igraph object
+# filterNetByThresh  --  edge-weight filtering for an igraph object
 # --------------------------------------------------------------------
 # g          : igraph object that already has a numeric edge attribute
 #              called 'weight'
 # thresh     : keep edges with weight > thresh
 # maxEdges   : cap the network at this many heaviest edges (NULL = no cap)
-# rmIsolated : TRUE → delete nodes that become isolated after filtering
+# rmIsolated : TRUE -> delete nodes that become isolated after filtering
 # layoutFun  : (optional) layout recalculation if you need updated coords
 # return     : list(graph = <filtered igraph>,
 #                   stats = c(nodes, edges, n.components))
@@ -1089,10 +1089,10 @@ FilterNetByThresh <- function(thresh      = 0.05,
     return(0);
   }
 
-  # ── 1 · keep only edges above threshold ───────────────────────────
+  # -- 1 - keep only edges above threshold ---------------------------
   g <- subgraph_from_edges(g, E(g)[weight > thresh], delete.vertices = FALSE)
 
-  # ── 2 · cap total edges if requested ──────────────────────────────
+  # -- 2 - cap total edges if requested ------------------------------
   if (!is.null(maxEdges) && ecount(g) > maxEdges) {
     el <- igraph::as_data_frame(g, what = "edges")
     el <- el[order(el$weight, decreasing = TRUE), ][seq_len(maxEdges), ]
@@ -1102,17 +1102,17 @@ FilterNetByThresh <- function(thresh      = 0.05,
     E(g)$weight <- el$weight                    # restore weights
   }
 
-  # ── 3 · optionally drop newly-isolated nodes ──────────────────────
+  # -- 3 - optionally drop newly-isolated nodes ----------------------
   if (rmIsolated) {
     iso <- which(igraph::degree(g) == 0)
     if (length(iso) > 0)
       g <- delete_vertices(g, iso)
   }
 
-  # ── 4 · final tidy-up (loops / multi-edges) ───────────────────────
+  # -- 4 - final tidy-up (loops / multi-edges) -----------------------
   g <- simplify(g, edge.attr.comb = list("first"))
 
-  # ── 6 · book-keeping & return  ────────────────────────────────────
+  # -- 6 - book-keeping & return  ------------------------------------
   current.msg <<-
     paste("FilterNetByThreshold:",
           vcount(g), "nodes and", ecount(g), "edges retained at thresh >", thresh);
@@ -1149,7 +1149,7 @@ FilterBipartiNet <- function(nd.type, min.dgr, min.btw){
     }
     if(min.btw > 0){
         # PERFORMANCE FIX (Issue #8): Adaptive betweenness calculation
-        # Use cutoff for large networks to reduce O(V³) complexity
+        # Use cutoff for large networks to reduce O(V3) complexity
         n_nodes <- vcount(overall.graph)
         if (n_nodes < 1000) {
             btws <- betweenness(overall.graph)

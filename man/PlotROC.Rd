@@ -4,7 +4,7 @@
 \alias{PlotROC}
 \title{Plot ROC}
 \usage{
-PlotROC(mSetObj=NA, imgName, format="png", dpi=default.dpi, mdl.inx, 
+PlotROC(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, 
 avg.method, show.conf, show.holdout, focus="fpr", cutoff = 1.0)
 }
 \arguments{
@@ -31,7 +31,7 @@ either "threshold", "vertical" or "horizontal"}
 \item{cutoff}{Input the threshold to limit the calculation of the
 ROC curve, the number must be between 0 and 1.}
 
-\item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}
+\item{dataName}{Input the name of the dataset (see \code{Init.Data})}
 }
 \description{
 Pred and auroc are lists containing predictions

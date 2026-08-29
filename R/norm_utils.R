@@ -32,12 +32,12 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
   #        " var.thresh=", var.thresh, " count.thresh=", count.thresh, " filterUnmapped=", filterUnmapped)
 
   # Read the peptide-level normalization input.  Priority:
-  # 1. peptide.input.anot.qs — saved by SummarizeProteomicsData before it overwrites
+  # 1. peptide.input.anot.qs -- saved by SummarizeProteomicsData before it overwrites
   #    norm.input.anot.qs with protein-level data.  Ensures re-running normalization
   #    after summarization still starts from the original peptide matrix.
-  # 2. norm.input.anot.qs   — the filtered peptide baseline (pre-summarization path).
-  # 3. orig.data.anot.qs    — annotated baseline (fallback).
-  # 4. data.anot.qs         — backward-compatibility fallback.
+  # 2. norm.input.anot.qs   -- the filtered peptide baseline (pre-summarization path).
+  # 3. orig.data.anot.qs    -- annotated baseline (fallback).
+  # 4. data.anot.qs         -- backward-compatibility fallback.
   if (file.exists("peptide.input.anot.qs")) {
     ds <- ov_qs_read("peptide.input.anot.qs")
   } else if(file.exists("norm.input.anot.qs")){
@@ -169,7 +169,7 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
     # rownames must match sample names (columns of count matrix)
     cd <- S4Vectors::DataFrame(row.names = colnames(m))
 
-    # DESeq2 quarantined — isolate in subprocess
+    # DESeq2 quarantined -- isolate in subprocess
     norm_counts <- rsclient_isolated_exec(
       func_body = function(input_data) {
         require(DESeq2)
@@ -301,6 +301,27 @@ ApplyFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts = list
     data <- result$data
     stats <- result$stats
 
+    # Peptide-level (evidence.txt) route: ApplyMaxQuantFiltering matches
+    # rownames against proteinGroups metadata, which does not exist here, so
+    # contaminants/decoys would silently pass. Filter by the mapped protein id
+    # instead (CON__/REV__ prefixes are MaxQuant's contaminant/decoy markers).
+    pmap <- tryCatch(readDataset(dataName)$prot.map, error = function(e) NULL)
+    if ((removeContaminants || removeDecoys) && !is.null(pmap) &&
+        all(c("Peptide", "Protein") %in% colnames(pmap))) {
+      bad <- rep(FALSE, nrow(pmap))
+      if (removeContaminants) bad <- bad | grepl("CON__|^CON_", pmap$Protein)
+      if (removeDecoys)       bad <- bad | grepl("REV__|^REV_", pmap$Protein)
+      bad.feats <- pmap$Peptide[bad]
+      hit <- rownames(data) %in% bad.feats
+      if (any(hit)) {
+        data <- data[!hit, , drop = FALSE]
+        stats$n_contaminants <- stats$n_contaminants + sum(hit)
+        msgSet$current.msg <- c(msgSet$current.msg,
+          paste0("[MaxQuant Filter] Removed ", sum(hit),
+                 " contaminant/decoy peptide features by mapped protein id"))
+      }
+    }
+
   } else if (tolower(dataFormat) == "diann") {
     qvalueFilter <- if ("qvalueFilter" %in% names(formatOpts)) {
       isTRUE(as.logical(formatOpts$qvalueFilter))
@@ -417,7 +438,7 @@ ApplyFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts = list
       removed_count <- original_count - filtered_count
       prefilter_msg <- paste0("Pre-filtering (", dataFormat, "): Removed ", removed_count,
                              " protein", ifelse(removed_count > 1, "s", ""),
-                             " (", original_count, " → ", filtered_count, ")")
+                             " (", original_count, " \u2192 ", filtered_count, ")")
       msgSet$prefilter.msg <- prefilter_msg
     } else {
       prefilter_msg <- paste0("Pre-filtering (", dataFormat, "): No proteins removed (",
@@ -478,14 +499,14 @@ ApplyProteotypicFilter <- function(dataName) {
         if (nrow(data) == 0) {
           return(skip(sprintf("Filter would remove all %d rows using Proteotypic column.", n_before)))
         }
-        msg <- sprintf("Proteotypic filter: Removed %d non-proteotypic precursors (%d → %d retained).", n_removed, n_before, nrow(data))
+        msg <- sprintf("Proteotypic filter: Removed %d non-proteotypic precursors (%d \u2192 %d retained).", n_removed, n_before, nrow(data))
         msgSet$current.msg <- c(msgSet$current.msg, msg)
         msgSet$prefilter.msg <- paste(c(msgSet$prefilter.msg, msg), collapse = " ")
         ov_qs_save(data, target_file)
         saveSet(msgSet, "msgSet")
         return(1L)
       }
-      message("[ProteotypicFilter] Proteotypic column present but 0 row names matched — falling through to other methods")
+      message("[ProteotypicFilter] Proteotypic column present but 0 row names matched \u2014 falling through to other methods")
     } else {
       message("[ProteotypicFilter] diann_metadata.qs has no Proteotypic column")
     }
@@ -525,7 +546,7 @@ ApplyProteotypicFilter <- function(dataName) {
 
     pep_overlap  <- mean(rn %in% prot_map$Peptide)
     prot_overlap <- mean(rn %in% prot_map$Protein)
-    message(sprintf("[ProteotypicFilter] Row name overlap — peptide col: %.1f%%, protein col: %.1f%%",
+    message(sprintf("[ProteotypicFilter] Row name overlap \u2014 peptide col: %.1f%%, protein col: %.1f%%",
         pep_overlap * 100, prot_overlap * 100))
 
     if (pep_overlap == 0 && prot_overlap == 0) {
@@ -551,7 +572,7 @@ ApplyProteotypicFilter <- function(dataName) {
   }
 
   message(sprintf("[ProteotypicFilter] Done: removed %d, retained %d", n_removed, nrow(data)))
-  result_msg <- sprintf("Proteotypic filter: Removed %d entries without a unique peptide (%d → %d retained).", n_removed, n_before, nrow(data))
+  result_msg <- sprintf("Proteotypic filter: Removed %d entries without a unique peptide (%d \u2192 %d retained).", n_removed, n_before, nrow(data))
   msgSet$current.msg <- c(msgSet$current.msg, result_msg)
   msgSet$prefilter.msg <- paste(c(msgSet$prefilter.msg, result_msg), collapse = " ")
 
@@ -940,7 +961,7 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     data <- normalize.quantiles(as.matrix(data), copy=TRUE);
     msg <- paste(msg, "VSN followed by quantile normalization.", collapse=" ");
   }else if(norm.opt %in% c("logcount", "RLE", "TMM")){
-    # calcNormFactors is from edgeR (quarantined) — isolate in subprocess; voom is limma (OK in Master)
+    # calcNormFactors is from edgeR (quarantined) -- isolate in subprocess; voom is limma (OK in Master)
     edger_method <- switch(norm.opt, logcount = "none", RLE = "RLE", TMM = "TMM")
     nf <- rsclient_isolated_exec(
       func_body = function(input_data) {
@@ -1048,7 +1069,7 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     data <- y$E; # copy per million
     msg <- c(msg, paste("Performed upper quartile normalization"));
   }else if(scaleNorm=="CSS"){
-    # metagenomeSeq quarantined — isolate in subprocess
+    # metagenomeSeq quarantined -- isolate in subprocess
     data <- rsclient_isolated_exec(
       func_body = function(input_data) {
         require(metagenomeSeq)
@@ -1205,7 +1226,7 @@ SummarizeProteomicsData <- function(dataName = "",
     # MSstats route: dataProcess performs equalize-medians normalization,
     # censored-aware AFT imputation (MBimpute) and TMP summarization as one
     # coupled unit on the ORIGINAL peptide/feature intensities
-    # (msstats_input.qs) — reproducing the MSstats default workflow
+    # (msstats_input.qs) -- reproducing the MSstats default workflow
     # end-to-end. MSstats' internal normalization supersedes the upstream
     # normalization step for protein quantification, and top_n/min_peptides
     # do not apply (featureSubset = "all", the MSstats default).
@@ -1263,8 +1284,11 @@ SummarizeProteomicsData <- function(dataName = "",
         return(parts[2])
       }
     }
-    # Fallback: strip species suffix/isoform
-    first <- sub("_.*", "", first)
+    # Fallback: strip species suffix/isoform. Only a short terminal suffix is
+    # removed (UniProt species mnemonics are <= 5 chars, e.g. _HUMAN, _CHICK);
+    # longer tails are part of the identifier itself (e.g. spike-in ids like
+    # SS2_P01012 in the Skyline controlled mixture) and must be preserved.
+    first <- sub("_[A-Za-z0-9]{1,5}$", "", first)
     first <- sub("-\\d+$", "", first)
     return(first)
   }
@@ -1913,7 +1937,7 @@ PlotProteinProfile <- function(dataName = "", protein_id = "", imgName = "prot_p
       parts <- strsplit(first, "\\|")[[1]]
       if (length(parts) >= 2 && nzchar(parts[2])) return(parts[2])
     }
-    first <- sub("_.*", "", first)
+    first <- sub("_[A-Za-z0-9]{1,5}$", "", first)   # species mnemonic only; keep longer tails (see summarization)
     first <- sub("-\\d+$", "", first)
     return(first)
   }
@@ -2056,8 +2080,8 @@ BuildProteinOptions <- function() {
 
 #' Correct phosphosite intensities by protein abundance
 #'
-#' @param phospho_data Matrix of phosphosite intensities (log2-transformed), sites × samples
-#' @param protein_ref Matrix of protein abundances (log2-transformed), proteins × samples
+#' @param phospho_data Matrix of phosphosite intensities (log2-transformed), sites x samples
+#' @param protein_ref Matrix of protein abundances (log2-transformed), proteins x samples
 #' @return Corrected phosphosite matrix with protein abundance subtracted
 .correctPhosphoByProteinAbundance <- function(phospho_data, protein_ref) {
 
@@ -2787,7 +2811,7 @@ ApplyPhosphoFormatSpecificFiltering <- function(dataName, dataFormat, formatOpts
   stats <- result$stats
   summary_msg <- paste0(
     "[Phospho Filter] Format-specific filtering complete: ",
-    stats$n_total, " → ", stats$n_final, " phosphosites"
+    stats$n_total, " \u2192 ", stats$n_final, " phosphosites"
   )
   msgSet$current.msg <- c(msgSet$current.msg, summary_msg)
   saveSet(msgSet, "msgSet")
@@ -3911,7 +3935,7 @@ PlotProteoformOverview <- function(dataName, isoformGroup, imageName,
 }
 
 # PTM Occupancy Analysis
-# UniMod:4 (Carbamidomethyl) is a fixed sample-prep modification — excluded from occupancy pairing.
+# UniMod:4 (Carbamidomethyl) is a fixed sample-prep modification -- excluded from occupancy pairing.
 PTM_FIXED_MODS <- "UniMod:4"
 
 PTM_UNIMOD_NAMES <- c(
@@ -4074,15 +4098,15 @@ DetectPTMOccupancy <- function(dataName) {
           " unmodified rows: ", sum(!meta$is.bio.mod))
   message("[PTMOccupancy] mod.sig table: ", paste(names(table(meta$mod.sig)), table(meta$mod.sig), sep="=", collapse=", "))
 
-  # Vectorized intensity aggregation with rowsum() — avoids per-sequence matrix operations.
+  # Vectorized intensity aggregation with rowsum() -- avoids per-sequence matrix operations.
   # 1. Exponentiate the whole matrix once to linear scale.
   # 2. rowsum() group-sums by (Stripped.Sequence + mod.sig) in a single C pass.
-  # 3. Per-sample NA tracking: if every precursor in a group is NA for a sample → NA result.
+  # 3. Per-sample NA tracking: if every precursor in a group is NA for a sample -> NA result.
   grp.key  <- paste0(meta$Stripped.Sequence, "___", meta$mod.sig)
   lin.mat  <- 2^pep.mat[meta$Protein.IDs, samples, drop = FALSE]
   lin.mat[is.nan(lin.mat)] <- NA
 
-  lin.mat0 <- lin.mat; lin.mat0[is.na(lin.mat0)] <- 0  # NA→0 for rowsum
+  lin.mat0 <- lin.mat; lin.mat0[is.na(lin.mat0)] <- 0  # NA->0 for rowsum
   det.mat  <- (!is.na(lin.mat)) + 0L                    # 1 if detected, 0 if NA
 
   grp.sum  <- rowsum(lin.mat0, grp.key)
@@ -4173,7 +4197,7 @@ DetectPTMOccupancy <- function(dataName) {
   if (is.null(results) || nrow(results) == 0)
     return(fail(paste0(
       "Insufficient data for PTM occupancy analysis. ",
-      "Need ≥2 samples with both modified and unmodified forms detected per condition."
+      "Need \u22652 samples with both modified and unmodified forms detected per condition."
     )))
 
   results$Occ.FDR <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
@@ -4223,7 +4247,7 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
   pep.mat  <- pep.mat[, samples, drop = FALSE]
   groups   <- groups[samples]
 
-  # Filter to the target peptide first — avoids running mod extraction on all 100k+ rows
+  # Filter to the target peptide first -- avoids running mod extraction on all 100k+ rows
   seq.rows <- meta[meta$Stripped.Sequence == peptide & meta$Protein.IDs %in% rownames(pep.mat), , drop = FALSE]
   if (nrow(seq.rows) == 0) return(invisible(0))
 
@@ -4263,7 +4287,7 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
   col <- GetGroupPalette(df$Condition, paletteOpt)
 
   mod.label <- ptm.format.mod.name(strsplit(modSig, "+", fixed = TRUE)[[1]])
-  trunc.seq <- if (nchar(peptide) > 28) paste0(substr(peptide, 1, 28), "…") else peptide
+  trunc.seq <- if (nchar(peptide) > 28) paste0(substr(peptide, 1, 28), "\u2026") else peptide
 
   df$Condition <- factor(df$Condition, levels = names(col))
 
@@ -4358,7 +4382,7 @@ PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
                        limits = c(0, 1.08), expand = c(0, 0)) +
     coord_flip() +
     labs(x = NULL, y = "Occupancy",
-         caption = "◆ median   * FDR ≤ 0.05   ** FDR ≤ 0.01") +
+         caption = "\u25c6 median   * FDR \u2264 0.05   ** FDR \u2264 0.01") +
     theme_bw(base_size = 10) +
     theme(
       panel.grid.major.y = element_blank(),

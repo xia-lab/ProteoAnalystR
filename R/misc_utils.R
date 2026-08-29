@@ -446,7 +446,7 @@ InitEnrichmentNetwork <- function(dataName, type){
     res <- .performEnrichAnalysisPhospho(dataSet, paste0("enrichment_", type), type, analSet$list.features, "network");
   } else {
     # Regular data - use standard enrichment (UniProt IDs)
-    # .performEnrichAnalysis handles UniProt → Entrez conversion internally
+    # .performEnrichAnalysis handles UniProt -> Entrez conversion internally
     res <- .performEnrichAnalysis(dataSet, paste0("enrichment_", type), type, analSet$list.features, "network");
   }
 
@@ -504,7 +504,7 @@ PerformListEnrichmentView <- function(dataName="", file.nm, fun.type, netNm, IDs
     res <- .performEnrichAnalysisPhospho(dataSet, file.nm, fun.type, analSet$list.features, "network");
   } else {
     # Regular data - use standard enrichment (UniProt IDs)
-    # .performEnrichAnalysis handles UniProt → Entrez conversion internally
+    # .performEnrichAnalysis handles UniProt -> Entrez conversion internally
     res <- .performEnrichAnalysis(dataSet, file.nm, fun.type, analSet$list.features, "network");
   }
 
@@ -649,11 +649,11 @@ PerformSetOperation_DataEnr <- function(nms, operation, refNm){
 run_func_via_rc_microservice <- function(...) run_func_via_microservice(...)
 
 run_func_via_microservice <- function(func, args = list(), timeout_sec = 60) {
-  # RSclient has been retired — always run in a fresh callr subprocess (falling
+  # RSclient has been retired -- always run in a fresh callr subprocess (falling
   # back to in-process below); never dispatch to the nested RSclient fork.
   # Run the closure in a fresh, short-lived R process (a microservice), which then exits and reclaims
   # all memory it used plus any packages it attached. Replaces the old nested Rserve-client path, which
-  # reliably crashed the worker with "Fatal error: unable to initialize the JIT" (Rserve error 127) —
+  # reliably crashed the worker with "Fatal error: unable to initialize the JIT" (Rserve error 127) --
   # the failure that left count normalization (logcount/RLE/TMM/MORlog) throwing and downstream DE
   # running on raw counts. Falls back to in-process if callr is unavailable or the child errors, so a
   # caller never breaks. `func` is a self-contained closure that exchanges data via ov_qs_* bridge
@@ -687,12 +687,12 @@ run_func_via_microservice <- function(func, args = list(), timeout_sec = 60) {
 
 # Run a self-contained closure in an ISOLATED R subprocess and return its result
 # through qs bridge files. ExpressAnalystR/ProteoAnalystR CALL this (dim-reduction
-# PCA diagnostics, normalization, DE, report) but historically did NOT define it —
-# only microbiome/mirnet/metabo/oa/on did — so express/proteo sessions failed with
+# PCA diagnostics, normalization, DE, report) but historically did NOT define it --
+# only microbiome/mirnet/metabo/oa/on did -- so express/proteo sessions failed with
 # `could not find function "rsclient_isolated_exec"` and those figures errored.
 # It routes through run_func_via_microservice above, which uses a fresh callr
 # subprocess when on.ov is TRUE (this deployment; a nested RSclient fork is
-# unstable here) and falls back to in-process otherwise. The name is legacy — the
+# unstable here) and falls back to in-process otherwise. The name is legacy -- the
 # executor is callr here, not RSclient.
 rsclient_isolated_exec <- function(func_body, input_data, packages = character(0),
                                    timeout = 180, output_type = "qs") {
@@ -1317,7 +1317,7 @@ GetSetCacheInfo <- function() {
 
 readDataset <- function(dataName = "", quiet = FALSE) {
 
-  #── 1 · quick sanity check ----------------------------------------------------
+  #-- 1 - quick sanity check ----------------------------------------------------
   if (length(dataName) == 0L || dataName == "" || is.na(dataName) || identical(dataName, "NA")) {
     # try to recover from paramSet$dataName
     paramSet <- readSet(paramSet, "paramSet")
@@ -1330,14 +1330,14 @@ readDataset <- function(dataName = "", quiet = FALSE) {
     }
   }
 
-  #── 2 · choose source --------------------------------------------------------
+  #-- 2 - choose source --------------------------------------------------------
   tryCatch({
 
       if (exists("dataSets") &&
           !is.null(dataSets) &&
           !is.null(dataSets[[dataName]])) {
 
-        obj <- dataSets[[dataName]]                         # in‑memory copy
+        obj <- dataSets[[dataName]]                         # in-memory copy
 
       } else {                                              # fall back to .qs
         qsfile <- replace_extension_with_qs(dataName)
@@ -1347,9 +1347,9 @@ readDataset <- function(dataName = "", quiet = FALSE) {
 
     obj
 
-  }, error = function(e) {                                  #── 3 · graceful fail
+  }, error = function(e) {                                  #-- 3 - graceful fail
     if (!quiet)
-      warning(sprintf("readDataset: cannot load '%s' – %s",
+      warning(sprintf("readDataset: cannot load '%s' \u2013 %s",
                       dataName, e$message), call. = FALSE)
     NULL
   })
@@ -1420,7 +1420,7 @@ PrepareSqliteDB <- function(sqlite_Path, onweb = TRUE) {
   }, error = function(e) FALSE, warning = function(w) FALSE);
   if(!ok){
     if(file.exists(sqlite_Path)) unlink(sqlite_Path);  # drop partial/empty download
-    AddErrMsg(paste0("Reference database '", dbNM, "' unavailable — check internet, or use the bundled image / mount OMICS_LIB_DIR."));
+    AddErrMsg(paste0("Reference database '", dbNM, "' unavailable \u2014 check internet, or use the bundled image / mount OMICS_LIB_DIR."));
     return(FALSE);
   }
   return(TRUE);

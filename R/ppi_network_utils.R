@@ -113,7 +113,7 @@ ComputeSubnetStats <- function(comps){
   cleaned <- sub("^([^;]+);.*$", "\\1", cleaned)
   cleaned <- sub("^([^,]+),.*$", "\\1", cleaned)
   cleaned <- sub("-\\d+$", "", cleaned)
-  # Remove phosphosite annotations (e.g., Q9D1F4_T_247 → Q9D1F4)
+  # Remove phosphosite annotations (e.g., Q9D1F4_T_247 -> Q9D1F4)
   # Pattern: _[A-Z]_\d+ (underscore, amino acid, underscore, position)
   cleaned <- sub("_[A-Z]_\\d+$", "", cleaned)
   cleaned
@@ -462,7 +462,7 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
     edges <- if (intra.count > 0) intra.edges else data.frame()
 
     # For dense databases without a confidence score filter (non-STRING), prune non-seed
-    # neighbor nodes that connect to only one seed — these are peripheral and inflate the
+    # neighbor nodes that connect to only one seed -- these are peripheral and inflate the
     # network. Only retain non-seeds with >= 2 seed connections (linker nodes).
     if (!grepl("string$", dbName) && nrow(edges) > 0) {
       all.edge.nodes <- unique(c(as.character(edges$id1), as.character(edges$id2)))

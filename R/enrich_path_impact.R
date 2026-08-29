@@ -184,23 +184,23 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   msgSet   <- readSet(msgSet, "msgSet")
   dataSet  <- readDataset(dataName)
 
-  # For protein-list uploads sig.mat is absent — use the full uploaded list as the hit set
+  # For protein-list uploads sig.mat is absent -- use the full uploaded list as the hit set
   if (is.null(dataSet$sig.mat) || nrow(dataSet$sig.mat) == 0) {
     # NOTHING passed the significance cut.
     #
     # The old behaviour used EVERY row of norm.mat as the hit set. That is degenerate, not
     # merely weak: q.size then equals uniq.count, so phyper(hit-1, set.size,
     # uniq.count-set.size, q.size, lower.tail=FALSE) returns 1 for EVERY pathway and
-    # impact (hit.num/set.size) returns 1.0 for every pathway — the "top 20 by raw p" cap
+    # impact (hit.num/set.size) returns 1.0 for every pathway -- the "top 20 by raw p" cap
     # below was ranking arbitrary ties and presenting noise as a result.
     #
     # Instead, when the caller opts in via ov.pa.impact.topn.fallback, rank the differential
     # result by RAW p and take the top N. q.size is then a real N against uniq.count, so the
     # hypergeometric is well posed again. These proteins are NOT significant and the p-values
     # are conditioned on a data-driven selection: exploratory only. The flag below is what
-    # labels them downstream — do not drop it.
+    # labels them downstream -- do not drop it.
     # Default 100, NOT 0. This card is BEAN-dispatched (function_def.name =
-    # paNavi.goToPathwayImpact), and on that path the workflow JSON's rCommands are IGNORED —
+    # paNavi.goToPathwayImpact), and on that path the workflow JSON's rCommands are IGNORED --
     # so an opt-in written as options(...) in rCommands can never fire, and defaulting to 0
     # meant this branch always returned "not computed". The option remains an override:
     # set ov.pa.impact.topn.fallback = 0 to disable the fallback entirely.
@@ -213,7 +213,7 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
       sig.vec <- rownames(cr)[take]
       assign(".ov.impact.rank.n", length(sig.vec), envir = globalenv())
       msgSet$current.msg <- paste0(
-        "No protein passed the significance cut — pathway impact was computed on the top ",
+        "No protein passed the significance cut \u2014 pathway impact was computed on the top ",
         length(sig.vec), " proteins by RAW p-value rank. These are NOT significant; treat ",
         "the enrichment as exploratory.")
     } else {
@@ -234,7 +234,7 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   sig.vec <- sub("-\\d+$", "", sig.vec)           # strip isoform suffixes
   sig.vec <- unique(trimws(sig.vec))
 
-  # Convert UniProt → Entrez IDs
+  # Convert UniProt -> Entrez IDs
   org <- paramSet$data.org
   uniprot.map <- queryGeneDB("entrez_uniprot", org)
   hit.inx       <- match(sig.vec, uniprot.map[, "accession"])
@@ -250,7 +250,7 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
     return(0)
   }
 
-  # Build symbol → UniProt map (for network viewer highlighting)
+  # Build symbol -> UniProt map (for network viewer highlighting)
   sym.paired <- doEntrez2SymbolMapping(entrez.paired, org, "entrez")
   valid.sym  <- !is.na(sym.paired) & nchar(trimws(sym.paired)) > 0
   if (any(valid.sym)) {
@@ -271,7 +271,7 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
     return(0)
   }
   current.featureset <- setres$current.featureset
-  current.setids     <- setres$current.setids    # named vector: pathway name → KEGG pathway ID
+  current.setids     <- setres$current.setids    # named vector: pathway name -> KEGG pathway ID
 
   # Determine background universe. Read the same paramSet$universe.opt the UI
   # sets (via SetUniverseOpt) and the other enrichment paths use, so pathway
@@ -313,7 +313,7 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   set.size      <- set.size[keep]
   hit.num       <- hit.num[keep]
   hits.query    <- hits.query[keep]
-  ora.enzyme.hits.list <<- hits.query   # pathway name → Entrez IDs vector
+  ora.enzyme.hits.list <<- hits.query   # pathway name -> Entrez IDs vector
 
   if (length(hit.num) == 0) {
     msgSet$current.msg <- "No significant pathways found."
@@ -423,7 +423,7 @@ CalculateEnzymePathwayGsea <- function(dataName) {
     return(0)
   }
 
-  # Build ranked vector: UniProt IDs → logFC
+  # Build ranked vector: UniProt IDs -> logFC
   lfc <- comp.res[, "logFC"]
   names(lfc) <- rownames(comp.res)
   lfc <- lfc[is.finite(lfc)]
@@ -452,7 +452,7 @@ CalculateEnzymePathwayGsea <- function(dataName) {
   ranked.vec <- ranked.vec[order(-abs(ranked.vec))]
   ranked.vec <- ranked.vec[!duplicated(names(ranked.vec))]
 
-  # Build symbol → UniProt map (for network viewer highlighting)
+  # Build symbol -> UniProt map (for network viewer highlighting)
   sym.paired <- doEntrez2SymbolMapping(names(ranked.vec), org, "entrez")
   uniprot.paired <- lfc.df$uniprot[valid][!duplicated(names(ranked.vec))]
   valid.sym <- !is.na(sym.paired) & nchar(trimws(sym.paired)) > 0
@@ -501,7 +501,7 @@ CalculateEnzymePathwayGsea <- function(dataName) {
     return(0)
   }
 
-  # Build hits.query for network highlighting: leading edge → Entrez → UniProt
+  # Build hits.query for network highlighting: leading edge -> Entrez -> UniProt
   le.list <- gsea.res$leadingEdge
   names(le.list) <- gsea.res$pathway
   ora.enzyme.hits.list <<- le.list

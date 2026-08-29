@@ -238,7 +238,7 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
     if (!is.null(protein_data) && nrow(protein_data) > 0) {
       paramSet$protein.ref <- protein_data
       paramSet$has.protein.ref <- TRUE
-      #msg("[ReadPhosphoData] Global proteome file loaded: ", nrow(protein_data), " proteins × ", ncol(protein_data), " samples.")
+      #msg("[ReadPhosphoData] Global proteome file loaded: ", nrow(protein_data), " proteins x ", ncol(protein_data), " samples.")
 
       # Report missing values in protein reference data
       total_protein_values <- nrow(protein_data) * ncol(protein_data)
@@ -718,7 +718,7 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
   intensity_mat <- intensity_mat[valid_rows, , drop = FALSE]
 
   #msg("[.readMaxQuantProteome] Returning protein abundance matrix: ",
-  #        nrow(intensity_mat), " proteins × ", ncol(intensity_mat), " samples.")
+  #        nrow(intensity_mat), " proteins x ", ncol(intensity_mat), " samples.")
 
   return(intensity_mat)
 }
@@ -873,7 +873,7 @@ CollapsePhosphoToProtein <- function() {
   row.nms <- rownames(phospho_mat);
   col.nms <- colnames(phospho_mat);
 
-  msg("[CollapsePhosphoToProtein] Input matrix: ", nrow(phospho_mat), " phosphosites × ",
+  msg("[CollapsePhosphoToProtein] Input matrix: ", nrow(phospho_mat), " phosphosites \u00d7 ",
           ncol(phospho_mat), " samples")
 
   # Check feature info
@@ -1012,9 +1012,9 @@ CollapsePhosphoToProtein <- function() {
     return(0)
   }
 
-  msg("[CollapsePhosphoToProtein] Collapsed result: ", nrow(protein_mat), " proteins × ",
+  msg("[CollapsePhosphoToProtein] Collapsed result: ", nrow(protein_mat), " proteins \u00d7 ",
           ncol(protein_mat), " samples")
-  msg("[CollapsePhosphoToProtein] Reduction: ", nrow(phospho_mat), " sites → ",
+  msg("[CollapsePhosphoToProtein] Reduction: ", nrow(phospho_mat), " sites \u2192 ",
           nrow(protein_mat), " proteins (",
           round(100 * nrow(protein_mat) / nrow(phospho_mat), 1), "%)")
 
@@ -1060,7 +1060,7 @@ CollapsePhosphoToProtein <- function() {
 
   # Perform annotation: convert protein IDs/gene names to Entrez IDs
   msg("[CollapsePhosphoToProtein] ======================================")
-  msg("[CollapsePhosphoToProtein] Starting annotation: Protein/Gene → Entrez")
+  msg("[CollapsePhosphoToProtein] Starting annotation: Protein/Gene \u2192 Entrez")
   msg("[CollapsePhosphoToProtein] ======================================")
 
   # Determine ID type for annotation
@@ -1093,7 +1093,7 @@ CollapsePhosphoToProtein <- function() {
     );
     msg("[CollapsePhosphoToProtein] Annotation completed successfully")
     msg("[CollapsePhosphoToProtein] Annotated data dimensions: ",
-            nrow(dataSet$data.norm), " features × ", ncol(dataSet$data.norm), " samples")
+            nrow(dataSet$data.norm), " features \u00d7 ", ncol(dataSet$data.norm), " samples")
   }, error = function(e) {
     msg("[CollapsePhosphoToProtein] WARNING: Annotation failed: ", e$message)
     msg("[CollapsePhosphoToProtein] Continuing without annotation (protein IDs will be used as-is)")
@@ -1168,7 +1168,7 @@ MapPhosphositeUniprotToSymbol <- function() {
   phosphosite_ids <- rownames(phospho_mat)
 
   msg("[MapPhosphositeUniprotToSymbol] Data matrix: ", nrow(phospho_mat),
-          " phosphosites × ", ncol(phospho_mat), " samples")
+          " phosphosites \u00d7 ", ncol(phospho_mat), " samples")
   msg("[MapPhosphositeUniprotToSymbol] Sample phosphosite IDs: ",
           paste(head(phosphosite_ids, 3), collapse=", "))
 
@@ -1631,7 +1631,7 @@ MapPhosphositeUniprotToSymbol <- function() {
         as.data.frame(int.mat, check.names = FALSE)
       )
 
-      msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites × ", ncol(int.mat), " samples")
+      msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites \u00d7 ", ncol(int.mat), " samples")
 
       return(list(
         data = int.mat,
@@ -1738,7 +1738,7 @@ MapPhosphositeUniprotToSymbol <- function() {
         as.data.frame(int.mat, check.names = FALSE)
       )
 
-      msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites × ", ncol(int.mat), " samples")
+      msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites \u00d7 ", ncol(int.mat), " samples")
 
       return(list(
         data = int.mat,
@@ -1790,7 +1790,7 @@ MapPhosphositeUniprotToSymbol <- function() {
 
   msg("[.readDIANNPhospho] Found ", length(unique(dat_expanded$site_id)), " unique phosphosites")
 
-  # --- 3. Pivot to Wide Format (Sites × Samples) ---
+  # --- 3. Pivot to Wide Format (Sites x Samples) ---
   # DIA-NN is long format (one row per precursor per run)
   # We need to aggregate to wide format for downstream analysis
 
@@ -1832,7 +1832,7 @@ MapPhosphositeUniprotToSymbol <- function() {
   # Treat zeros as missing (proteomics convention)
   int.mat[int.mat == 0] <- NA
 
-  msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites × ", ncol(int.mat), " samples")
+  msg("[.readDIANNPhospho] Final matrix: ", nrow(int.mat), " sites \u00d7 ", ncol(int.mat), " samples")
 
   # --- 4. Build Feature Info Table ---
   # Extract metadata for each phosphosite

@@ -91,9 +91,9 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     }
   }
 
-  # ═══════════════════════════════════════════════════════════════════════════
+  # ===========================================================================
   # CRITICAL FIX: Convert rankedVec names from UniProt to Entrez for FGSEA
-  # ═══════════════════════════════════════════════════════════════════════════
+  # ===========================================================================
   # current.featureset contains Entrez IDs (from KEGG/Reactome/GO databases)
   # rankedVec names are currently UniProt IDs (from proteomics data)
   # FGSEA requires matching ID types, so we must convert rankedVec names to Entrez
@@ -111,7 +111,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
 
     # Normalize UniProt IDs: first strip DIA-NN compound format, then phosphosite/isoform suffixes
     # DIA-NN row names look like "Q04837,A4D1U3|TX=9606 OS=Human GN=SSBP1 TA=..." or
-    # "P62851|TX=9606 OS=Human GN=RPS25 TA=..." — extract the primary accession only
+    # "P62851|TX=9606 OS=Human GN=RPS25 TA=..." -- extract the primary accession only
     normalized.ranked <- ranked.ids
     normalized.ranked <- sub("\\|.*$", "", normalized.ranked)   # strip everything after | (DIA-NN metadata)
     normalized.ranked <- sub(",.*$", "", normalized.ranked)      # take first ID from comma-joined group
@@ -119,7 +119,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     normalized.ranked <- sub("-\\d+$", "", normalized.ranked)
     normalized.ranked <- trimws(normalized.ranked)
 
-    # Query UniProt → Entrez mapping
+    # Query UniProt -> Entrez mapping
     uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
     hit.inx <- match(normalized.ranked, uniprot.map[, "accession"])
     entrez.ids.ranked <- uniprot.map[hit.inx, "gene_id"]
@@ -240,7 +240,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     normalized.ora.vec <- sub("-\\d+$", "", normalized.ora.vec)         # Remove isoforms
     normalized.ora.vec <- trimws(normalized.ora.vec)
 
-    # Query UniProt → Entrez mapping
+    # Query UniProt -> Entrez mapping
     uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
     hit.inx <- match(normalized.ora.vec, uniprot.map[, "accession"])
     entrez.vec <- uniprot.map[hit.inx, "gene_id"]
@@ -300,7 +300,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
       normalized.list <- sub("-\\d+$", "", normalized.list)
       normalized.list <- trimws(normalized.list)
 
-      # Query UniProt → Entrez mapping
+      # Query UniProt -> Entrez mapping
       uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
       hit.inx <- match(normalized.list, uniprot.map[, "accession"])
       list.features.entrez <- uniprot.map[hit.inx, "gene_id"]

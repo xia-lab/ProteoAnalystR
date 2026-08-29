@@ -4,7 +4,7 @@
 \alias{PlotROCTest}
 \title{Plot ROC for the ROC Curve Based Model Creation and Evaluation module}
 \usage{
-PlotROCTest(mSetObj=NA, imgName, format="png", 
+PlotROCTest(dataName = "", imgName, format="png", 
 dpi=default.dpi, mdl.inx, avg.method, show.conf, show.holdout, focus="fpr", cutoff = 1.0)
 }
 \arguments{
@@ -30,7 +30,7 @@ either "threshold", "vertical" or "horizontal"}
 
 \item{cutoff}{Input the threshold to limit the calculation of the ROC curve, the number must be between 0 and 1.}
 
-\item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}
+\item{dataName}{Input the name of the dataset (see \code{Init.Data})}
 }
 \description{
 Plot the ROC curve of the biomarker model created using a user-selected subset of features.

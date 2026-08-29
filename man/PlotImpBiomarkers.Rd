@@ -4,7 +4,7 @@
 \alias{PlotImpBiomarkers}
 \title{Plot selected compounds by their percentage frequency}
 \usage{
-PlotImpBiomarkers(mSetObj=NA, imgName, format="png", dpi=default.dpi, 
+PlotImpBiomarkers(dataName = "", imgName, format="png", dpi=default.dpi, 
 mdl.inx, measure = "freq", feat.num = 15)
 }
 \arguments{
@@ -23,7 +23,7 @@ mean importance measure "mean"}
 
 \item{feat.num}{Input the number of features to include in the plot, by default it is 15.}
 
-\item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}
+\item{dataName}{Input the name of the dataset (see \code{Init.Data})}
 }
 \description{
 Plot the important variables of single biomarker model ranked by order of importance

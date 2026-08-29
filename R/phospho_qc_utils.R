@@ -127,7 +127,7 @@ qc.loc.prob.hist <- function(loc_probs, imgNm, dpi = 96, format = "png") {
     geom_histogram(binwidth = 0.05, fill = "#3498db", color = "white", alpha = 0.8) +
     geom_vline(xintercept = 0.75, linetype = "dashed", color = "#e74c3c", size = 1) +
     geom_vline(xintercept = 0.5, linetype = "dashed", color = "#f39c12", size = 1) +
-    annotate("text", x = 0.875, y = Inf, label = paste0("Class I\n(≥0.75)\n", class_I, " sites"),
+    annotate("text", x = 0.875, y = Inf, label = paste0("Class I\n(\u22650.75)\n", class_I, " sites"),
              vjust = 1.5, hjust = 0.5, size = 3.5, color = "#2c3e50") +
     annotate("text", x = 0.625, y = Inf, label = paste0("Class II\n(0.5-0.75)\n", class_II, " sites"),
              vjust = 1.5, hjust = 0.5, size = 3.5, color = "#2c3e50") +

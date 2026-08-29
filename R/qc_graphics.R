@@ -760,7 +760,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
   if(interactive){
     library(plotly);
     w <- 800;  # Single panel width
-    return(layout(ggplotly(bp), autosize = FALSE, width = w, height = 600));
+    return(plotly::layout(plotly::ggplotly(bp), autosize = FALSE, width = w, height = 600));
   }else{
     
     # --- FIX: Safe Device Handling ---
@@ -903,7 +903,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
   row_mean[!is.finite(row_mean)] <- NA_real_
   sample_indices <- sampleIndex
   if (mode == "overview") {
-    # Cap the overview to 12 randomly selected samples — a per-sample MA grid of
+    # Cap the overview to 12 randomly selected samples -- a per-sample MA grid of
     # dozens of panels is unreadable and slow on large datasets.
     sample_indices <- .qc_subsample_samples(ncol(dat), 12L)
   }
@@ -987,7 +987,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
 
   if (interactive) {
     library(plotly)
-    return(layout(ggplotly(p), autosize = FALSE, width = fig_w, height = fig_h))
+    return(plotly::layout(plotly::ggplotly(p), autosize = FALSE, width = fig_w, height = fig_h))
   } else {
     if (dpi == 72) dpi <- 96
     Cairo::Cairo(file = fullPath, width = fig_w * dpi/96, height = fig_h * dpi/96, unit = "px", dpi = dpi, type = format, bg = "white")
@@ -1759,7 +1759,7 @@ qc.density<- function(dataSet, imgNm="abc", dpi=96, format, interactive){
     }else{
       w=800;
     }
-    ggp_build <- layout(ggplotly(g), autosize = FALSE, width = w, height = 600, margin = m)
+    ggp_build <- plotly::layout(plotly::ggplotly(g), autosize = FALSE, width = w, height = 600, margin = m)
     return(ggp_build);
   }else{
     imgSet <- readSet(imgSet, "imgSet");
@@ -2054,7 +2054,7 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
   if (interactive) {
     library(plotly)
     w <- 800  # Single panel width (no longer creating dual panels)
-    return(layout(ggplotly(pcafig), autosize=FALSE, width=w, height=600))
+    return(plotly::layout(plotly::ggplotly(pcafig), autosize=FALSE, width=w, height=600))
   } else {
     
     # --- FIX: Safe Device Handling ---
@@ -2139,7 +2139,7 @@ qc.ncov5.plot <- function(ncov5_df,
   if (interactive) {
     require(plotly)
     m <- list(l = 50, r = 50, b = 20, t = 20, pad = 0.5)
-    return(layout(plotly::ggplotly(g),
+    return(plotly::layout(plotly::ggplotly(g),
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
@@ -2162,7 +2162,7 @@ PlotDataNsig <- function(fileName, imgName, dpi, format){
   nsig_df <- dataSet$summary_df[, c("Sample", "NSig80")]
 
 
-  ## identify outliers (± 3×IQR)
+  ## identify outliers (+/- 3xIQR)
   Q1  <- quantile(nsig_df$NSig80, 0.25)
   Q3  <- quantile(nsig_df$NSig80, 0.75)
   IQRv <- IQR(nsig_df$NSig80)
@@ -2214,7 +2214,7 @@ qc.nsig.plot <- function(nsig_df,
   if (interactive) {
     require("plotly")
     m <- list(l = 50, r = 50, b = 20, t = 20, pad = 0.5)
-    return(layout(plotly::ggplotly(g),
+    return(plotly::layout(plotly::ggplotly(g),
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
@@ -2290,7 +2290,7 @@ qc.dendrogram.plot <- function(dendro_df,
     scale_color_manual(values = c(Normal = "grey40", Outlier = "red"),
                        name = "Sample status") +
     theme_minimal(base_size = 12) +
-    labs(x = NULL, y = "Max pair-wise distance (1 − Pearson ρ)") +
+    labs(x = NULL, y = "Max pair-wise distance (1 \u2212 Pearson \u03c1)") +
     theme(axis.text.x = element_blank(),
           axis.ticks.x = element_blank())
 
@@ -2299,7 +2299,7 @@ qc.dendrogram.plot <- function(dendro_df,
   if (interactive) {
     require(plotly)
     m <- list(l = 50, r = 50, b = 20, t = 20, pad = 0.5)
-    return(layout(plotly::ggplotly(g),
+    return(plotly::layout(plotly::ggplotly(g),
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
@@ -2356,7 +2356,7 @@ qc.pcaplot.json <- function(dataSet, x, imgNm) {
 
   pca.res <- pca.res[match_indices, , drop = FALSE]
 
-  # metadata1 → color (group)
+  # metadata1 -> color (group)
   pca.res$group  <- as.character(dataSet$meta.info[[1]])
   pca.res$sample <- rownames(pca.res)
 
@@ -2398,7 +2398,7 @@ qc.pcaplot.json <- function(dataSet, x, imgNm) {
   traces <- list()
 
   if (doShape) {
-    # one trace per (group × shape)
+    # one trace per (group x shape)
     combos <- unique(pca.res[, c("group","shape")])
     for (i in seq_len(nrow(combos))) {
       g  <- combos$group[i]
@@ -2421,7 +2421,7 @@ qc.pcaplot.json <- function(dataSet, x, imgNm) {
         y            = df$PC2,
         type         = "scatter",
         mode         = if (nrow(df) > 20) "markers" else "markers+text",
-        name         = paste0(g, " • ", sh),
+        name         = paste0(g, " \u2022 ", sh),
         legendgroup  = g,          # groups align in legend
         marker       = mkr,
         text         = if (nrow(df) <= 20) df$sample else NULL,
@@ -2532,7 +2532,7 @@ qc.gini.plot <- function(gini_df,
   if (interactive) {
     require(plotly)
     m <- list(l = 50, r = 50, b = 20, t = 20, pad = 0.5)
-    return(layout(plotly::ggplotly(g),
+    return(plotly::layout(plotly::ggplotly(g),
                   autosize = FALSE, width = 1000, height = 600, margin = m))
   } else {
     if (dpi == 72) dpi <- dpi * 1.34
@@ -2668,7 +2668,7 @@ SummarizeQC <- function(fileName, imgNameBase, threshold = 0.1) {
 #  gini_df      data.frame with columns: Sample, Gini, Status
 #  imgNm        stem for the JSON file (".json" is appended automatically)
 #  threshold    horizontal dashed reference line
-#  jitter.w     half-width of horizontal jitter (0–0.5 recommended)
+#  jitter.w     half-width of horizontal jitter (0-0.5 recommended)
 # -------------------------------------------------------------------------
 qc.giniplot.json <- function(gini_df,
                              imgNm     = "Gini_plot",
@@ -2677,7 +2677,7 @@ qc.giniplot.json <- function(gini_df,
 
   stopifnot(all(c("Sample", "Gini", "Status") %in% names(gini_df)))
 
-  ## 1 · Tukey fences & statistical-outlier flag -------------------------
+  ## 1 - Tukey fences & statistical-outlier flag -------------------------
   finite_gini <- is.finite(gini_df$Gini)
   if (!any(finite_gini)) {
     warning("qc.giniplot.json: no finite Gini values; skipping plot")
@@ -2691,11 +2691,11 @@ qc.giniplot.json <- function(gini_df,
   gini_df$stat_out[is.na(gini_df$stat_out)] <- FALSE
   non_out <- sum(!gini_df$stat_out)
 
-  ## 2 · Semantic palette (Normal / Outlier) -----------------------------
+  ## 2 - Semantic palette (Normal / Outlier) -----------------------------
   status_cols <- c(Normal = "#666666", Outlier = "#E41A1C")
 
-  ## 3 · Traces ----------------------------------------------------------
-  # 3a · Box built from in-fence values only
+  ## 3 - Traces ----------------------------------------------------------
+  # 3a - Box built from in-fence values only
   tr_box <- list(
     x              = rep(0, non_out),
     y              = I(gini_df$Gini[!gini_df$stat_out]),
@@ -2710,7 +2710,7 @@ qc.giniplot.json <- function(gini_df,
     showlegend     = FALSE
   )
 
-  # 3b · Invisible all-points trace (for autoscale)
+  # 3b - Invisible all-points trace (for autoscale)
   set.seed(1)
   tr_all <- list(
     x          = I(runif(nrow(gini_df), -jitter.w, jitter.w)),
@@ -2722,7 +2722,7 @@ qc.giniplot.json <- function(gini_df,
     showlegend = FALSE
   )
 
-  # 3c · Visible points (semantic colour, stat-outlines)
+  # 3c - Visible points (semantic colour, stat-outlines)
   show_labels <- nrow(gini_df) <= 20
   set.seed(2)
   points_trace <- list(
@@ -2752,7 +2752,7 @@ qc.giniplot.json <- function(gini_df,
 
   traces <- list(tr_box, tr_all, points_trace)
 
-  ## 4 · Layout ----------------------------------------------------------
+  ## 4 - Layout ----------------------------------------------------------
   layout <- list(
     plot_bgcolor  = "#FFFFFF",
     paper_bgcolor = "#FFFFFF",
@@ -2788,7 +2788,7 @@ qc.giniplot.json <- function(gini_df,
     margin = list(l = 60, r = 110, t = 20, b = 40)
   )
 
-  ## 5 · Write JSON ------------------------------------------------------
+  ## 5 - Write JSON ------------------------------------------------------
   jsonlite::write_json(
     list(data = traces, layout = layout),
     paste0(imgNm, ".json"),
@@ -2802,7 +2802,7 @@ qc.giniplot.json <- function(gini_df,
 # -------------------------------------------------------------------------
 #  dendro_df   data.frame with columns:
 #              Sample, Dendrogram_Distance, Status (Normal / Outlier),
-#              LabelMe (TRUE/FALSE → label on plot)
+#              LabelMe (TRUE/FALSE -> label on plot)
 #  imgNm       stem for JSON file ("<imgNm>.json")
 #  threshold   horizontal dashed cut-off
 #  jitter.w    half-width for horizontal jitter of points
@@ -2814,7 +2814,7 @@ qc.dendrogram.json <- function(dendro_df,
 
   stopifnot(all(c("Sample", "Dendrogram_Distance", "Status", "LabelMe") %in% names(dendro_df)))
 
-  ## ── 1 · Tukey fences and statistical-outlier flag -------------------
+  ## -- 1 - Tukey fences and statistical-outlier flag -------------------
   finite_dendro <- is.finite(dendro_df$Dendrogram_Distance)
   if (!any(finite_dendro)) {
     warning("qc.dendrogram.json: no finite dendrogram distances; skipping plot")
@@ -2830,11 +2830,11 @@ qc.dendrogram.json <- function(dendro_df,
   dendro_df$stat_out[is.na(dendro_df$stat_out)] <- FALSE
   non_out <- sum(!dendro_df$stat_out)
 
-  ## ── 2 · Semantic palette -------------------------------------------
+  ## -- 2 - Semantic palette -------------------------------------------
   status_cols <- c(Normal = "#666666", Outlier = "#E41A1C")
 
-  ## ── 3 · Traces ------------------------------------------------------
-  # 3a · Box from in-fence points
+  ## -- 3 - Traces ------------------------------------------------------
+  # 3a - Box from in-fence points
   tr_box <- list(
     x              = rep(0, non_out),
     y              = I(dendro_df$Dendrogram_Distance[!dendro_df$stat_out]),
@@ -2849,7 +2849,7 @@ qc.dendrogram.json <- function(dendro_df,
     showlegend     = FALSE
   )
 
-  # 3b · Invisible all-points scatter (autoscale helper)
+  # 3b - Invisible all-points scatter (autoscale helper)
   set.seed(1)
   tr_all <- list(
     x          = I(runif(nrow(dendro_df), -jitter.w, jitter.w)),
@@ -2861,7 +2861,7 @@ qc.dendrogram.json <- function(dendro_df,
     showlegend = FALSE
   )
 
-  # 3c · Visible points (semantic colouring, stat outlines)
+  # 3c - Visible points (semantic colouring, stat outlines)
   set.seed(2)
   points_trace <- list(
     x    = I(runif(nrow(dendro_df), -jitter.w, jitter.w)),
@@ -2890,7 +2890,7 @@ qc.dendrogram.json <- function(dendro_df,
 
   traces <- list(tr_box, tr_all, points_trace)
 
-  ## ── 4 · Layout ------------------------------------------------------
+  ## -- 4 - Layout ------------------------------------------------------
   layout <- list(
     plot_bgcolor  = "#FFFFFF",
     paper_bgcolor = "#FFFFFF",
@@ -2926,7 +2926,7 @@ qc.dendrogram.json <- function(dendro_df,
     margin = list(l = 70, r = 110, t = 20, b = 40)
   )
 
-  ## ── 5 · Write JSON ---------------------------------------------------
+  ## -- 5 - Write JSON ---------------------------------------------------
   jsonlite::write_json(
     list(data = traces, layout = layout),
     paste0(imgNm, ".json"),
@@ -2945,7 +2945,7 @@ qc.ncov5plot.json <- function(ncov5_df,
             is.numeric(lower), length(lower) == 1,
             is.numeric(upper), length(upper) == 1)
 
-  ## ── 1 · Tukey fences & statistical-outlier flag --------------------
+  ## -- 1 - Tukey fences & statistical-outlier flag --------------------
   finite_cov <- is.finite(ncov5_df$HighCoverageGeneCount)
   if (!any(finite_cov)) {
     warning("qc.ncov5plot.json: no finite coverage counts; skipping plot")
@@ -2961,11 +2961,11 @@ qc.ncov5plot.json <- function(ncov5_df,
   ncov5_df$stat_out[is.na(ncov5_df$stat_out)] <- FALSE
   non_out <- sum(!ncov5_df$stat_out)
 
-  ## ── 2 · palettes ----------------------------------------------------
+  ## -- 2 - palettes ----------------------------------------------------
   stat_cols <- c(Normal = "#666666", Outlier = "#E41A1C")
 
-  ## ── 3 · Traces ------------------------------------------------------
-  # 3a · box (only in-fence points)
+  ## -- 3 - Traces ------------------------------------------------------
+  # 3a - box (only in-fence points)
   tr_box <- list(
     x              = rep(0, non_out),
     y              = I(ncov5_df$HighCoverageGeneCount[!ncov5_df$stat_out]),
@@ -2980,7 +2980,7 @@ qc.ncov5plot.json <- function(ncov5_df,
     showlegend     = FALSE
   )
 
-  # 3b · invisible all-points scatter (for autoscale)
+  # 3b - invisible all-points scatter (for autoscale)
   set.seed(1)
   tr_all <- list(
     x          = I(runif(nrow(ncov5_df), -jitter.w, jitter.w)),
@@ -2992,8 +2992,8 @@ qc.ncov5plot.json <- function(ncov5_df,
     showlegend = FALSE
   )
 
-  # 3c · labelled points (semantic status colouring, stat-outlines)
-  # 3c · visible points (one trace for all samples)
+  # 3c - labelled points (semantic status colouring, stat-outlines)
+  # 3c - visible points (one trace for all samples)
 set.seed(2)
 points_trace <- list(
   x    = I(runif(nrow(ncov5_df), -jitter.w, jitter.w)),
@@ -3022,7 +3022,7 @@ points_trace <- list(
 
   traces <- list(tr_box, tr_all, points_trace)
 
-  ## ── 4 · Layout ------------------------------------------------------
+  ## -- 4 - Layout ------------------------------------------------------
   layout <- list(
     plot_bgcolor  = "#FFFFFF",
     paper_bgcolor = "#FFFFFF",
@@ -3060,7 +3060,7 @@ points_trace <- list(
     margin = list(l = 70, r = 110, t = 20, b = 40)
   )
 
-  ## ── 5 · Write JSON ---------------------------------------------------
+  ## -- 5 - Write JSON ---------------------------------------------------
   jsonlite::write_json(
     list(data = traces, layout = layout),
     paste0(imgNm, ".json"),
@@ -3079,7 +3079,7 @@ qc.nsigplot.json <- function(nsig_df,
   stopifnot(all(c("Sample", "NSig80", "outlier") %in% names(nsig_df)))
 
   ## ------------------------------------------------------------------
-  ## 1 · Compute Tukey fences and flag statistical outliers
+  ## 1 - Compute Tukey fences and flag statistical outliers
   ## ------------------------------------------------------------------
   finite_nsig <- is.finite(nsig_df$NSig80)
   if (!any(finite_nsig)) {
@@ -3095,14 +3095,14 @@ qc.nsigplot.json <- function(nsig_df,
   non_out <- sum(!nsig_df$stat_out)
 
   ## ------------------------------------------------------------------
-  ## 2 · Palette for semantic status (Normal / Outlier)
+  ## 2 - Palette for semantic status (Normal / Outlier)
   ## ------------------------------------------------------------------
   status_cols <- c(Normal = "#666666", Outlier = "#E41A1C")
 
   ## ------------------------------------------------------------------
-  ## 3 · Plotly traces
+  ## 3 - Plotly traces
   ## ------------------------------------------------------------------
-  # 3a ─ Box: only in-fence points
+  # 3a - Box: only in-fence points
   tr_box <- list(
     x              = rep(0, non_out),
     y              = I(nsig_df$NSig80[!nsig_df$stat_out]),
@@ -3117,7 +3117,7 @@ qc.nsigplot.json <- function(nsig_df,
     showlegend     = FALSE
   )
 
-  # 3b ─ Invisible “all” trace for autoscaling
+  # 3b - Invisible "all" trace for autoscaling
   set.seed(1)
   tr_all <- list(
     x          = I(runif(nrow(nsig_df), -jitter.w, jitter.w)),
@@ -3129,7 +3129,7 @@ qc.nsigplot.json <- function(nsig_df,
     showlegend = FALSE
   )
 
-  # 3c ─ Points (semantic status colouring, stat-outliers outlined)
+  # 3c - Points (semantic status colouring, stat-outliers outlined)
   set.seed(2)
   points_trace <- list(
     x    = I(runif(nrow(nsig_df), -jitter.w, jitter.w)),
@@ -3159,7 +3159,7 @@ qc.nsigplot.json <- function(nsig_df,
   traces <- list(tr_box, tr_all, points_trace)
 
   ## ------------------------------------------------------------------
-  ## 4 · Layout (unchanged)
+  ## 4 - Layout (unchanged)
   ## ------------------------------------------------------------------
   layout <- list(
     plot_bgcolor  = "#FFFFFF", paper_bgcolor = "#FFFFFF",
@@ -3185,7 +3185,7 @@ qc.nsigplot.json <- function(nsig_df,
   )
 
   ## ------------------------------------------------------------------
-  ## 5 · Write JSON
+  ## 5 - Write JSON
   ## ------------------------------------------------------------------
   jsonlite::write_json(
     list(data = traces, layout = layout),
@@ -3352,7 +3352,7 @@ qc.pcaplot.outliers.json <- function(dataSet, x, imgNm,
 
   df$reason  <- NA_character_
   df$exclude <- df$axis_class == "strong"
-  df$reason[df$exclude] <- "Strong axis separation vs. core (>2× core span)"
+  df$reason[df$exclude] <- "Strong axis separation vs. core (>2\u00d7 core span)"
 
   if (!all(is.na(df$dose))) {
     strong_rows <- which(df$exclude)
@@ -3411,7 +3411,7 @@ qc.pcaplot.outliers.json <- function(dataSet, x, imgNm,
     base_marker <- c(list(color = as.character(color)), status_styles[[st]])
     mode_val <- if (st == "Kept") "markers" else "markers+text"
     text_val <- if (st == "Kept") NULL else subdf$sample_id
-    leg_name <- if (st == "Kept") name else paste0(name, " • ", st)
+    leg_name <- if (st == "Kept") name else paste0(name, " \u2022 ", st)
 
     if (doShape && "shape" %in% colnames(subdf)) {
       spl <- split(subdf, subdf$shape)
@@ -3420,7 +3420,7 @@ qc.pcaplot.outliers.json <- function(dataSet, x, imgNm,
         i <- i + 1L
         ss <- spl[[sh]]
         mkr <- base_marker; mkr$symbol <- unname(shape.map[sh])
-        shaped_name <- if (st == "Kept") paste0(name, " • ", sh) else paste0(name, " • ", sh, " • ", st)
+        shaped_name <- if (st == "Kept") paste0(name, " \u2022 ", sh) else paste0(name, " \u2022 ", sh, " \u2022 ", st)
         out[[i]] <- list(
           x = ss$PC1, y = ss$PC2, type = "scatter",
           mode = mode_val,

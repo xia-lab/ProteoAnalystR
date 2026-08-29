@@ -52,6 +52,7 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   is.fragpipe <- dataFormat == "fragpipe" || grepl("fragpipe", fileName, ignore.case = TRUE) || grepl("fragpipe", metafileName, ignore.case = TRUE)
   is.diann <- dataFormat == "diann" || grepl("diann", fileName, ignore.case = TRUE) || grepl("diann", metafileName, ignore.case = TRUE)
   is.spectronaut <- dataFormat == "spectronaut" || grepl("spectronaut", fileName, ignore.case = TRUE)
+  is.skyline <- dataFormat == "skyline" || grepl("skyline", fileName, ignore.case = TRUE) || grepl("skyline", metafileName, ignore.case = TRUE)
 
   if (is.maxquant) {
     #msg("[ReadTabExpressData] MaxQuant format detected")
@@ -101,6 +102,10 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     di.opts <- getOption("pa.diann.opts", list(fileType = "protein_matrix", qvalueFilter = TRUE))
     dataSet <- .readDiannReport(paste0(path, fileName), paste0(path, metafileName), di.opts)
     metaContain <- "false"  # metadata loaded separately
+  } else if (is.skyline) {
+    sky.opts <- getOption("pa.skyline.opts", list(removeStandards = TRUE, censorTruncated = TRUE))
+    dataSet <- .readSkylineReport(paste0(path, fileName), sky.opts)
+    metaContain <- "false"  # Condition/BioReplicate come from the report itself
   } else if (is.spectronaut) {
     spec.opts <- getOption("pa.spectronaut.opts", list(inputType = "protein"))
     dataSet <- .readSpectronaut(paste0(path, fileName), spec.opts)
@@ -363,7 +368,7 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   # Build an MSstats-ready long-format table for downstream proteomics processing.
   # For peptide-level inputs the rownames of data.proc are peptides, so the
   # peptide-to-protein map is required to fill ProteinName correctly.
-  # IMPORTANT: use the pre-fill snapshot (data.with.missing.qs), not data.proc —
+  # IMPORTANT: use the pre-fill snapshot (data.with.missing.qs), not data.proc --
   # the load-time min/2 fill above would otherwise turn every censored missing
   # value into a fake floor measurement, which defeats MSstats' censored-value
   # model (MBimpute) and grossly inflates fold changes for on/off proteins.
@@ -1409,7 +1414,7 @@ ReadMetaData <- function(metafilename){
   disc_inx <- c(Condition = TRUE)
   cont_inx <- c(Condition = FALSE)
 
-  #msg("[MaxQuant] Peptide data loaded: ", nrow(intens), " peptides × ", ncol(intens), " samples")
+  #msg("[MaxQuant] Peptide data loaded: ", nrow(intens), " peptides x ", ncol(intens), " samples")
 
   # --- Step 7: Return Structure ---
   list(
@@ -1726,7 +1731,7 @@ SetSpectronautOptions <- function(inputType = "protein") {
         # (fast.write(meta.info, "metadata_processed.csv", row.names = TRUE) below), so a
         # saved project re-fed through "Start a new analysis" would otherwise fail to
         # round-trip: the reader rejected the file it just wrote, meta.info came back
-        # NULL, and ReadTabExpressData fell back to .synthesizeMetaFromRuns() — one group
+        # NULL, and ReadTabExpressData fell back to .synthesizeMetaFromRuns() -- one group
         # per sample (the primary factor collapses to the sample IDs). Treat the first
         # column as the sample identifier when its values match the data's sample columns.
         colnames(mydata)[1] <- "#NAME"
@@ -2401,7 +2406,7 @@ GetAnalysisType <- function(){
   }
 
   # Newer DIA-NN versions write pg_matrix.tsv with a "Protein.Group" column
-  # instead of "Protein.Ids" — accept either as the protein-id column.
+  # instead of "Protein.Ids" -- accept either as the protein-id column.
   id.col <- intersect(c("Protein.Ids", "Protein.Group"), cols)[1]
 
   is.matrix.format <- !is.na(id.col) &&
@@ -2967,8 +2972,8 @@ GetAnalysisType <- function(){
       ##                         instead of collapsing charge states by median
       ##   PA_SPEC_FRAGMENT=1    ingest fragment-level features (F.PeakArea per
       ##                         peptide x precursor charge x fragment ion,
-      ##                         honoring F.ExcludedFromQuantification) — the
-      ##                         SpectronauttoMSstatsFormat feature definition —
+      ##                         honoring F.ExcludedFromQuantification) -- the
+      ##                         SpectronauttoMSstatsFormat feature definition --
       ##                         instead of precursor-level FG.Quantity
       frag <- nzchar(Sys.getenv("PA_SPEC_FRAGMENT")) && "F.PeakArea" %in% colnames(raw.dat)
       if (frag) {
@@ -3645,5 +3650,121 @@ SetPhosphoOptions <- function(format = "diann_report", ptm = "phospho", locProb 
     format = "fragpipe-peptide",
     meta.info = list(meta.info = meta.df, disc.inx = c(Condition=TRUE, BioReplicate=TRUE), cont.inx = c(Condition=FALSE, BioReplicate=FALSE)),
     prot.map = prot_map        # New field: Peptide-Protein Mapping
+  )
+}
+
+# Reader for Skyline's "MSstats Input" report template (Export Report in
+# Skyline; CSV or TSV). Expected columns (dots or spaces depending on export):
+# Protein Name, Peptide Modified Sequence, Precursor Charge, Fragment Ion,
+# Product Charge, Isotope Label Type, Condition, BioReplicate, File Name,
+# Area, Standard Type, Truncated. Rows are transition-level (one per fragment
+# ion or precursor isotope peak); they are summed per precursor x run to give
+# a peptide-level matrix (Skyline's TotalArea convention), which then flows
+# through the standard normalization -> summarization -> DE pipeline.
+# Condition/BioReplicate are read from the report itself, so no separate
+# metadata file is required (an uploaded one still takes precedence).
+.readSkylineReport <- function(filePath, opts = list(removeStandards = TRUE,
+                                                     censorTruncated = TRUE)) {
+  if (!file.exists(filePath) || !requireNamespace("reshape2", quietly = TRUE)) return(NULL)
+  dat <- try(data.table::fread(filePath, header = TRUE, check.names = FALSE,
+                               data.table = FALSE), silent = TRUE)
+  if (inherits(dat, "try-error") || nrow(dat) == 0) return(NULL)
+
+  # normalize header names: "Peptide Modified Sequence" / "Peptide.Modified.Sequence" -> peptidemodifiedsequence
+  key <- gsub("[^a-z0-9]", "", tolower(colnames(dat)))
+  col <- function(nm) { i <- match(nm, key); if (is.na(i)) NULL else dat[[i]] }
+
+  protein  <- col("proteinname")
+  peptide  <- col("peptidemodifiedsequence")
+  if (is.null(peptide)) peptide <- col("peptidesequence")
+  charge   <- col("precursorcharge")
+  run      <- col("filename")
+  if (is.null(run)) run <- col("replicatename")
+  area     <- col("area")
+  if (is.null(area)) area <- col("totalarea")
+  if (is.null(protein) || is.null(peptide) || is.null(run) || is.null(area)) return(NULL)
+
+  label    <- col("isotopelabeltype")
+  std.type <- col("standardtype")
+  trunc    <- col("truncated")
+  cond     <- col("condition")
+  biorep   <- col("bioreplicate")
+
+  keep <- rep(TRUE, nrow(dat))
+  # quantify the endogenous (light) label only; heavy rows are internal standards
+  if (!is.null(label)) keep <- keep & tolower(trimws(as.character(label))) %in% c("light", "l", "none", "")
+  # drop iRT / normalization standards
+  if (isTRUE(opts$removeStandards) && !is.null(std.type)) {
+    st <- tolower(trimws(as.character(std.type)))
+    keep <- keep & (is.na(st) | st %in% c("", "na", "none", "false"))
+  }
+  area <- suppressWarnings(as.numeric(area))
+  # truncated peaks are unreliable partial integrations; censor to missing
+  if (isTRUE(opts$censorTruncated) && !is.null(trunc)) {
+    tr <- toupper(trimws(as.character(trunc))) %in% c("TRUE", "1", "+")
+    area[tr] <- NA_real_
+  }
+  keep <- keep & !is.na(peptide) & nzchar(as.character(peptide)) &
+    !is.na(protein) & nzchar(as.character(protein)) &
+    !is.na(run) & nzchar(as.character(run)) &
+    is.finite(area) & area > 0
+  if (!any(keep)) return(NULL)
+
+  protein.first <- vapply(strsplit(as.character(protein[keep]), ";", fixed = TRUE),
+                          function(x) trimws(x[1]), character(1))
+  charge.chr <- if (is.null(charge)) "NA" else as.character(charge[keep])
+  long <- data.frame(
+    FeatureKey = paste(as.character(peptide[keep]), charge.chr, protein.first, sep = "\u241f"),
+    Peptide    = as.character(peptide[keep]),
+    Protein    = protein.first,
+    Charge     = charge.chr,
+    Run        = trimws(as.character(run[keep])),
+    Intensity  = area[keep],
+    Condition  = if (is.null(cond)) NA_character_ else trimws(as.character(cond[keep])),
+    BioReplicate = if (is.null(biorep)) NA_character_ else trimws(as.character(biorep[keep])),
+    stringsAsFactors = FALSE
+  )
+
+  # sum transition/isotope areas per precursor x run (TotalArea convention)
+  wide <- reshape2::dcast(long, FeatureKey ~ Run, value.var = "Intensity",
+                          fun.aggregate = function(x) sum(x, na.rm = TRUE),
+                          fill = NA_real_)
+  int.mat <- as.matrix(wide[, -1, drop = FALSE])
+  storage.mode(int.mat) <- "numeric"
+  int.mat[int.mat == 0] <- NA_real_
+  key.map <- unique(long[, c("FeatureKey", "Peptide", "Protein", "Charge")])
+  key.map <- key.map[match(wide$FeatureKey, key.map$FeatureKey), , drop = FALSE]
+  feature.ids <- make.unique(paste0(key.map$Peptide, "_z", key.map$Charge))
+  rownames(int.mat) <- feature.ids
+
+  prot.map <- data.frame(Peptide = feature.ids, Protein = key.map$Protein,
+                         Shared = grepl(";", as.character(protein[keep])[match(wide$FeatureKey, long$FeatureKey)], fixed = TRUE),
+                         stringsAsFactors = FALSE)
+
+  # per-run metadata from the report's own Condition/BioReplicate columns
+  runs <- colnames(int.mat)
+  run.meta <- unique(long[, c("Run", "Condition", "BioReplicate")])
+  run.meta <- run.meta[match(runs, run.meta$Run), , drop = FALSE]
+  if (all(!is.na(run.meta$Condition)) && length(unique(run.meta$Condition)) > 1) {
+    meta.df <- data.frame(Condition = factor(run.meta$Condition), row.names = runs,
+                          stringsAsFactors = FALSE)
+    disc <- c(Condition = TRUE); cont <- c(Condition = FALSE)
+    if (all(!is.na(run.meta$BioReplicate))) {
+      meta.df$BioReplicate <- factor(run.meta$BioReplicate)
+      disc <- c(disc, BioReplicate = TRUE); cont <- c(cont, BioReplicate = FALSE)
+    }
+  } else {
+    meta.df <- data.frame(Condition = factor(runs), row.names = runs, stringsAsFactors = FALSE)
+    disc <- c(Condition = TRUE); cont <- c(Condition = FALSE)
+  }
+
+  list(
+    data = int.mat,
+    data_orig = int.mat,
+    type = "peptide",
+    format = "skyline",
+    meta.info = list(meta.info = meta.df, disc.inx = disc, cont.inx = cont),
+    prot.map = prot.map,
+    aggregation = "sum of transition/isotope areas per precursor and run"
   )
 }

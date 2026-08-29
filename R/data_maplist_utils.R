@@ -382,7 +382,7 @@ GetListIntersectionSize <- function(){
     gene.lists <- strsplit(lines, "[,[:space:]]+");
     gene.mat <- do.call(rbind, gene.lists);
 
-    # Header detection — strip the first row when it looks like a column
+    # Header detection -- strip the first row when it looks like a column
     # header so its labels ("Protein", "LogFC") don't try to map as IDs and
     # drag the mapping success rate to 0. (a) multi-column: row 1 col 2 is
     # non-numeric; (b) single-column: first cell is a common header keyword.

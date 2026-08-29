@@ -136,7 +136,7 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
   V(bg)$colorw[V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(-log(pvalue.ordered), "white", F, F);
   node.nms <- V(bg)$name;
 
-  # Build feature-ID → gene-symbol map once here; reused by Strategy 4 and proteinlist export.
+  # Build feature-ID -> gene-symbol map once here; reused by Strategy 4 and proteinlist export.
   # names(initsbls) = feature IDs (phosphosite IDs for phospho data, UniProt for regular),
   # values = gene symbols. This mirrors what JS builds as symbol2entrez.
   initsbls <- convert.uniprot.to.symbols(analSet$list.features, paramSet$data.org)
@@ -169,7 +169,7 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
       cat(sprintf("[EnrichNet] Strategy 2 matches: %d\n", length(keep.inx)))
     }
 
-    # Strategy 3: Entrez → UniProt lookup (handles typical enrichment-library ID conversion)
+    # Strategy 3: Entrez -> UniProt lookup (handles typical enrichment-library ID conversion)
     entrez.to.uniprot <- NULL
     if(length(keep.inx) == 0) {
       org <- paramSet$data.org
@@ -182,16 +182,16 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
     }
 
     # Strategy 4: gene nodes are gene symbols but comp.res rows are phosphosite IDs.
-    # Use initsbls (same map JS uses for symbol2entrez) to resolve feature ID → symbol,
+    # Use initsbls (same map JS uses for symbol2entrez) to resolve feature ID -> symbol,
     # then pick the highest-|logFC| phosphosite per gene-node symbol.
     if(length(keep.inx) == 0 && length(gene.node.nms) > 0 &&
        !is.null(initsbls) && length(initsbls) > 0) {
       feat.ids  <- names(initsbls)         # phosphosite IDs (or UniProt for regular data)
-      feat.syms <- unname(initsbls)        # gene symbols — same values JS puts in symbol2entrez
+      feat.syms <- unname(initsbls)        # gene symbols -- same values JS puts in symbol2entrez
       feat.syms[is.na(feat.syms)] <- ""
       # Only use phosphosite entries whose symbols appear in the gene nodes
       sym.match <- which(feat.syms %in% gene.node.nms)
-      cat(sprintf("[EnrichNet] Strategy 4 (list.features→symbol) matches: %d features → %d symbols\n",
+      cat(sprintf("[EnrichNet] Strategy 4 (list.features\u2192symbol) matches: %d features \u2192 %d symbols\n",
                   length(sym.match), length(unique(feat.syms[sym.match]))))
       if(length(sym.match) > 0) {
         matched.feat.ids <- feat.ids[sym.match]
@@ -223,7 +223,7 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
 
     if(length(keep.inx) > 0) {
       if(!strategy4.done) {
-        # Strategies 1–3: use tbl.sub to populate expvals
+        # Strategies 1-3: use tbl.sub to populate expvals
         tbl.sub <- tbl[keep.inx, , drop=FALSE]
         expr.val <- as.numeric(tbl.sub[, paramSet$selectedFactorInx])
 
@@ -254,12 +254,12 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
         V(bg)$color[!V(bg)$name %in% rownames(enr.mat)]  <- gene.colors
         V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- ComputeColorGradient(unname(gene.expvals), "white", T, T)
       } else {
-        cat("[EnrichNet] expvals all zero — assigning cyan to gene nodes\n")
+        cat("[EnrichNet] expvals all zero \u2014 assigning cyan to gene nodes\n")
         V(bg)$color[!V(bg)$name %in% rownames(enr.mat)]  <- "#00FFFF"
         V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- "#668B8B"
       }
     } else {
-      cat("[EnrichNet] No keep.inx match — assigning cyan to gene nodes\n")
+      cat("[EnrichNet] No keep.inx match \u2014 assigning cyan to gene nodes\n")
       V(bg)$color[!V(bg)$name %in% rownames(enr.mat)]  <- "#00FFFF"
       V(bg)$colorw[!V(bg)$name %in% rownames(enr.mat)] <- "#668B8B"
     }

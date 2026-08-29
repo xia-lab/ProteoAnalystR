@@ -4,7 +4,7 @@
 \alias{PlotKinaseEnrichment}
 \title{Plot kinase enrichment bubble chart}
 \usage{
-PlotKinaseEnrichment(imgName, dpi = 96, format = "png", top_n = 20)
+PlotKinaseEnrichment(imgName, dpi = 96, format = "png", top_n = 20, style = "ora")
 }
 \arguments{
 \item{imgName}{Image file name}
@@ -14,6 +14,10 @@ PlotKinaseEnrichment(imgName, dpi = 96, format = "png", top_n = 20)
 \item{format}{Image format (png, pdf)}
 
 \item{top_n}{Number of top kinases to show}
+
+\item{style}{"ora" (default) plots the over-representation bubble chart;
+"ksea" plots the signed KSEA z-score lollipop chart (falls back to the bubble
+chart when no z-scores are available); "auto" plots KSEA when z-scores exist}
 }
 \value{
 Image file name

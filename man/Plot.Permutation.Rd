@@ -4,7 +4,7 @@
 \alias{Plot.Permutation}
 \title{Plot results of permutation tests}
 \usage{
-Plot.Permutation(mSetObj=NA, imgName, format="png", dpi=default.dpi)
+Plot.Permutation(dataName = "", imgName, format="png", dpi=default.dpi)
 }
 \arguments{
 \item{imgName}{Input a name for the plot}
@@ -14,7 +14,7 @@ Plot.Permutation(mSetObj=NA, imgName, format="png", dpi=default.dpi)
 \item{dpi}{Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images,
 the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.}
 
-\item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}
+\item{dataName}{Input the name of the dataset (see \code{Init.Data})}
 }
 \description{
 Plot results of permutation tests

@@ -154,7 +154,7 @@ rescale2NewRange <- function(qvec, a, b){
     # Main.location terms wins, e.g. "nucleoplasm; nucleolus; cytosol"
     # -> Nucleus (2 terms) over Cytosol (1 term).
     # Tier 2 (informativeness): among tied compartments, the one that is
-    # rarest across the proteome wins (inverse annotation frequency) —
+    # rarest across the proteome wins (inverse annotation frequency) --
     # near-ubiquitous annotations such as Cytoplasm/Nucleus carry less
     # positional information than e.g. Mitochondrion or Extracellular.
     # The full membership is preserved in all_categories for pie-node wedges.
@@ -538,7 +538,7 @@ ExtractModule<- function(nodeids, type="enr"){
   msg("[ExtractModule] Induced subgraph has ", vcount(gObj), " vertices")
 
   # now find connected components
-  comps <-decompose(gObj, min.vertices=1);
+  comps <-igraph::decompose(gObj, min.vertices=1);
   msg("[ExtractModule] Found ", length(comps), " connected component(s)")
 
   if(length(comps) == 1){ # nodes are all connected
@@ -983,7 +983,7 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
 
       # Convert UniProt to Entrez using database (pattern from enrich_utils.R)
       tryCatch({
-        # Query UniProt → Entrez mapping
+        # Query UniProt -> Entrez mapping
         uniprot.map <- queryGeneDB("entrez_uniprot", org)
 
         if (!is.null(uniprot.map) && is.data.frame(uniprot.map) &&
@@ -1267,8 +1267,8 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     has_stored_mapping <- TRUE
     msg("[Localization] Using original graph node IDs as UniProt (direct mapping)\n")
   } else if (!is.null(analSet$uniprot_to_entrez_map)) {
-    msg("[Localization] Using stored UniProt→Entrez mapping from PPI network building\n")
-    # Reverse the mapping: Entrez → UniProt
+    msg("[Localization] Using stored UniProt\u2192Entrez mapping from PPI network building\n")
+    # Reverse the mapping: Entrez -> UniProt
     entrez_to_uniprot <- names(analSet$uniprot_to_entrez_map)
     names(entrez_to_uniprot) <- as.character(analSet$uniprot_to_entrez_map)
 
@@ -1287,9 +1287,9 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
   }
 
   # Fallback: If no stored mapping or some nodes unmapped, use database lookup
-  # This can create duplicates because Entrez→UniProt is many-to-one!
+  # This can create duplicates because Entrez->UniProt is many-to-one!
   if (!has_stored_mapping || any(is.na(uniprot.vec))) {
-    msg("[Localization] Warning: Using database lookup for Entrez→UniProt (may create duplicates)\n")
+    msg("[Localization] Warning: Using database lookup for Entrez\u2192UniProt (may create duplicates)\n")
 
     tryCatch({
       # Query entrez_uniprot database table

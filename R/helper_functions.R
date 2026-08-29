@@ -103,7 +103,7 @@ GetMetaColLength <- function(dataName = "") {
     return(length(dataSet$comp.res.list))
   }
 
-  # if the marker column isn't present → length 0
+  # if the marker column isn't present -> length 0
   #if (is.na(inx) || inx <= 1) {
   #  return(0L)
   #}
@@ -390,14 +390,14 @@ GetExpressResultMatrix <- function(dataName = "", inxt) {
             inx <- match("t", colnames(dataSet$comp.res))
         }
         res <- dataSet$comp.res
-        res <- res[, -(1:(inx - 1)), drop = FALSE]                    # ← fixed slice
-        res <- res[rownames(dataSet$comp.res), , drop = FALSE]        # ← align rows
+        res <- res[, -(1:(inx - 1)), drop = FALSE]                    # <- fixed slice
+        res <- res[rownames(dataSet$comp.res), , drop = FALSE]        # <- align rows
         res <- cbind(dataSet$comp.res[, inxt], res)
         colnames(res)[1] <- colnames(dataSet$comp.res)[inxt]
     }
 
     ## comp.res is already ordered (sig first, then by p-value) from the DE analysis.
-    ## No re-sorting needed — re-sorting would desync comp.res from comp.features.symbols.
+    ## No re-sorting needed -- re-sorting would desync comp.res from comp.features.symbols.
 
     ## --- now extract the column(s) for the return value -------
     if (dataSet$de.method %in% c("limma", "deqms", "edger", "deseq2", "wtt")) {
@@ -484,7 +484,7 @@ GetFeatureNum <- function(dataName) {
   dataSet <- readDataset(dataName, quiet = TRUE)
 
   if (is.null(dataSet) || is.null(dataSet$data.norm)) {
-    return(0L)                               # nothing loaded → report zero
+    return(0L)                               # nothing loaded -> report zero
   }
 
   nrow(dataSet$data.norm)

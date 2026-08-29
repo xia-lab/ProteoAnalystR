@@ -13,7 +13,7 @@ my.prepare.list.heatmap.json <- function(dataSet){
   # Use convert.uniprot.to.symbols so UniProt accessions (proteomics) actually
   # map to gene symbols. The plain doEntrez2SymbolMapping(..., "uniprot") call
   # matched UniProts against the Entrez gene_id column and silently returned
-  # the inputs unchanged, leaving heatmap_raw.csv with UniProt rownames —
+  # the inputs unchanged, leaving heatmap_raw.csv with UniProt rownames --
   # which then failed to match the symbol-keyed fun.anot produced by
   # .performEnrichAnalysis, so the pathway-map viewer rendered empty cells.
   # The helper also handles Entrez fast-path and phosphosite / isoform suffix
@@ -26,11 +26,11 @@ my.prepare.list.heatmap.json <- function(dataSet){
   # pathway-map viewer at /vis/HeatmapListView.xhtml. Must happen BEFORE the
   # bucketing logic below mutates `dat` into bin indices 1-30 (which then get
   # written to heatmap_matrix.csv for the legacy discrete-palette viewer).
-  # The symbol rownames are essential — fun.anot (pathway membership) uses
+  # The symbol rownames are essential -- fun.anot (pathway membership) uses
   # gene symbols, so a CSV keyed by Entrez ID can't be cross-referenced.
   # Existing files don't work for this purpose:
-  #   - heatmap_matrix.csv  → has symbols but VALUES are bucket indices 1-30
-  #   - <datalist>.csv      → has raw values but ROWNAMES are Entrez IDs
+  #   - heatmap_matrix.csv  -> has symbols but VALUES are bucket indices 1-30
+  #   - <datalist>.csv      -> has raw values but ROWNAMES are Entrez IDs
   dat.raw <- dat;
   rownames(dat.raw) <- gene.symbols;
   fast.write(dat.raw, "heatmap_raw.csv", row.names = TRUE);
@@ -185,7 +185,7 @@ my.prepare.multilist.heatmap.json <- function(dataSet){
   # Persist the raw signed log2FC matrix (rows=gene symbols, cols=dataset
   # names) for the multi-list pathway-map viewer. Must happen BEFORE the
   # bucketing block below mutates `allmat` into bin indices 1-32. NA is
-  # preserved for genes absent from a given list — JS reads NA as "not in
+  # preserved for genes absent from a given list -- JS reads NA as "not in
   # that list", which is what computeEligibleGeneSet + median aggregation
   # consume. Mirrors heatmap_raw.csv written by my.prepare.list.heatmap.json
   # (same filename + column layout so the JS reader is identical).

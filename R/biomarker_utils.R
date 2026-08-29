@@ -6,12 +6,12 @@
 
 ##############################################
 ## KEY ADAPTATIONS FOR PROTEOANALYST:
-## 1. mSetObj → separate dataSet, paramSet, analSet objects
-## 2. .get.mSet() → readDataset(dataName), readSet(analSet)
-## 3. .set.mSet() → RegisterData(dataSet), saveSet(analSet)
-## 4. Data access: mSetObj$dataSet$norm → dataSet$data.norm.transposed
-## 5. Classes: mSetObj$dataSet$cls → dataSet$cls
-## 6. Analysis results: mSetObj$analSet → analSet (separate global object)
+## 1. mSetObj -> separate dataSet, paramSet, analSet objects
+## 2. .get.mSet() -> readDataset(dataName), readSet(analSet)
+## 3. .set.mSet() -> RegisterData(dataSet), saveSet(analSet)
+## 4. Data access: mSetObj$dataSet$norm -> dataSet$data.norm.transposed
+## 5. Classes: mSetObj$dataSet$cls -> dataSet$cls
+## 6. Analysis results: mSetObj$analSet -> analSet (separate global object)
 ## 7. File persistence using ov_qs_save() and ProteoAnalyst naming
 ##############################################
 
@@ -149,7 +149,7 @@ SetCurrentGroups <- function(dataName = "", grps){
 }
 
 #'Rank features using different methods
-#'@param x.in Feature matrix (samples × features)
+#'@param x.in Feature matrix (samples x features)
 #'@param y.in Class labels
 #'@param method Ranking method: "auroc", "ttest", "foldchange"
 #'@param lvNum Number of latent variables for PLS
@@ -164,7 +164,7 @@ SetCurrentGroups <- function(dataName = "", grps){
 # Tie-free elastic-net importance: total |beta| across the whole lambda path.
 #
 # |beta| at a SINGLE lambda is mostly exact zeros, and GetImpFeatureMat ranks each
-# CV run with rank(-imp), which AVERAGES ties — so every zero-coefficient feature
+# CV run with rank(-imp), which AVERAGES ties -- so every zero-coefficient feature
 # receives the same rank and "Selected Frequency" collapses to 1.0 for all of
 # them. Used by BOTH RankFeatures and Predict.class: imp.cv (what the frequency
 # plot actually ranks) is produced by Predict.class, so fixing only the former
@@ -242,7 +242,7 @@ RankFeatures <- function(x.in, y.in, method, lvNum){
     #
     # At one lambda, elastic net shrinks most coefficients to exactly 0, so the
     # importance vector is mostly ties at zero. GetImpFeatureMat ranks each CV run
-    # with rank(-imp) — which AVERAGES ties — so every zero-coefficient feature
+    # with rank(-imp) -- which AVERAGES ties -- so every zero-coefficient feature
     # gets rank (n+1)/2, and any bestFeatNum above that counts EVERY feature as
     # selected in EVERY run. The "Selected Frequency" plot then collapses to a
     # flat 1.0 for all features, even for a 2-feature model. SVM / RF / PLS-DA
@@ -286,7 +286,7 @@ CalculateFeatureRanking <- function(dataName = "", clust.num=5){
 
   x  <- dataSet$data.norm.transposed;
   if (is.null(x)) {
-    x <- t(dataSet$data.norm); # samples × features
+    x <- t(dataSet$data.norm); # samples x features
   }
   y <- factor(dataSet$cls);
   if (length(y) == 0 || nlevels(y) < 2) {
@@ -314,7 +314,7 @@ CalculateFeatureRanking <- function(dataName = "", clust.num=5){
 
   # Fold change - use data before normalization if available
   if(file.exists("data.raw.qs")){
-    data <- ov_qs_read("data.raw.qs"); # expected samples × features
+    data <- ov_qs_read("data.raw.qs"); # expected samples x features
     sam.order <- if (!is.null(rownames(data))) intersect(rownames(x), rownames(data)) else rownames(x)
     feat.order <- if (!is.null(colnames(data))) intersect(colnames(x), colnames(data)) else colnames(x)
     if (length(sam.order) == 0 || length(feat.order) == 0) {
@@ -788,7 +788,7 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
     prob.out <- as.numeric(stats::predict(ef$fit, newx=x.te, s=ef$s, type="response"));
     names(prob.out) <- rownames(x.test);
     if(imp.out){
-      # Path-based, not single-lambda — see .ov_enet_imp. This vector becomes
+      # Path-based, not single-lambda -- see .ov_enet_imp. This vector becomes
       # analSet$multiROC$imp.cv, which the Selected Frequency plot ranks.
       imp.vec <- .ov_enet_imp(x.tr, if (exists("y.fac", inherits=FALSE)) y.fac else y.train, colnames(x.train));
       if (is.null(imp.vec)) {
@@ -799,19 +799,19 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
     }
   }else{ # pls or plsda
     #msg("[Predict.class] DEBUG: Entering PLS branch");
-    # plsr() requires a NUMERIC response — y.train arrives as a 2-level factor
+    # plsr() requires a NUMERIC response -- y.train arrives as a 2-level factor
     # (RF/SVM accept it, PLS does not), so map it to 0/1 the same way
     # RankFeatures() does for its PLS ranking. Without this the whole PLS-DA
     # method errors out and is silently dropped from the multivariate panel.
     y.num <- as.numeric(y.train) - 1;
     # Cap components at the number of features in this (possibly tiny) CV subset
-    # — plsr errors with "Invalid number of components" when ncomp > ncol, which
+    # -- plsr errors with "Invalid number of components" when ncomp > ncol, which
     # happens on the smallest feature-subset models of the explore sweep.
     ncomp.use <- max(1L, min(lvNum, ncol(x.train)));
     pls.obj <- pls::plsr(y.num ~ x.train, ncomp=ncomp.use, validation="none");
     # plsr predict() returns a 3-D array [obs x response x ncomp]; flatten to a
     # numeric vector so the downstream ROCR::prediction() (which builds the ROC)
-    # accepts it — an array trips "Format of predictions is invalid".
+    # accepts it -- an array trips "Format of predictions is invalid".
     score.out <- as.numeric(predict(pls.obj, x.test, ncomp=ncomp.use));
     prob.out <- (score.out - min(score.out))/(max(score.out) - min(score.out));
     if(imp.out){
@@ -1054,7 +1054,7 @@ GetCIs <- function(data, param=F){
 }
 
 #'Calculate T-test p-values for ROC
-#'@param data Feature matrix (samples × features)
+#'@param data Feature matrix (samples x features)
 #'@param cls Class labels
 GetROCTtestP <- function(data, cls){
 
@@ -1080,9 +1080,9 @@ Get.Accuracy <- function(cm) {
 ### NOTE: Additional functions from the original biomarker_utils.R can be adapted
 ### following the same pattern shown above. Key changes:
 ### 1. Replace mSetObj <- .get.mSet(mSetObj) with readDataset(dataName) and readSet() calls
-### 2. Replace mSetObj$analSet → analSet (separate global object)
+### 2. Replace mSetObj$analSet -> analSet (separate global object)
 ### 3. Replace .set.mSet(mSetObj) with saveSet(analSet) and RegisterData(dataSet)
-### 4. Update data access paths (mSetObj$dataSet$norm → dataSet$data.norm.transposed)
+### 4. Update data access paths (mSetObj$dataSet$norm -> dataSet$data.norm.transposed)
 ### 5. Add msgSet for user messaging
 ### 6. Use ProteoAnalyst file naming conventions
 
@@ -3275,8 +3275,8 @@ process_metadata <- function(df) {
 #'This plot can be created for multivariate ROC curve analysis using SVM, PLS, and RandomForest.
 #'Please note that sometimes, not all samples will be tested, instead they will be plotted
 #'at the 0.5 neutral line. 
-#'@usage PlotProbView(mSetObj=NA, imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred) 
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@usage PlotProbView(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred) 
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format Select the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
@@ -3302,7 +3302,7 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
 
   anal.mode <- analSet$mode;
 
-  # Sample names are columns (features×samples orientation)
+  # Sample names are columns (featuresxsamples orientation)
   smpl.nms <- colnames(dataSet$data.norm);
   prob.vec <- rep(0.5, length(smpl.nms));
   names(prob.vec) <- smpl.nms;
@@ -3405,7 +3405,7 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
     }
 
     if(showPred){
-      # Sample names are columns (features×samples orientation)
+      # Sample names are columns (featuresxsamples orientation)
       nms <- colnames(dataSet$test.data);
 
       act.ones <- as.numeric(dataSet$test.cls)-1 == 1;
@@ -3439,8 +3439,8 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
 #'This plot can be created for multivariate ROC curve analysis using SVM, PLS, and RandomForest.
 #'Please note that sometimes, not all samples will be tested, instead they will be plotted
 #'at the 0.5 neutral line. 
-#'@usage PlotProbViewTest(mSetObj=NA, imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred) 
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@usage PlotProbViewTest(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred) 
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format Select the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
@@ -3461,7 +3461,7 @@ PlotProbViewTest <- function(dataName = "", imgName, format="png", dpi=default.d
 
   anal.mode <- analSet$mode;
 
-  # Sample names are columns (features×samples orientation)
+  # Sample names are columns (featuresxsamples orientation)
   smpl.nms <- colnames(dataSet$data.norm);
   prob.vec <- rep(0.5, length(smpl.nms));
   names(prob.vec) <- smpl.nms;
@@ -3566,7 +3566,7 @@ PlotProbViewTest <- function(dataName = "", imgName, format="png", dpi=default.d
     }
 
     if(showPred){
-      # Sample names are columns (features×samples orientation)
+      # Sample names are columns (featuresxsamples orientation)
       nms <- colnames(dataSet$test.data);
 
       act.ones <- as.numeric(dataSet$test.cls)-1 == 1;
@@ -3598,9 +3598,9 @@ PlotProbViewTest <- function(dataName = "", imgName, format="png", dpi=default.d
 #'Plot ROC
 #'@description Pred and auroc are lists containing predictions
 #'and labels from different cross-validations 
-#'@usage PlotROC(mSetObj=NA, imgName, format="png", dpi=default.dpi, mdl.inx, 
+#'@usage PlotROC(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, 
 #'avg.method, show.conf, show.holdout, focus="fpr", cutoff = 1.0)
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format Select the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", 
@@ -3700,7 +3700,7 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
     vals <- c("AUC", round(auroc, 3));
     vals <- sprintf("%-8s", vals);
 
-    # Format CIs properly - GetCIs returns a 2×n matrix (lower, upper)
+    # Format CIs properly - GetCIs returns a 2xn matrix (lower, upper)
     ci.mat <- analSet$multiROC$auc.ci;
     if (is.matrix(ci.mat)) {
       # Format as "lower-upper" for each model
@@ -3771,9 +3771,9 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
 #'Plot ROC for the ROC Curve Based Model Creation and Evaluation module
 #'@description Plot the ROC curve of the biomarker model created using a user-selected subset of features.
 #'Pred and auroc are lists containing predictions and labels from different cross-validations. 
-#'@usage PlotROCTest(mSetObj=NA, imgName, format="png", 
+#'@usage PlotROCTest(dataName = "", imgName, format="png", 
 #'dpi=default.dpi, mdl.inx, avg.method, show.conf, show.holdout, focus="fpr", cutoff = 1.0)
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format Select the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", 
@@ -3961,8 +3961,8 @@ PlotROCTest<-function(dataName = "", imgName, format="png", dpi=default.dpi, mdl
 
 #'Plot classification performance using different features for Multi-Biomarker
 #'@description Plot of the accuracy of classification with an increasing number of features.
-#'@usage PlotAccuracy(mSetObj=NA, imgName, format="png", dpi=default.dpi)
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@usage PlotAccuracy(dataName = "", imgName, format="png", dpi=default.dpi)
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format Select the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
@@ -4030,8 +4030,8 @@ PlotAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi){
 
 #'Plot classification performance using different features for Biomarker Tester
 #'@description Plot of the accuracy of classification with an increasing number of features.
-#'@usage PlotTestAccuracy(mSetObj=NA, imgName, format="png", dpi=default.dpi)
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@usage PlotTestAccuracy(dataName = "", imgName, format="png", dpi=default.dpi)
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format Select the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
@@ -4084,9 +4084,9 @@ PlotTestAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi
 
 #'Plot selected compounds by their percentage frequency
 #'@description Plot the important variables of single biomarker model ranked by order of importance
-#'@usage PlotImpBiomarkers(mSetObj=NA, imgName, format="png", dpi=default.dpi, 
+#'@usage PlotImpBiomarkers(dataName = "", imgName, format="png", dpi=default.dpi, 
 #'mdl.inx, measure = "freq", feat.num = 15)
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format elect the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
@@ -4151,13 +4151,13 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
   # }
 
   imp.nms <- rownames(imp.mat);
-  # Features are in rows (features×samples orientation)
+  # Features are in rows (featuresxsamples orientation)
   hit.nms <- imp.nms[imp.nms %in% rownames(data)];
   data <- data[hit.nms, ];
   
   # note, tapply can only be applied to a vector, we need
   # to combine with apply in order to used on a data frame
-  # Features×samples orientation: apply over rows (margin=1)
+  # Featuresxsamples orientation: apply over rows (margin=1)
   mds <- apply(data, 1,
                function(x){
                  tapply(x, cls, median);
@@ -4309,8 +4309,8 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
 
 #'Plot results of permutation tests
 #'@description Plot results of permutation tests
-#'@usage Plot.Permutation(mSetObj=NA, imgName, format="png", dpi=default.dpi)
-#'@param mSetObj Input the name of the created mSetObj (see InitDataObjects)
+#'@usage Plot.Permutation(dataName = "", imgName, format="png", dpi=default.dpi)
+#'@param dataName Input the name of the dataset (see Init.Data)
 #'@param imgName Input a name for the plot
 #'@param format elect the image format, "png", of "pdf". 
 #'@param dpi Input the dpi. If the image format is "pdf", users need not define the dpi. For "png" images, 
@@ -4441,7 +4441,7 @@ PerformCovariateAdjustmentForROC <- function(dataName,
   if(!is.null(dataSet$data.norm.transposed)) {
     data.matrix <- dataSet$data.norm.transposed  # Samples x Features
   } else if(!is.null(dataSet$data.norm)) {
-    data.matrix <- t(dataSet$data.norm)  # Transpose: Features x Samples → Samples x Features
+    data.matrix <- t(dataSet$data.norm)  # Transpose: Features x Samples -> Samples x Features
   } else {
     msgSet$current.msg <- "Error: No normalized data available!"
     saveSet(msgSet, "msgSet")

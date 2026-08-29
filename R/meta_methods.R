@@ -88,7 +88,7 @@ CheckMetaDataIntegrity <- function(){
     }
 
     print("Passed exp condition check!");
-    # PERFORMANCE FIX (Issue #2): Pre-allocate lists to avoid O(n²) matrix/vector growing
+    # PERFORMANCE FIX (Issue #2): Pre-allocate lists to avoid O(n2) matrix/vector growing
     # Collecting all data in lists first, then combining once with do.call()
     # 30-50x faster for meta-analysis with 50+ datasets
 
@@ -890,11 +890,11 @@ tau2.NA <- function(Q, num.studies, my.weights) {
 }
 
 ##################################
-# functions for estimating Cochran’s Q
+# functions for estimating Cochran's Q
 ##################################
 
 
-#computes Cochran’s Q gene by gene
+#computes Cochran's Q gene by gene
 #dadj and varadj must be matrices, in which every study is a column,
 #every row a gene
 f.Q <- function(dadj, varadj){
@@ -1049,7 +1049,7 @@ SanityAttachMeta <- function(sel.nms, paramSet, msgSet) {
   ## 1) Early-exit if consolidated meta already exists
   ## -------------------------------------------------
   if (!is.null(paramSet$dataSet$cont.inx)) {
-    #msg("SanityAttachMeta(): consolidated metadata present — skipping.")
+    #msg("SanityAttachMeta(): consolidated metadata present -- skipping.")
     saveSet(paramSet, "paramSet")
     saveSet(msgSet,   "msgSet")
     return(invisible(TRUE))
@@ -1061,7 +1061,7 @@ SanityAttachMeta <- function(sel.nms, paramSet, msgSet) {
   .makeDummyMeta <- function(ds) {
     info <- data.frame(
       CLASS = factor(ds$cls),
-      row.names = colnames(ds$data.norm),     #  ❱❱  row names = sample names
+      row.names = colnames(ds$data.norm),     #  >>  row names = sample names
       stringsAsFactors = FALSE
     )
 
@@ -1088,7 +1088,7 @@ SanityAttachMeta <- function(sel.nms, paramSet, msgSet) {
   }
 
   ## -------------------------------------------------
-  ## 4) Build master meta.info (add “dataset” column)
+  ## 4) Build master meta.info (add "dataset" column)
   ## -------------------------------------------------
   meta.list <- lapply(sel.nms, function(nm) {
     mi            <- readDataset(nm)$meta.info

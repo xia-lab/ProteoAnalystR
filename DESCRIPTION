@@ -36,7 +36,8 @@ Imports:
 Suggests:
     patchwork, PhosR, backbone,
     multiUS, SeqKnn, rrcovNA,
-    callr, BiocManager
+    callr, BiocManager,
+    testthat
 Remotes:
     github::xia-lab/XiaLabCppLib
 Roxygen: list(markdown = TRUE)

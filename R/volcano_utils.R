@@ -249,7 +249,7 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
     pwidget <- ggplotly(gg_volcano, tooltip = "text")
 
     # Customize the layout to optimize hover interaction
-    pwidget <- pwidget %>% layout(hovermode = 'closest')
+    pwidget <- pwidget %>% plotly::layout(hovermode = 'closest')
 
     # Print the plot
     pwidget
@@ -263,7 +263,7 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
   imgSet$volcanoPlot <- paste0(fileNm, ".png");
 
   # Annotate total down-regulated (top-left) and up-regulated (top-right) counts.
-  # Black text — the points already carry the up/down colour.
+  # Black text -- the points already carry the up/down colour.
   n_up   <- sum(volcano_data$significant == "upregulated", na.rm = TRUE);
   n_down <- sum(volcano_data$significant == "downregulated", na.rm = TRUE);
   gg_volcano <- gg_volcano +
@@ -665,7 +665,7 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
   }
   
   # The uploaded-data universe can be in the platform ID space (e.g. UniProt
-  # accessions) while ora.vec was converted to Entrez above — convert the
+  # accessions) while ora.vec was converted to Entrez above -- convert the
   # universe too, or the %in% cut below silently empties the query.
   univ.non.na <- current.universe[!is.na(current.universe)]
   univ.entrez.like <- length(univ.non.na) > 0 && mean(grepl("^[0-9]+$", univ.non.na)) >= 0.8

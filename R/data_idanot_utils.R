@@ -393,7 +393,7 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
 .getUniprotSymbolMap <- function(uniprot.vec, paramSet){
   org <- paramSet$data.org;
 
-  # Step 1: UniProt → Entrez (via entrez_uniprot table)
+  # Step 1: UniProt -> Entrez (via entrez_uniprot table)
   uniprot.map <- queryGeneDB("entrez_uniprot", org);
   .paProteinDiagLog("[UniProtFallback] symbol map requested for ", length(uniprot.vec),
                     " accession(s); org=", org, "; entrez_uniprot available=",
@@ -416,7 +416,7 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
   hit.inx <- match(uniprot.vec, uniprot.map[, "accession"]);
   entrez.ids <- uniprot.map[hit.inx, "gene_id"];
 
-  # Step 2: Entrez → Symbol/Name (via entrez table)
+  # Step 2: Entrez -> Symbol/Name (via entrez table)
   entrez.db <- queryGeneDB("entrez", org);
   entrez.hit <- match(entrez.ids, entrez.db[, "gene_id"]);
 
@@ -1020,7 +1020,7 @@ doEntrez2SymbolMapping <- function(entrez.vec,data.org="NA", data.idType="NA"){
   }
 
   if(is.null(data.org) || data.org == "NA" || data.org == "na"){
-    return(entrez.vec); # org unresolved – nothing to map against
+    return(entrez.vec); # org unresolved - nothing to map against
   }
 
   # Map Entrez IDs to symbols via entrez database
@@ -1062,14 +1062,14 @@ doUniprot2SymbolMapping <- function(uniprot.vec, data.org="NA", data.idType="NA"
     return(uniprot.vec); # nothing to do
   }
 
-  # Step 1: UniProt → Entrez (via entrez_uniprot table)
+  # Step 1: UniProt -> Entrez (via entrez_uniprot table)
   uniprot.map <- queryGeneDB("entrez_uniprot", data.org);
   uniprot.map[] <- lapply(uniprot.map, as.character)
 
   hit.inx <- match(uniprot.vec, uniprot.map[, "accession"]);
   entrez.ids <- uniprot.map[hit.inx, "gene_id"];
 
-  # Step 2: Entrez → Symbol (via entrez table)
+  # Step 2: Entrez -> Symbol (via entrez table)
   entrez.db <- queryGeneDB("entrez", data.org);
   entrez.db[] <- lapply(entrez.db, as.character)
 
@@ -1081,7 +1081,7 @@ doUniprot2SymbolMapping <- function(uniprot.vec, data.org="NA", data.idType="NA"
   symbols[na.inx] <- uniprot.vec[na.inx];
   return(symbols);
 }
-# note, entrez.vec could contain NA / NULL – cannot rely on rownames
+# note, entrez.vec could contain NA / NULL - cannot rely on rownames
 doEntrezIDAnot <- function(entrez.vec,
                            data.org   = "NA",
                            data.idType = "NA") {
@@ -1112,7 +1112,7 @@ doUniprotIDAnot <- function(uniprot.vec,
   }
 
   if (tolower(data.org) == "na") {
-    # No organism context – fall back to a dummy annotation frame
+    # No organism context - fall back to a dummy annotation frame
     return(data.frame(
       gene_id = original.ids,
       symbol  = original.ids,
@@ -1121,12 +1121,12 @@ doUniprotIDAnot <- function(uniprot.vec,
     ))
   }
 
-  ## ── 2 · database lookup ---------------------------------------------------
+  ## -- 2 - database lookup ---------------------------------------------------
   # Flatten vectors to avoid dimension errors in match()
   uniprot.vec <- as.vector(uniprot.vec)
   dim(uniprot.vec) <- NULL
 
-  # Step 1: UniProt → Entrez (via entrez_uniprot table)
+  # Step 1: UniProt -> Entrez (via entrez_uniprot table)
   uniprot.map <- queryGeneDB("entrez_uniprot", data.org)
   uniprot.map[] <- lapply(uniprot.map, as.character)
 
@@ -1136,7 +1136,7 @@ doUniprotIDAnot <- function(uniprot.vec,
   hit.inx   <- match(uniprot.vec, accession_col)
   entrez.ids <- uniprot.map[hit.inx, "gene_id"]
 
-  # Step 2: Entrez → Symbol/Name (via entrez table)
+  # Step 2: Entrez -> Symbol/Name (via entrez table)
   entrez.db <- queryGeneDB("entrez", data.org)
   entrez.db[] <- lapply(entrez.db, as.character)
 
@@ -1156,7 +1156,7 @@ doUniprotIDAnot <- function(uniprot.vec,
   na.inx <- is.na(anot.mat$name)
   anot.mat$name[na.inx] <- "NA"
 
-  ## ── 3 · fill NAs with original IDs ---------------------------------------
+  ## -- 3 - fill NAs with original IDs ---------------------------------------
   na.inx <- is.na(hit.inx)
   anot.mat[na.inx, "gene_id"] <- original.ids[na.inx]
   anot.mat[na.inx, "symbol"]  <- original.ids[na.inx]

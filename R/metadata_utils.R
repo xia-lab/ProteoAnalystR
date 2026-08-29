@@ -19,7 +19,7 @@ SanityCheckMeta <- function(fileName, init){
     meta    <- dataSet$meta.info            # may be NULL or 0-col
 
     ## ------------------------------------------------------------------
-    ## 1. Guarantee at least one metadata column (“CLASS”) exists
+    ## 1. Guarantee at least one metadata column ("CLASS") exists
     ## ------------------------------------------------------------------
     if (is.null(meta) || ncol(meta) == 0) {
       meta <- data.frame(

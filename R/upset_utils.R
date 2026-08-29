@@ -397,7 +397,7 @@ PlotPairwiseUpsetPNG <- function(dataName  = "",
                                  format    = "png") {
   tryCatch({
     if (!requireNamespace("UpSetR", quietly = TRUE)) {
-      message("[PlotPairwiseUpsetPNG] UpSetR package not installed — skipping")
+      message("[PlotPairwiseUpsetPNG] UpSetR package not installed \u2014 skipping")
       return(invisible(NULL))
     }
     require(Cairo)
@@ -405,7 +405,7 @@ PlotPairwiseUpsetPNG <- function(dataName  = "",
     dataSet <- readDataset(dataName)
     if (is.null(dataSet) || is.null(dataSet$comp.res.list) ||
         length(dataSet$comp.res.list) < 2) {
-      message("[PlotPairwiseUpsetPNG] comp.res.list missing or only 1 contrast — skipping")
+      message("[PlotPairwiseUpsetPNG] comp.res.list missing or only 1 contrast \u2014 skipping")
       return(invisible(NULL))
     }
 
@@ -443,14 +443,14 @@ PlotPairwiseUpsetPNG <- function(dataName  = "",
     # Drop contrasts with zero sig features
     keep <- vapply(sig.sets, function(x) length(x) > 0, logical(1))
     if (sum(keep) < 2) {
-      message("[PlotPairwiseUpsetPNG] fewer than 2 contrasts have sig features — skipping")
+      message("[PlotPairwiseUpsetPNG] fewer than 2 contrasts have sig features \u2014 skipping")
       return(invisible(NULL))
     }
     sig.sets <- sig.sets[keep]
 
     upset.df <- UpSetR::fromList(sig.sets)
     if (nrow(upset.df) == 0) {
-      message("[PlotPairwiseUpsetPNG] no features in any sig set — skipping")
+      message("[PlotPairwiseUpsetPNG] no features in any sig set \u2014 skipping")
       return(invisible(NULL))
     }
 

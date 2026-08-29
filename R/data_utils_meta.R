@@ -308,11 +308,11 @@ SetupMetaStats <- function(BHth=0.05, paramSet, analSet){
   return(list(paramSet, analSet))
 }
 
-#compute Cochran’s Q to help FEM/REM
+#compute Cochran's Q to help FEM/REM
 # plot Q-Q plot for estimation
 
 #'Compute Cochran's Q test
-#'@description Plot Q-Q plot for estimating statistical heterogeneity. Cochran’s Q test is calculated as the weighted sum of squared differences between individual study effects and the pooled effect across studies. When the estimated Q values have approximately a chi-squared distribution, it suggests FEM assumption is appropriate. If it deviates significantly from a chi-squared distribution, REM should usually be used.
+#'@description Plot Q-Q plot for estimating statistical heterogeneity. Cochran's Q test is calculated as the weighted sum of squared differences between individual study effects and the pooled effect across studies. When the estimated Q values have approximately a chi-squared distribution, it suggests FEM assumption is appropriate. If it deviates significantly from a chi-squared distribution, REM should usually be used.
 #'@param imgNm Image name to output
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada

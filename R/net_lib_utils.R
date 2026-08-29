@@ -257,7 +257,7 @@ PrepareSqliteDB <- function(sqlite_Path, onweb = TRUE) {
   }, error = function(e) FALSE, warning = function(w) FALSE);
   if(!ok){
     if(file.exists(sqlite_Path)) unlink(sqlite_Path);  # drop partial/empty download
-    AddErrMsg(paste0("Reference database '", dbNM, "' unavailable — check internet, or use the bundled image / mount OMICS_LIB_DIR."));
+    AddErrMsg(paste0("Reference database '", dbNM, "' unavailable \u2014 check internet, or use the bundled image / mount OMICS_LIB_DIR."));
     return(FALSE);
   }
   return(TRUE);

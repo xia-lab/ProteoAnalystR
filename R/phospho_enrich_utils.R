@@ -1228,7 +1228,7 @@ GetMotifEnrichmentJSON <- function(jsonNm) {
     }
   }
 
-  # ── Site-level data for Manhattan plot ──────────────────────────────────────
+  # -- Site-level data for Manhattan plot --------------------------------------
   # Each phosphosite gets: motif category (x), -log10(adj.P.Val) from DE (y),
   # significance status, gene label, compartment (if available).
   # Sites assigned to multiple motifs appear once each (deduplicated to primary motif).
@@ -1285,7 +1285,7 @@ GetMotifEnrichmentJSON <- function(jsonNm) {
     })
   }
 
-  # ── Output ───────────────────────────────────────────────────────────────
+  # -- Output ---------------------------------------------------------------
   out <- list(
     motifs            = motifs.list,       # per-motif enrichment summary (bubble view)
     sites             = sites.list,        # per-site DE stats (Manhattan view)
@@ -1387,7 +1387,7 @@ PlotMotifEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20, b
   dpi <- suppressWarnings(as.numeric(dpi))
   if (is.na(dpi) || dpi <= 0) dpi <- 96
 
-  # ── Palette shared between both modes ──────────────────────────────────────
+  # -- Palette shared between both modes --------------------------------------
   family.cols <- c(
     "Proline-directed"  = "#4e79a7",
     "Basophilic"        = "#f28e2b",
@@ -1396,7 +1396,7 @@ PlotMotifEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20, b
     "Other"             = "#b07aa1"
   )
 
-  # ── Helper: build enrichment rows for one set of sites ─────────────────────
+  # -- Helper: build enrichment rows for one set of sites ---------------------
   .enrich_one <- function(motif.long, sig.mask, top_n) {
     motif.names <- unique(motif.long$Motif)
     all.sites  <- unique(motif.long$Site)
@@ -1430,7 +1430,7 @@ PlotMotifEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20, b
     out
   }
 
-  # ── Standard (no compartment) mode ─────────────────────────────────────────
+  # -- Standard (no compartment) mode -----------------------------------------
   if (!isTRUE(byCompartment)) {
     res <- analSet$motif.enrich
     res <- res[order(res$P_value), , drop = FALSE]
@@ -1458,14 +1458,14 @@ PlotMotifEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20, b
             legend.position    = "right",
             plot.title         = element_text(hjust = 0.5, face = "bold")) +
       labs(title = "Phosphosite Motif Enrichment",
-           x = NULL, y = "-log₁₀(FDR)")
+           x = NULL, y = "-log\u2081\u2080(FDR)")
 
     n.motifs <- nrow(res)
     w <- max(5.5, 0.65 * n.motifs + 3.5)
     h <- 4.8
 
   } else {
-    # ── Compartment mode ─────────────────────────────────────────────────────
+    # -- Compartment mode -----------------------------------------------------
     ctx     <- analSet$motif.context
     ml      <- analSet$motif.long
     if (is.null(ctx) || is.null(ml) || !"Compartment" %in% colnames(ctx)) {
@@ -1523,7 +1523,7 @@ PlotMotifEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20, b
             strip.text         = element_text(face = "bold"),
             plot.title         = element_text(hjust = 0.5, face = "bold")) +
       labs(title = "Motif Enrichment by Cellular Compartment",
-           x = NULL, y = "-log₁₀(FDR)")
+           x = NULL, y = "-log\u2081\u2080(FDR)")
 
     n.comp <- length(comps)
     w <- 9.5
@@ -1740,7 +1740,7 @@ PlotKinaseEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20,
   return(imgNm)
 }
 
-# ── Cellular compartment enrichment ───────────────────────────────────────────
+# -- Cellular compartment enrichment -------------------------------------------
 # Tests whether significant phosphosites are over-represented in any of the
 # broad cellular compartments from the localization database (same data used
 # for the PPI network compartment layout).
@@ -1941,7 +1941,7 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
   return(imgNm)
 }
 
-# ── Protein-adjusted phosphosite change via protein reference ─────────────────
+# -- Protein-adjusted phosphosite change via protein reference -----------------
 #
 # Computes a per-site, protein-adjusted RELATIVE phosphorylation change (MSstatsPTM-
 # style delta-method adjustment; site log2FC - protein log2FC). Per-condition value is
@@ -1970,7 +1970,7 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
       "so the protein-adjusted (relative) phosphosite change can be estimated."
     )))
 
-  prot.ref <- paramSet$protein.ref   # log2 protein abundances: proteins × samples
+  prot.ref <- paramSet$protein.ref   # log2 protein abundances: proteins x samples
 
   phospho.mat <- dataSet$data.norm
   if (is.null(phospho.mat) || nrow(phospho.mat) == 0)
@@ -2095,7 +2095,7 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     lfc  <- fit$coefficients[, 1]
     if (identical(Sys.getenv("PA_PTM_EBAYES"), "ordinary")) {
       ## experiment hook: unmoderated per-feature OLS variance (MSstatsPTM-
-      ## style) — no cross-feature shrinkage of SEs, residual df.
+      ## style) -- no cross-feature shrinkage of SEs, residual df.
       se  <- fit$sigma * fit$stdev.unscaled[, 1]
       dft <- fit$df.residual
       names(dft) <- rownames(fit)
@@ -2183,7 +2183,7 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
   # This is more reliable than gene symbol lookup because:
   # (a) some organisms (e.g. yeast) use systematic ORF names in the gene DB that
   #     differ from the common names in DIA-NN Genes columns, and
-  # (b) the entrez_uniprot table provides a direct accession → Entrez mapping.
+  # (b) the entrez_uniprot table provides a direct accession -> Entrez mapping.
   analSet <- readSet(analSet, "analSet")
   result.prot.ids <- sub("_[A-Z]_[0-9]+$", "", results$Peptide)
   comp.vec <- .mapSitesToCompartment(result.prot.ids, paramSet, analSet)
@@ -2261,7 +2261,7 @@ PlotPhosphoOccupancyProfile <- function(dataName, imageName, siteId,
   col <- GetGroupPalette(df$Condition, paletteOpt)
   df$Condition <- factor(df$Condition, levels = names(col))
 
-  trunc.id <- if (nchar(siteId) > 36) paste0(substr(siteId, 1, 36), "…") else siteId
+  trunc.id <- if (nchar(siteId) > 36) paste0(substr(siteId, 1, 36), "\u2026") else siteId
 
   myplot <- ggplot(df, aes(x = Condition, y = Occupancy, fill = Condition)) +
     geom_boxplot(outlier.shape = NA, width = 0.5, alpha = 0.8) +
@@ -2276,7 +2276,7 @@ PlotPhosphoOccupancyProfile <- function(dataName, imageName, siteId,
       plot.title         = element_text(size = 11, hjust = 0.5),
       plot.subtitle      = element_text(size = 9,  hjust = 0.5, color = "#666666")
     ) +
-    ylab("log₂(phosphosite / protein)") +
+    ylab("log\u2082(phosphosite / protein)") +
     ggtitle(trunc.id, subtitle = paste("Protein:", prot.id))
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)

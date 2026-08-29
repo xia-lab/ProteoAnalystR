@@ -29,7 +29,7 @@ ResolveFeatureRowId <- function(mat, feature.id) {
   rn <- rownames(mat)
   if (feature.id %in% rn) return(feature.id)
 
-  # Normalizing every row name is O(nrow) regex work — compute it lazily and
+  # Normalizing every row name is O(nrow) regex work -- compute it lazily and
   # at most once (peptide matrices can have tens of thousands of rows).
   rn.norm <- NULL
   getRnNorm <- function() {

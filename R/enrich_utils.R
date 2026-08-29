@@ -78,14 +78,14 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   is.entrez.like <- length(non_na_vec) > 0 && mean(grepl("^[0-9]+$", non_na_vec)) >= 0.8
 
   if (is.entrez.like) {
-    # Already Entrez — resolve symbols for display; no UniProt round-trip needed.
+    # Already Entrez -- resolve symbols for display; no UniProt round-trip needed.
     ora.nms <- doEntrez2SymbolMapping(ora.vec, paramSet$data.org, "entrez");
     na.inx <- is.na(ora.vec);
     ora.vec <- ora.vec[!na.inx];
     ora.nms <- ora.nms[!na.inx];
   } else {
-    # IDs are UniProt — convert to Entrez for pathway matching.
-    # Normalize: strip phosphosite suffixes (Q9D1F4_T_247 → Q9D1F4) and isoforms.
+    # IDs are UniProt -- convert to Entrez for pathway matching.
+    # Normalize: strip phosphosite suffixes (Q9D1F4_T_247 -> Q9D1F4) and isoforms.
     normalized.ora.vec <- sub("_[A-Z]_\\d+$", "", trimws(ora.vec));
     normalized.ora.vec <- sub("-\\d+$", "", normalized.ora.vec);
 
@@ -120,7 +120,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   
   # The uploaded-data universe can be in the platform ID space (e.g. UniProt
   # accessions for proteomics) while the pathway sets are Entrez. Convert it
-  # so the pathway/universe intersection below compares like with like —
+  # so the pathway/universe intersection below compares like with like --
   # otherwise every pathway empties out and phyper() gets a NULL hit count.
   univ.non.na <- current.universe[!is.na(current.universe)]
   univ.entrez.like <- length(univ.non.na) > 0 && mean(grepl("^[0-9]+$", univ.non.na)) >= 0.8
@@ -175,7 +175,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
                        }
   );
 
-  # hits.query already contains gene symbols — no reverse mapping needed.
+  # hits.query already contains gene symbols -- no reverse mapping needed.
 
   ov_qs_save(hits.query, "hits_query.qs");
 
@@ -184,7 +184,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   
   gene.vec <- current.universe;
   sym.vec <- doEntrez2SymbolMapping(gene.vec, paramSet$data.org, paramSet$data.idType);
-  # Build a named lookup once (entrez → symbol) so each pathway query is O(k)
+  # Build a named lookup once (entrez -> symbol) so each pathway query is O(k)
   # where k = pathway size, not O(universe_size).
   univ.sym.map <- setNames(sym.vec, gene.vec);
   current.featureset.symb <- lapply(current.featureset, function(x) {
@@ -216,7 +216,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # surface (enr.mat, hits_query, enrichment_<lib>.csv/.json, ridgeline)
   # shows the same pathway set. This is applied AFTER p.adjust() above, so
   # FDR is still computed over all tested gene sets (multiple-testing
-  # correction is unchanged) — we only filter the DISPLAYED/exported set.
+  # correction is unchanged) -- we only filter the DISPLAYED/exported set.
   min.hits <- 3L;
   keep.inx <- hit.num >= min.hits;
   if(sum(keep.inx) == 0){
@@ -307,7 +307,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # like P12345 are not human-readable. Map them back to gene symbols for
   # the JSON payload; keep the original ID when the lookup misses (rare
   # for canonical UniProts but possible for obsolete/private IDs).
-  # hits.query already holds gene symbols — use them directly.
+  # hits.query already holds gene symbols -- use them directly.
   fun.anot <- lapply(hits.query, function(syms) unname(syms));
   total <- resTable$Total; if(length(total) ==1) { total <- matrix(total) };
   fun.pval <- resTable$Pval; if(length(fun.pval) ==1) { fun.pval <- matrix(fun.pval) };
@@ -422,7 +422,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # several times per pass (ORA + ridgeline, and once per re-run), and large
   # libraries like GO:BP are slow to readRDS + post-process. Caching the fully
   # processed result avoids the redundant disk read. Stored in an option (NOT
-  # .GlobalEnv) so it is never serialized by save.image()/Rload.RData — keeps
+  # .GlobalEnv) so it is never serialized by save.image()/Rload.RData -- keeps
   # the project save small and survives Rserve reconnect cleanly (empty after
   # a fresh session, repopulated on demand).
   .lib.cache <- getOption("ov.enrichlib.cache");
@@ -929,7 +929,7 @@ FindCommunities <- function(method = "walktrap",
   # `current.net.nm` global. On an AI result-view / project-restore the network
   # JSON renders from disk but the network-drawing function never re-runs, so the
   # global is absent and `ppi.comps[[current.net.nm]]` errored with
-  # "object 'current.net.nm' not found" — the interactive Module Explorer then
+  # "object 'current.net.nm' not found" -- the interactive Module Explorer then
   # returned NA for every algorithm. Mirror graph_utils_general.R, which already
   # reads paramSet$current.net.nm, with a fallback to the first component.
   cur.net.nm <- paramSet$current.net.nm
@@ -1140,7 +1140,7 @@ DecomposeGraph <- function(gObj,analSet, minNodeNum = 3, jsonBool = F){
     if(jsonBool == "netjson"){
         comps <-list(gObj)
     }else{
-        comps <-decompose(gObj, min.vertices=minNodeNum);
+        comps <-igraph::decompose(gObj, min.vertices=minNodeNum);
     }
   if(length(comps) == 0){
     current.msg <<- paste("No subnetwork was identified with at least", minNodeNum, "nodes!");
@@ -1176,7 +1176,7 @@ regEnrichment <- function(dataName, file.nm, fun.type, IDs, netInv){
   res <- PerformNetEnrichment(dataName, file.nm, fun.type, IDs);
 }
 
-# ── Server-side PNG: Enrichment Network (igraph) ──
+# -- Server-side PNG: Enrichment Network (igraph) --
 PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width=NA) {
   tryCatch({
     require(igraph); require(reshape)
@@ -1214,7 +1214,7 @@ PlotEnrichNetworkPNG <- function(dataName, imgName, format="png", dpi=150, width
   }, error = function(e) { message("PlotEnrichNetworkPNG error: ", e$message); return(0) })
 }
 
-# ── Server-side PNG: Gene-Pathway Enrichment Heatmap (ProteoAnalyst version) ──
+# -- Server-side PNG: Gene-Pathway Enrichment Heatmap (ProteoAnalyst version) --
 PlotEnrichHeatmapPNG <- function(dataName, imgName, format="png", dpi=150, width=NA) {
   tryCatch({
     enr.mat <- ov_qs_read("enr.mat.qs")

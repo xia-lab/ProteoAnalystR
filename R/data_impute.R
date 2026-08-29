@@ -47,7 +47,7 @@ ImputeMissingVar <- function(dataName="", method="min"){
   new.mat <- NULL;
 
   # NOTE: MSstats imputation is no longer used in the new workflow
-  # Reason: Data is now summarized (peptide → protein) BEFORE imputation
+  # Reason: Data is now summarized (peptide -> protein) BEFORE imputation
   # MSstats MBimpute requires peptide-level data, which we no longer have at this stage
   # All imputation now uses legacy methods (KNN, PPCA, etc.) on protein-level data
 

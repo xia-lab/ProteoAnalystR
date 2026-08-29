@@ -70,7 +70,7 @@ Init.Data <-function(onWeb=T, dataPath="data/", default.dpi=72){
   paramSet$mdata.all <- list();
   paramSet$anal.type <- "onedata";
   paramSet$api.bool <- F;
-  # kept http:// — api.xialab.ca has no valid TLS cert; https would break this. TODO(distribution): durable https host.
+  # kept http:// -- api.xialab.ca has no valid TLS cert; https would break this. TODO(distribution): durable https host.
   paramSet$api.base <<- "http://api.xialab.ca" #dose response
   # Default the enrichment background to the measured proteome/phosphoproteome
   # (the features actually detected in the experiment), not the whole gene-set

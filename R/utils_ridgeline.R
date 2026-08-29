@@ -139,7 +139,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
 
     # When the caller (the multi-library enrichment driver) already computed the
     # ORA for this fun.type over the SAME query, reuse the enr.mat.qs /
-    # hits_query.qs it wrote instead of recomputing — the recompute here was
+    # hits_query.qs it wrote instead of recomputing -- the recompute here was
     # ~half the multi-library step's runtime. Gated on the ov.enrich.reuse option
     # (set only by .ai_run_enrich_libs); default-off keeps manual / matrix /
     # refine callers recomputing, where the ridgeline query (sig.mat) differs.
@@ -310,7 +310,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
 
   }
 
-  # ── Full-distribution ORA ridgeline ──────────────────────────────────────
+  # -- Full-distribution ORA ridgeline --------------------------------------
   # Originally the ORA ridge plotted only the SIGNIFICANT proteins overlapping
   # each pathway (dataSet$sig.mat). When few proteins pass the DE cut that
   # leaves 0-1 points per pathway and the ridges render empty. Mirror the GSEA
@@ -447,7 +447,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   # phosphosite IDs (else branch). Align them.
   if (is_phospho && ridgeType == "gsea") {
     if (!is.null(paramSet$phospho.mapping)) {
-      # degs.plot$merge_id = Entrez IDs; convert gs.plot UniProt → Entrez to match
+      # degs.plot$merge_id = Entrez IDs; convert gs.plot UniProt -> Entrez to match
       uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
       gs.uniprot <- sub("-\\d+$", "", as.character(gs.plot$merge_id))
       hit.inx <- match(gs.uniprot, uniprot.map[, "accession"])
@@ -465,10 +465,10 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   df <- merge(df, degs.plot, by = "merge_id", all.x = TRUE, all.y = FALSE);
   df <- na.omit(df)
 
-  # ── Min-hits filter (a ridge is a DISTRIBUTION) ──────────────────────────
+  # -- Min-hits filter (a ridge is a DISTRIBUTION) --------------------------
   # A gene set needs at least 3 measured members ("hits") to form a ridge;
   # fewer renders as a flat line / lone point. Keep only sets with >=3 members
-  # — the same minimum-set-size rule used by ma/MSEA.
+  # -- the same minimum-set-size rule used by ma/MSEA.
   RIDGE_MIN_HITS <- 3L
   .set.hits <- tapply(as.character(df$merge_id), as.character(df$name),
                       function(x) length(unique(x)))
@@ -509,12 +509,12 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   
   # The density ridge is built from ALL pathway members, drawn LOW and semi-
   # transparent so it sits behind the member fold-changes (the "hits") instead of
-  # covering them — significant members in red, the rest grey. A low scale also
+  # covering them -- significant members in red, the rest grey. A low scale also
   # stops a dense pathway's ridge from towering over and hiding the sparse rows
   # next to it. fill = adj. pval is each method's own p (ORA vs GSEA stay distinct).
   # The hits are a SEPARATE point layer (always rendered) over a low, semi-
-  # transparent density. geom_density_ridges drops a group entirely — density AND
-  # its jittered points — when it can't estimate a density (pathways with only a
+  # transparent density. geom_density_ridges drops a group entirely -- density AND
+  # its jittered points -- when it can't estimate a density (pathways with only a
   # couple of members), which is what left sparse rows blank; a standalone
   # geom_point keeps every member's fold-change visible regardless. Significant
   # members in red, the rest grey; fill = each method's own adj. pval.
@@ -747,7 +747,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     # Already Entrez IDs
     entrez.ids <- ids
   } else {
-    # UniProt or phosphosite IDs — bridge via entrez_uniprot table
+    # UniProt or phosphosite IDs -- bridge via entrez_uniprot table
     uniprot.db <- try(queryGeneDB("entrez_uniprot", org), silent = TRUE)
     if (!inherits(uniprot.db, "try-error") && !is.null(uniprot.db) &&
         "accession" %in% colnames(uniprot.db) && "gene_id" %in% colnames(uniprot.db)) {

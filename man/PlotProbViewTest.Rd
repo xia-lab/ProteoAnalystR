@@ -4,7 +4,7 @@
 \alias{PlotProbViewTest}
 \title{Plot a summary view of the classification result of tester prediction}
 \usage{
-PlotProbViewTest(mSetObj=NA, imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred)
+PlotProbViewTest(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred)
 }
 \arguments{
 \item{imgName}{Input a name for the plot}
@@ -20,7 +20,7 @@ the default dpi is 72. It is suggested that for high-resolution images, select a
 
 \item{showPred}{Show predicted samples}
 
-\item{mSetObj}{Input the name of the created mSetObj (see InitDataObjects)}
+\item{dataName}{Input the name of the dataset (see \code{Init.Data})}
 }
 \description{
 Plot of predicted class probabilities. On the x-axis is the proability,
