@@ -175,10 +175,29 @@
     ProbNorm   = "Probabilistic Quotient Normalization (PQN)",
     SpecNorm   = "Reference-feature (specific) normalization",
     sn)
+  imp <- as.character(.pa_g(paramSet, "impute.opt", "not run"))
+  imp.readable <- switch(imp,
+    min       = "MNAR limit-of-detection replacement (1/5 feature minimum)",
+    mindet    = "MinDet (imputeLCMD)",
+    minprob   = "MinProb (imputeLCMD)",
+    qrilc     = "QRILC left-censored (imputeLCMD)",
+    mean      = "Feature mean replacement",
+    median    = "Feature median replacement",
+    colmin    = "Feature minimum replacement",
+    knn_var   = "KNN by feature (impute::impute.knn)",
+    knn_smp   = "KNN by sample (impute::impute.knn)",
+    seqknn    = "Sequential KNN",
+    bpca      = "Bayesian PCA",
+    ppca      = "Probabilistic PCA",
+    svdImpute = "SVD imputation",
+    impseq    = "Sequential covariance imputation",
+    exclude   = "Exclude features containing missing values",
+    imp)
 
   norm <- c("== Normalization ==",
     .pa_line("Normalization / transform", norm.readable),
-    .pa_line("Sample-wise normalization", sn.readable))
+    .pa_line("Sample-wise normalization", sn.readable),
+    .pa_line("Protein/feature-level missing-value imputation", imp.readable))
 
   c(filt, "", norm)
 }
@@ -233,7 +252,17 @@
 
   fdr    <- .pa_g(dataSet, "pval",   .pa_g(paramSet, "pvalu"))
   fc     <- .pa_g(dataSet, "fc.lvl", .pa_g(paramSet, "fc.thresh"))
-  method <- as.character(.pa_g(dataSet, "de.method"))
+  method.requested <- as.character(.pa_g(
+    dataSet, "de.method.requested", .pa_g(dataSet, "de.method")
+  ))
+  method.effective <- as.character(.pa_g(
+    dataSet, "de.method.effective", method.requested
+  ))
+  method.display <- if (!identical(method.requested, method.effective)) {
+    paste0(method.requested, " requested; ", method.effective, " used")
+  } else {
+    method.effective
+  }
 
   # Comparison / contrast being tested. Multi-group ("default") designs are an
   # overall F-test across all groups rather than a single pairwise contrast.
@@ -262,7 +291,12 @@
   }, error = function(e) as.character(sig.count))
 
   c("== Differential Expression ==",
-    .pa_line("Method", method),
+    .pa_line("Method", method.display),
+    if (!is.null(.pa_g(dataSet, "deqms.count.source", NULL)))
+      .pa_line("DEqMS count source", .pa_g(dataSet, "deqms.count.source")),
+    if (!is.null(.pa_g(dataSet, "de.fallback.reason", NULL)) &&
+        !is.na(.pa_g(dataSet, "de.fallback.reason", NA_character_)))
+      .pa_line("Fallback reason", .pa_g(dataSet, "de.fallback.reason")),
     .pa_line("Comparison", comparison),
     .pa_line("Number of features tested", n.tested),
     .pa_line("Significance", sig.line),

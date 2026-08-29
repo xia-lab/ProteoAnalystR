@@ -135,6 +135,17 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     }
   }
 
+  # Persist the actual post-mapping universe used by the test.  The analysis
+  # summary previously knew the universe choice but could report its size as NA
+  # for ordinary one-dataset ORA runs because this local vector was never saved.
+  paramSet$backgroundUniverse <- unique(current.universe)
+  paramSet$universe.opt.readable <- if (identical(paramSet$universe.opt, "library")) {
+    "Gene Set Library"
+  } else {
+    "Uploaded Data (measured features)"
+  }
+  saveSet(paramSet, "paramSet")
+
   # also make sure pathways only contain features measured in experiment
   #if(!is.null(dataSet$data.anot)){
    if(file.exists("data.anot.qs")){

@@ -30,6 +30,16 @@ ImputeMissingVar <- function(dataName="", method="min"){
     return(0);
   }
 
+  # Advisory: after MSstats TMP+MBimpute summarization, censored values were
+  # already imputed inside the model; remaining NAs are proteins entirely
+  # unobserved in a condition, which MSstats deliberately leaves missing.
+  if (identical(paramSet$summ.method, "msstats") && !identical(method, "none")) {
+    msgSet$current.msg <- c(msgSet$current.msg,
+      paste0("Note: summarization used MSstats MBimpute, which already handled ",
+             "censored missing values; '", method, "' imputation will additionally ",
+             "fill proteins completely unobserved in a condition. 'none' is recommended."));
+  }
+
   # Treat strict zeros as missing (common in proteomics exports)
   int.mat[int.mat == 0] <- NA
   row.nms <- rownames(int.mat);
@@ -42,7 +52,12 @@ ImputeMissingVar <- function(dataName="", method="min"){
   # All imputation now uses legacy methods (KNN, PPCA, etc.) on protein-level data
 
   # Legacy/fallback methods
-  if(method=="exclude"){
+  if(method %in% c("none", "NA", "")){
+    # Pass-through: keep missing values (e.g. after MSstats MBimpute
+    # summarization, where remaining NAs are condition-absent proteins).
+    new.mat <- int.mat;
+    current.msg <- c(current.msg, "Protein-level imputation skipped ('none'); missing values retained.");
+  }else if(method=="exclude"){
     # OPTIMIZED: Use rowSums instead of apply for 60-100x speedup
     good.inx<-rowSums(is.na(int.mat))==0
     tmp.mat<-int.mat[good.inx,, drop=FALSE];
@@ -241,7 +256,7 @@ ImputeMissingVar <- function(dataName="", method="min"){
                                   summaryMethod = "TMP",
                                   censoredInt = "NA",
                                   MBimpute = TRUE,
-                                  featureSubset = "top3"), silent = TRUE);
+                                  featureSubset = "all"), silent = TRUE);
   if (inherits(proc, "try-error")) {
     msgSet$current.msg <- c(msgSet$current.msg, "MSstats dataProcess error during imputation.");
     saveSet(msgSet, "msgSet");
@@ -259,7 +274,8 @@ ImputeMissingVar <- function(dataName="", method="min"){
     saveSet(msgSet, "msgSet");
     return(list(mat = NULL));
   }
-  wide <- reshape2::dcast(prof, Protein ~ RUN, value.var = value.col);
+  run.col <- if ("originalRUN" %in% colnames(prof)) "originalRUN" else "RUN";
+  wide <- reshape2::dcast(prof, stats::as.formula(paste("Protein ~", run.col)), value.var = value.col);
   if (!"Protein" %in% colnames(wide)) {
     msgSet$current.msg <- c(msgSet$current.msg, "MSstats output missing Protein column.");
     saveSet(msgSet, "msgSet");

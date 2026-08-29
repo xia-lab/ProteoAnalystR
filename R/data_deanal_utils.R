@@ -172,6 +172,11 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
     if (identical(dataSet, 0)) return(0);
     dataSet <- .perform_deqms(dataSet, robustTrend);
     if (identical(dataSet, 0)) return(0);
+  }else if (dataSet$de.method == "msstats"){
+    dataSet <- prepareContrast(dataSet, anal.type, par1, par2, nested.opt);
+    if (identical(dataSet, 0)) return(0);
+    dataSet <- .perform_msstats_de(dataSet);
+    if (identical(dataSet, 0)) return(0);
   }else if (dataSet$de.method == "edger"){
     dataSet <- prepareEdgeRContrast(dataSet, anal.type, par1, par2, nested.opt);
     if (identical(dataSet, 0)) return(0);
@@ -544,12 +549,19 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   }
 
   if (dataSet$de.method == "limma") {
+    ## experiment hook (benchmarks only): PA_ARRAY_WEIGHTS=1 estimates
+    ## per-sample quality weights (limma::arrayWeights) before the fit.
+    aw <- NULL
+    if (nzchar(Sys.getenv("PA_ARRAY_WEIGHTS"))) {
+      aw <- tryCatch(limma::arrayWeights(data.norm, design), error = function(e) NULL)
+    }
     fit <- tryCatch({
       if (is.null(dataSet$block)) {
-        lmFit(data.norm, design)
+        lmFit(data.norm, design, weights = aw)
       } else {
         corfit <- duplicateCorrelation(data.norm, design, block = dataSet$block)
-        lmFit(data.norm, design, block = dataSet$block, correlation = corfit$consensus)
+        lmFit(data.norm, design, block = dataSet$block, correlation = corfit$consensus,
+              weights = aw)
       }
     }, error = function(e) {
       msgSet$current.msg <- paste("Linear model fitting failed:", e$message)
@@ -708,6 +720,115 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
 }
 
+# MSstats statistical engine: per-protein linear models via
+# MSstats::groupComparison on the dataProcess output saved by the
+# "MSstats TMP + MBimpute" summarization route. Only valid when that
+# summarization ran (it produces msstats_proc.qs); other summarization
+# methods have no dataProcess object to model.
+.perform_msstats_de <- function(dataSet) {
+  msgSet   <- readSet(msgSet, "msgSet")
+  paramSet <- readSet(paramSet, "paramSet")
+
+  if (!identical(paramSet$summ.method, "msstats") || !file.exists("msstats_proc.qs")) {
+    msgSet$current.msg <- paste0(
+      "The MSstats statistical engine requires the 'MSstats TMP + MBimpute' ",
+      "summarization method: rerun peptide summarization with that option first.")
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+  if (!requireNamespace("MSstats", quietly = TRUE)) {
+    msgSet$current.msg <- "MSstats package is not installed."
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+
+  proc <- tryCatch(ov_qs_read("msstats_proc.qs"), error = function(e) NULL)
+  if (is.null(proc) || is.null(proc$ProteinLevelData)) {
+    msgSet$current.msg <- "Saved MSstats dataProcess object could not be read; rerun summarization."
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+
+  # limma-style contrast matrix (rows = design levels, cols = contrasts) ->
+  # MSstats comparison matrix (rows = contrasts, cols = GROUP levels).
+  cm  <- dataSet$contrast.matrix
+  grp <- levels(factor(proc$ProteinLevelData$GROUP))
+  M   <- t(cm)
+  idx <- match(colnames(M), grp)
+  if (any(is.na(idx))) idx <- match(make.names(colnames(M)), make.names(grp))
+  if (any(is.na(idx))) {
+    msgSet$current.msg <- paste0(
+      "MSstats engine: contrast groups (", paste(colnames(M), collapse = ", "),
+      ") do not match the summarized conditions (", paste(grp, collapse = ", "), ").")
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+  M2 <- matrix(0, nrow = nrow(M), ncol = length(grp),
+               dimnames = list(rownames(M), grp))
+  M2[, idx] <- M
+
+  res <- tryCatch(
+    MSstats::groupComparison(contrast.matrix = M2, data = proc,
+                             use_log_file = FALSE)$ComparisonResult,
+    error = function(e) { msgSet$current.msg <<- paste("MSstats groupComparison failed:", e$message); NULL })
+  if (is.null(res) || nrow(res) == 0) {
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+
+  # clean protein IDs the same way as the summarized matrix rownames
+  clean_acc <- function(x) {
+    first <- trimws(strsplit(as.character(x), ";")[[1]][1])
+    if (grepl("\\|", first)) {
+      parts <- strsplit(first, "\\|")[[1]]
+      if (length(parts) >= 2 && nzchar(parts[2])) return(parts[2])
+    }
+    sub("-\\d+$", "", sub("_.*", "", first))
+  }
+
+  result.list <- list()
+  n.issue <- 0
+  for (lbl in unique(as.character(res$Label))) {
+    r <- res[res$Label == lbl, , drop = FALSE]
+    tbl <- data.frame(
+      logFC     = r$log2FC,
+      AveExpr   = NA_real_,
+      t         = r$Tvalue,
+      P.Value   = r$pvalue,
+      adj.P.Val = r$adj.pvalue,
+      row.names = make.unique(vapply(as.character(r$Protein), clean_acc, character(1))),
+      stringsAsFactors = FALSE
+    )
+    # MSstats flags proteins observed in only one condition (issue =
+    # oneConditionMissing / completeMissing) and reports them with infinite
+    # log2FC and p = 0 "by design". Treat them as exploratory, not as tested
+    # hypotheses: keep the fold change, blank the p-values.
+    if ("issue" %in% colnames(r)) {
+      flagged <- !is.na(r$issue) & nzchar(as.character(r$issue))
+      n.issue <- n.issue + sum(flagged)
+      tbl$P.Value[flagged]   <- NA_real_
+      tbl$adj.P.Val[flagged] <- NA_real_
+    }
+    tbl <- tbl[order(tbl$P.Value), , drop = FALSE]
+    result.list[[lbl]] <- tbl
+  }
+
+  dataSet$comp.res.list <- result.list
+  dataSet$comp.res <- result.list[[1]]
+  dataSet$de.method.requested <- "msstats"
+  dataSet$de.method.effective <- "msstats"
+  msgSet$current.msg <- paste0(
+    "MSstats groupComparison completed for ", length(result.list), " contrast(s), ",
+    nrow(result.list[[1]]), " proteins (per-protein linear models on the MBimpute-",
+    "summarized data). ", n.issue, " protein-contrast result(s) observed in only one ",
+    "condition are reported with fold change but no p-value (exploratory). ",
+    "Benchmark note: on controlled-mixture ground truth, limma on the same ",
+    "summarized data showed stronger error control; choose this engine when exact ",
+    "MSstats comparability is required.")
+  saveSet(msgSet, "msgSet")
+  dataSet
+}
+
 .perform_deqms <- function(dataSet, robustTrend = FALSE) {
   ## ------------------------------------------------------------------ ##
   ## DEqMS: proteomics-aware differential expression using PSM counts   ##
@@ -730,6 +851,31 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
   paramSet <- readSet(paramSet, "paramSet")
   msgSet   <- readSet(msgSet,   "msgSet")
+
+  # Advisory for DIA inputs: DEqMS's variance prior assumes peptide/PSM counts
+  # track measurement reliability, which holds for DDA sampling but not for
+  # DIA's systematic window-based quantification. On the LFQbench DIA benchmark
+  # DEqMS slightly degraded error control relative to plain limma
+  # (empirical FDR 0.124 -> 0.138); see REPORT_de_method_experiments.md.
+  fmt <- tolower(paste0(paramSet$data.format, ""))
+  if (grepl("spectronaut|diann", fmt)) {
+    msgSet$current.msg <- c(msgSet$current.msg,
+      paste0("Note: this dataset comes from a DIA workflow (", paramSet$data.format,
+             "). DEqMS's peptide-count variance model is tuned for DDA data and ",
+             "slightly weakened false-discovery control on our DIA benchmark; ",
+             "the default limma method is recommended for DIA."))
+    saveSet(msgSet, "msgSet")
+  }
+
+  # Keep the requested method distinct from the method actually used.  DEqMS
+  # can legitimately fall back to the already-computed limma/eBayes fit when
+  # usable count information is absent or spectraCounteBayes fails; downstream
+  # reports must disclose that fallback rather than continuing to label the run
+  # simply as "deqms".
+  dataSet$de.method.requested <- "deqms"
+  dataSet$de.method.effective <- "pending"
+  dataSet$de.fallback.reason <- NA_character_
+  dataSet$deqms.count.source <- NA_character_
 
   data.norm <- if (length(dataSet$rmidx) > 0) {
     dataSet$data.norm[, -dataSet$rmidx, drop = FALSE]
@@ -885,33 +1031,35 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     }
   }
 
-  # Fallback: use minimum detections (number of non-NA values) as proxy
+  # Do not substitute the number of non-missing samples for a peptide/PSM
+  # count.  Detection count is not the quantity modeled by DEqMS and can encode
+  # missingness rather than measurement precision.  Missing genuine counts are
+  # therefore handled by the explicit limma fallback below.
   if (is.null(psm.count)) {
-    #msg("[DEqMS] PSM/peptide count not found. Using minimum detections as proxy.")
-    psm.count <- apply(data.norm, 1, function(x) sum(!is.na(x) & x > 0))
-    count.col.name <- "min.count"
+    psm.count <- rep(NA_real_, nrow(fit2))
+    names(psm.count) <- rownames(fit2)
+    count.col.name <- "unavailable"
   }
 
-  # Ensure PSM count matches fit2 dimensions and is numeric
-  psm.names <- names(psm.count)
-  psm.count <- as.numeric(psm.count)
-  # Force names to match the model matrix so downstream tables stay aligned
+  # Ensure the count vector matches the fitted rows and evaluate sufficiency on
+  # the observed positive counts before filling isolated missing entries.
+  psm.count <- suppressWarnings(as.numeric(psm.count))
   names(psm.count) <- rownames(fit2)
-  psm.count[is.na(psm.count)] <- 1  # Replace NA with 1 to avoid issues
-  psm.count[psm.count < 1] <- 1     # Minimum count of 1
+  usable.count <- is.finite(psm.count) & psm.count > 0
 
   #msg("[DEqMS] Using ", count.col.name, " for variance modeling (range: ",
   #        min(psm.count), " - ", max(psm.count), ")")
 
   # Check if PSM counts have sufficient variation for DEqMS
-  count.range <- max(psm.count) - min(psm.count)
-  count.unique <- length(unique(psm.count))
+  observed.count <- psm.count[usable.count]
+  count.range <- if (length(observed.count)) diff(range(observed.count)) else 0
+  count.unique <- length(unique(observed.count))
 
-  if (count.range == 0 || count.unique < 3) {
-    msg <- paste0("[DEqMS] WARNING: Insufficient variation in PSM counts (range=", count.range,
-                  ", unique=", count.unique, "). DEqMS requires variable PSM counts to model variance properly. ",
-                  "This typically happens when: (1) using DIA data without PSM counts, (2) all proteins detected in all samples, ",
-                  "or (3) using min.count as proxy. Falling back to standard limma.")
+  if (sum(usable.count) < 3 || count.range == 0 || count.unique < 3) {
+    msg <- paste0("[DEqMS] WARNING: Usable PSM/peptide counts are absent or insufficient ",
+                  "(source=", count.col.name, ", finite positive=", sum(usable.count),
+                  ", range=", signif(count.range, 5), ", unique=", count.unique,
+                  "). Falling back to standard limma.")
     #msg(msg)
     msgSet$current.msg <- c(msgSet$current.msg, msg)
     saveSet(msgSet, "msgSet")
@@ -943,8 +1091,16 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
     dataSet$comp.res.list <- result.list
     dataSet$comp.res <- result.list[[1]]
+    dataSet$de.method.effective <- "limma"
+    dataSet$de.fallback.reason <- msg
+    dataSet$deqms.count.source <- count.col.name
     return(dataSet)
   }
+
+  # DEqMS requires one positive count per fitted feature.  Once the genuine
+  # vector has passed the sufficiency check, replace any isolated missing or
+  # non-positive entries with one, matching DEqMS's minimum-count convention.
+  psm.count[!usable.count] <- 1
 
   ## ------------------------------------------------------------------ ##
   ## 3 · Apply DEqMS variance adjustment                                ##
@@ -1003,6 +1159,9 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
     dataSet$comp.res.list <- result.list
     dataSet <- .ov_attach_limma_omnibus(dataSet, fit2, result.list, contrast.matrix, "deqms")
+    dataSet$de.method.effective <- "limma"
+    dataSet$de.fallback.reason <- msg
+    dataSet$deqms.count.source <- count.col.name
     return(dataSet)
   }
 
@@ -1067,6 +1226,9 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
 
   dataSet$comp.res.list <- result.list
   dataSet <- .ov_attach_limma_omnibus(dataSet, fit2, result.list, contrast.matrix, "deqms")
+  dataSet$de.method.effective <- "deqms"
+  dataSet$de.fallback.reason <- NA_character_
+  dataSet$deqms.count.source <- count.col.name
   print(head(dataSet$comp.res));
 
   msgSet$current.msg <- c(msgSet$current.msg,

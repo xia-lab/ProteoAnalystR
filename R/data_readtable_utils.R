@@ -267,7 +267,15 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   ov_qs_save(int.mat, "data.with.missing.qs");
 
   if(sum(na.inx) > 0){
-    int.mat[na.inx] <- minVal/2;
+    ## experiment hook (benchmarks; default off): PA_NO_LOAD_FILL=1 preserves
+    ## missing values at load so downstream na.rm summarization and the
+    ## user-selected imputation step see the real missingness, instead of the
+    ## legacy silent min/2 fill applied here.
+    if (nzchar(Sys.getenv("PA_NO_LOAD_FILL"))) {
+      # keep NAs
+    } else {
+      int.mat[na.inx] <- minVal/2;
+    }
     # msg <- c(msg, "the remaining", sum(na.inx), "missing variables were replaced with data min");
   }
   if (nrow(int.mat) == 0 || ncol(int.mat) == 0) {
@@ -352,10 +360,24 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   paramSet$jsonNms$dataName <- fileName;
   paramSet$dataName <- fileName;
 
-  # Build an MSstats-ready long-format table for downstream proteomics processing
-  msstats.input <- .buildMSstatsInput(int.mat = data.proc,
+  # Build an MSstats-ready long-format table for downstream proteomics processing.
+  # For peptide-level inputs the rownames of data.proc are peptides, so the
+  # peptide-to-protein map is required to fill ProteinName correctly.
+  # IMPORTANT: use the pre-fill snapshot (data.with.missing.qs), not data.proc —
+  # the load-time min/2 fill above would otherwise turn every censored missing
+  # value into a fake floor measurement, which defeats MSstats' censored-value
+  # model (MBimpute) and grossly inflates fold changes for on/off proteins.
+  msstats.mat <- data.proc;
+  if (file.exists("data.with.missing.qs")) {
+    wm <- tryCatch(ov_qs_read("data.with.missing.qs"), error = function(e) NULL);
+    if (is.matrix(wm) && !is.null(rownames(wm)) && ncol(wm) == ncol(data.proc)) {
+      msstats.mat <- wm;
+    }
+  }
+  msstats.input <- .buildMSstatsInput(int.mat = msstats.mat,
                                       metadata = dataSet$meta.info,
-                                      fileName = fileName);
+                                      fileName = fileName,
+                                      pep.map = dataSet$prot.map);
   if (!is.null(msstats.input)) {
     ov_qs_save(msstats.input, "msstats_input.qs");
     fast.write(msstats.input, file = "msstats_input.csv");
@@ -459,6 +481,14 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
   int.mat <- int.mat[, run.order, drop = FALSE];
   meta.df <- meta.df[run.order, , drop = FALSE];
   meta.list <- list(meta.info = meta.df, cont.inx = cont.inx, disc.inx = disc.inx);
+  # Unique-peptide counts per protein (from the pre-aggregation long rows) so
+  # DEqMS's count-based variance model can engage on MSstats-long uploads.
+  pepcount <- NULL;
+  if ("PeptideSequence" %in% colnames(dat)) {
+    pc <- tapply(as.character(dat$PeptideSequence), as.character(dat$ProteinName),
+                 function(x) length(unique(x)));
+    pepcount <- setNames(as.integer(pc), names(pc));
+  }
   #msg("[MSstats-long] matrix dims: ", paste(dim(int.mat), collapse = "x"))
   list(
     name = basename(filePath),
@@ -467,7 +497,8 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     type = "prot",
     meta.info = meta.list,
     format = "msstats-long",
-    aggregation = "median"
+    aggregation = "median",
+    pepcount = pepcount
   );
 }
 
@@ -500,9 +531,39 @@ ReadAnnotationTable <- function(fileName) {
 }
 
 # Internal helper: convert wide expression matrix + metadata to MSstats long format
-.buildMSstatsInput <- function(int.mat, metadata, fileName) {
+.buildMSstatsInput <- function(int.mat, metadata, fileName, pep.map = NULL) {
   if (is.null(int.mat) || is.null(metadata)) {
     return(NULL)
+  }
+
+  # For peptide-level inputs the matrix rownames are peptides/precursors;
+  # resolve their parent proteins through the peptide-to-protein map so
+  # MSstats sees real protein groups (ProteinName) with multiple features.
+  # Two MSstats-converter conventions are applied to mirror
+  # MaxQtoMSstatsFormat defaults (verified to be required for benchmark
+  # parity with the published MSstats iPRG-2015 result):
+  #   - useUniquePeptide: drop peptides shared between protein groups
+  #     (the map's optional Shared column, recorded at read time)
+  #   - removeFewMeasurements: drop features observed in fewer than 3 runs
+  protein.names <- rownames(int.mat)
+  if (!is.null(pep.map) && is.data.frame(pep.map) && ncol(pep.map) >= 2) {
+    pm <- pep.map[, 1:2]
+    colnames(pm) <- c("Peptide", "Protein")
+    mapped <- pm$Protein[match(rownames(int.mat), pm$Peptide)]
+    if (sum(!is.na(mapped)) > 0.5 * nrow(int.mat)) {
+      keep <- !is.na(mapped)
+      if ("Shared" %in% colnames(pep.map)) {
+        shared <- pep.map$Shared[match(rownames(int.mat), pm$Peptide)]
+        keep <- keep & !(shared %in% TRUE)
+      }
+      int.mat <- int.mat[keep, , drop = FALSE]
+      protein.names <- as.character(pm$Protein[match(rownames(int.mat), pm$Peptide)])
+    }
+  }
+  few <- rowSums(is.finite(as.matrix(int.mat))) < 3
+  if (any(few) && sum(few) < nrow(int.mat)) {
+    int.mat <- int.mat[!few, , drop = FALSE]
+    protein.names <- protein.names[!few]
   }
 
   runs <- colnames(int.mat);
@@ -531,7 +592,7 @@ ReadAnnotationTable <- function(fileName) {
 
   # Expand to long format
   long.df <- data.frame(
-    ProteinName = rep(rownames(int.mat), times = length(runs)),
+    ProteinName = rep(protein.names, times = length(runs)),
     PeptideSequence = rep(rownames(int.mat), times = length(runs)),
     PrecursorCharge = NA_integer_,
     FragmentIon = NA_character_,
@@ -1148,11 +1209,20 @@ ReadMetaData <- function(metafilename){
   protein <- vapply(strsplit(as.character(dat[[protein.col]]), ";", fixed = TRUE),
                     function(x) x[1], character(1))
   charge <- if ("Charge" %in% colnames(dat)) as.character(dat$Charge) else "NA"
+  # Peptides mapping to multiple protein groups ("Proteins" lists them with
+  # semicolons). Recorded per feature so the MSstats input builder can apply
+  # the MSstats useUniquePeptide convention without changing this matrix.
+  shared <- if ("Proteins" %in% colnames(dat)) {
+    grepl(";", as.character(dat$Proteins), fixed = TRUE)
+  } else {
+    rep(FALSE, nrow(dat))
+  }
   long <- data.frame(
     FeatureKey = paste(peptide, charge, protein, sep = "\u241F"),
     Peptide = peptide,
     Protein = protein,
     Charge = charge,
+    Shared = shared,
     Run = trimws(as.character(dat[["Raw file"]])),
     Intensity = suppressWarnings(as.numeric(dat$Intensity)),
     stringsAsFactors = FALSE
@@ -1171,13 +1241,14 @@ ReadMetaData <- function(metafilename){
                           fill = NA_real_)
   int.mat <- as.matrix(wide[, -1, drop = FALSE])
   storage.mode(int.mat) <- "numeric"
-  key.map <- unique(long[, c("FeatureKey", "Peptide", "Protein", "Charge")])
+  key.map <- unique(long[, c("FeatureKey", "Peptide", "Protein", "Charge", "Shared")])
   key.map <- key.map[match(wide$FeatureKey, key.map$FeatureKey), , drop = FALSE]
   feature.ids <- paste0(key.map$Peptide, "_z", key.map$Charge)
   feature.ids <- make.unique(feature.ids)
   rownames(int.mat) <- feature.ids
 
   prot.map <- data.frame(Peptide = feature.ids, Protein = key.map$Protein,
+                         Shared = key.map$Shared,
                          stringsAsFactors = FALSE)
   runs <- colnames(int.mat)
   meta.df <- data.frame(Condition = factor(runs), row.names = runs,
@@ -2889,8 +2960,53 @@ GetAnalysisType <- function(){
     quantity.col <- quantity.col[quantity.col %in% colnames(raw.dat)][1]
 
     if (!is.na(run.col) && !is.null(run.col) && !is.na(quantity.col) && !is.null(quantity.col)) {
+      ## experiment hooks (benchmarks; default off):
+      ##   PA_SPEC_QVALUE=<thr>  gate rows by EG.Qvalue (MSstats converter
+      ##                         convention, typically 0.01)
+      ##   PA_SPEC_CHARGE=1      keep precursor charge in the feature key
+      ##                         instead of collapsing charge states by median
+      ##   PA_SPEC_FRAGMENT=1    ingest fragment-level features (F.PeakArea per
+      ##                         peptide x precursor charge x fragment ion,
+      ##                         honoring F.ExcludedFromQuantification) — the
+      ##                         SpectronauttoMSstatsFormat feature definition —
+      ##                         instead of precursor-level FG.Quantity
+      frag <- nzchar(Sys.getenv("PA_SPEC_FRAGMENT")) && "F.PeakArea" %in% colnames(raw.dat)
+      if (frag) {
+        quantity.col <- "F.PeakArea"
+        ## PA_SPEC_NORMAREA=1: use Spectronaut's RT-local cross-run normalized
+        ## fragment areas (the reference MSstats conversion's quantity) instead
+        ## of raw peak areas
+        if (nzchar(Sys.getenv("PA_SPEC_NORMAREA")) &&
+            "F.NormalizedPeakArea" %in% colnames(raw.dat)) {
+          quantity.col <- "F.NormalizedPeakArea"
+        }
+        if ("F.ExcludedFromQuantification" %in% colnames(raw.dat)) {
+          ex <- tolower(as.character(raw.dat[["F.ExcludedFromQuantification"]]))
+          raw.dat <- raw.dat[!(ex %in% c("true", "t", "1")), , drop = FALSE]
+        }
+      }
+      qthr <- suppressWarnings(as.numeric(Sys.getenv("PA_SPEC_QVALUE")))
+      if (is.finite(qthr) && "EG.Qvalue" %in% colnames(raw.dat)) {
+        qv <- suppressWarnings(as.numeric(raw.dat[["EG.Qvalue"]]))
+        raw.dat <- raw.dat[!is.na(qv) & qv <= qthr, , drop = FALSE]
+      }
+      pepid <- as.character(raw.dat[[peptide.col]])
+      if ((frag || nzchar(Sys.getenv("PA_SPEC_CHARGE"))) && "FG.Charge" %in% colnames(raw.dat)) {
+        pepid <- paste0(pepid, "_z", as.character(raw.dat[["FG.Charge"]]))
+      }
+      if (frag && "F.FrgIon" %in% colnames(raw.dat)) {
+        fid <- as.character(raw.dat[["F.FrgIon"]])
+        if ("F.FrgLossType" %in% colnames(raw.dat)) {
+          loss <- as.character(raw.dat[["F.FrgLossType"]])
+          fid <- ifelse(is.na(loss) | loss %in% c("", "noloss"), fid, paste0(fid, "-", loss))
+        }
+        if ("F.Charge" %in% colnames(raw.dat)) {
+          fid <- paste0(fid, ".", as.character(raw.dat[["F.Charge"]]))
+        }
+        pepid <- paste0(pepid, "_", fid)
+      }
       long.df <- data.frame(
-        Peptide = as.character(raw.dat[[peptide.col]]),
+        Peptide = pepid,
         Protein = get.spectronaut.protein.ids(raw.dat, protein.col),
         Run = as.character(raw.dat[[run.col]]),
         Intensity = suppressWarnings(as.numeric(raw.dat[[quantity.col]])),

@@ -1571,14 +1571,21 @@ GetKinaseEnrichmentResults <- function() {
   return(analSet$kinase.enrich)
 }
 
-#' Plot kinase enrichment (KSEA lollipop chart, or ORA bubble fallback)
+#' Plot kinase enrichment
 #'
 #' @param imgName Image file name
 #' @param dpi DPI for image
 #' @param format Image format (png, pdf)
 #' @param top_n Number of top kinases to show
+#' @param style "ora" (default) plots the over-representation bubble chart;
+#'   "ksea" plots the signed KSEA z-score lollipop chart (falls back to the
+#'   bubble chart when no z-scores are available); "auto" plots KSEA when
+#'   z-scores exist. The default is "ora" because the z-scores are reported in
+#'   the result table and kinases with fewer than 3 quantified substrates carry
+#'   no z-score, so the KSEA view can omit the top ORA hits.
 #' @return Image file name
-PlotKinaseEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20) {
+PlotKinaseEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20,
+                                 style = "ora") {
   require('ggplot2')
 
   analSet <- readSet(analSet, "analSet")
@@ -1590,15 +1597,14 @@ PlotKinaseEnrichment <- function(imgName, dpi = 96, format = "png", top_n = 20) 
 
   results <- analSet$kinase.enrich
 
-  # Signed KSEA lollipop chart when directional z-scores are available
-  # (dot size = number of quantified substrates m); otherwise fall back to
-  # the ORA bubble plot.
+  # Signed KSEA lollipop chart (dot size = number of quantified substrates m)
+  # on request; the ORA bubble plot is the default display.
   z.vec <- if ("KSEA_Z" %in% colnames(results)) {
     suppressWarnings(as.numeric(results$KSEA_Z))
   } else {
     rep(NA_real_, nrow(results))
   }
-  if (any(is.finite(z.vec))) {
+  if (tolower(style) %in% c("ksea", "auto") && any(is.finite(z.vec))) {
     results$KSEA_Z <- z.vec
     results <- results[is.finite(results$KSEA_Z), , drop = FALSE]
     results <- results[order(-abs(results$KSEA_Z)), , drop = FALSE]

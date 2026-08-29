@@ -1201,6 +1201,35 @@ SummarizeProteomicsData <- function(dataName = "",
   }
 
   # Run summarization
+  if (tolower(method) %in% c("msstats", "msstats_mbimpute")) {
+    # MSstats route: dataProcess performs equalize-medians normalization,
+    # censored-aware AFT imputation (MBimpute) and TMP summarization as one
+    # coupled unit on the ORIGINAL peptide/feature intensities
+    # (msstats_input.qs) — reproducing the MSstats default workflow
+    # end-to-end. MSstats' internal normalization supersedes the upstream
+    # normalization step for protein quantification, and top_n/min_peptides
+    # do not apply (featureSubset = "all", the MSstats default).
+    ms <- .normalizeWithMSstats("msstats_input.qs", dataSet$meta.info)
+    prot.mat <- ms$mat
+    if (is.null(prot.mat) || !is.matrix(prot.mat) || nrow(prot.mat) == 0) {
+      msgSet$current.msg <- c(msgSet$current.msg,
+        paste0("MSstats summarization failed: requires the MSstats package and ",
+               "a peptide-level input format that provides msstats_input.qs ",
+               "(DIA-NN, Spectronaut, MaxQuant evidence)."))
+      saveSet(msgSet, "msgSet")
+      return(0)
+    }
+    msgSet$current.msg <- c(msgSet$current.msg,
+      paste0("MSstats dataProcess (equalizeMedians, TMP, MBimpute, featureSubset=all) ",
+             "summarized ", nrow(prot.mat), " proteins. Censored missing values were ",
+             "imputed within the model; set protein-level imputation to 'none' for this route."))
+    saveSet(msgSet, "msgSet")
+    # Persist the dataProcess object so the MSstats statistical engine
+    # (de.method = "msstats", groupComparison) can run on it downstream.
+    if (!is.null(ms$proc)) {
+      tryCatch(ov_qs_save(ms$proc, "msstats_proc.qs"), error = function(e) NULL)
+    }
+  } else {
   prot.mat <- try(summarize_peptides(pep.mat,
                                      pep.map,
                                      method = method,
@@ -1212,6 +1241,7 @@ SummarizeProteomicsData <- function(dataName = "",
     msgSet$current.msg <- paste0("Peptide summarization error: ", prot.mat)
     saveSet(msgSet, "msgSet")
     return(0)
+  }
   }
 
   if (is.null(prot.mat) || !is.matrix(prot.mat) || nrow(prot.mat) == 0) {
@@ -1240,6 +1270,23 @@ SummarizeProteomicsData <- function(dataName = "",
   }
   prot.ids <- vapply(rownames(prot.mat), clean_uniprot, character(1))
   rownames(prot.mat) <- prot.ids
+
+  # Persist unique-peptide counts per protein so DEqMS's count-based variance
+  # model can engage downstream. The count-column path in ReadTabExpressData
+  # only covers protein-level uploads; summarized peptide data must provide the
+  # counts here, keyed by the same cleaned protein IDs as prot.mat.
+  pm <- pep.map[, 1:2]
+  colnames(pm) <- c("Peptide", "Protein")
+  pm <- pm[pm$Peptide %in% rownames(pep.mat) & !is.na(pm$Protein), , drop = FALSE]
+  if (nrow(pm) > 0) {
+    u <- unique(as.character(pm$Protein))
+    pm$Protein <- vapply(u, clean_uniprot, character(1))[match(as.character(pm$Protein), u)]
+    pepcount <- tapply(pm$Peptide, pm$Protein, function(x) length(unique(x)))
+    pepcount <- pepcount[rownames(prot.mat)]
+    pepcount[is.na(pepcount)] <- 1L
+    dataSet$pepcount <- setNames(as.integer(pepcount), rownames(prot.mat))
+    ov_qs_save(dataSet$pepcount, "pepcount.qs")
+  }
 
   # Snapshot the pre-normalization peptide input before overwriting it with protein-level
   # data.  PerformNormalization reads norm.input.anot.qs as its starting point, so without
@@ -1382,12 +1429,16 @@ SummarizeProteomicsData <- function(dataName = "",
     saveSet(msgSet, "msgSet");
     return(list(mat = NULL, proc = NULL));
   }
+  # PA_MSSTATS_FEATSUB=highQuality enables MSstats' informative-feature
+  # selection + uninformative/outlier feature removal (interference scrubbing).
+  .fsub <- Sys.getenv("PA_MSSTATS_FEATSUB"); if (!nzchar(.fsub)) .fsub <- "all";
   proc <- try(MSstats::dataProcess(msin,
                                   normalization = "equalizeMedians",
                                   summaryMethod = "TMP",
                                   censoredInt = "NA",
                                   MBimpute = TRUE,
-                                  featureSubset = "top3"), silent = TRUE);
+                                  featureSubset = .fsub,
+                                  remove_uninformative_feature_outlier = identical(.fsub, "highQuality")), silent = TRUE);
   if (inherits(proc, "try-error")) {
     msgSet$current.msg <- c(msgSet$current.msg, "MSstats dataProcess error; skipping MSstats normalization.");
     saveSet(msgSet, "msgSet");
@@ -1410,7 +1461,8 @@ SummarizeProteomicsData <- function(dataName = "",
     saveSet(msgSet, "msgSet");
     return(list(mat = NULL, proc = proc));
   }
-  wide <- reshape2::dcast(prof, Protein ~ RUN, value.var = value.col);
+  run.col <- if ("originalRUN" %in% colnames(prof)) "originalRUN" else "RUN";
+  wide <- reshape2::dcast(prof, stats::as.formula(paste("Protein ~", run.col)), value.var = value.col);
   if (!"Protein" %in% colnames(wide)) {
     msgSet$current.msg <- c(msgSet$current.msg, "MSstats output missing Protein column.");
     saveSet(msgSet, "msgSet");
@@ -1446,12 +1498,16 @@ SummarizeProteomicsData <- function(dataName = "",
     saveSet(msgSet, "msgSet");
     return(list(mat = NULL, proc = NULL));
   }
+  # PA_MSSTATS_FEATSUB=highQuality enables MSstats' informative-feature
+  # selection + uninformative/outlier feature removal (interference scrubbing).
+  .fsub <- Sys.getenv("PA_MSSTATS_FEATSUB"); if (!nzchar(.fsub)) .fsub <- "all";
   proc <- try(MSstats::dataProcess(msin,
                                   normalization = "equalizeMedians",
                                   summaryMethod = "TMP",
                                   censoredInt = "NA",
                                   MBimpute = TRUE,
-                                  featureSubset = "top3"), silent = TRUE);
+                                  featureSubset = .fsub,
+                                  remove_uninformative_feature_outlier = identical(.fsub, "highQuality")), silent = TRUE);
   if (inherits(proc, "try-error")) {
     msgSet$current.msg <- c(msgSet$current.msg, "MSstats dataProcess error; skipping MSstats normalization.");
     saveSet(msgSet, "msgSet");
@@ -1469,7 +1525,8 @@ SummarizeProteomicsData <- function(dataName = "",
     saveSet(msgSet, "msgSet");
     return(list(mat = NULL, proc = proc));
   }
-  wide <- reshape2::dcast(prof, Protein ~ RUN, value.var = value.col);
+  run.col <- if ("originalRUN" %in% colnames(prof)) "originalRUN" else "RUN";
+  wide <- reshape2::dcast(prof, stats::as.formula(paste("Protein ~", run.col)), value.var = value.col);
   if (!"Protein" %in% colnames(wide)) {
     msgSet$current.msg <- c(msgSet$current.msg, "MSstats output missing Protein column.");
     saveSet(msgSet, "msgSet");
@@ -1677,6 +1734,7 @@ library(tibble)
   
   # Merge with Protein Map
   # Clean map to ensure column names are standard
+  peptide_to_protein_map <- peptide_to_protein_map[, 1:2]
   colnames(peptide_to_protein_map) <- c("Peptide", "Protein")
   
   combined_data <- left_join(long_data, peptide_to_protein_map, by = "Peptide") %>%
