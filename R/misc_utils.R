@@ -1690,6 +1690,11 @@ BuildCEMiNet <- function(dataName,
 }
 
 GetNetsNameString <- function(){
+  # net.stats is created when a network is decomposed into modules; before that there are no
+  # networks to name, so return an empty string rather than raise "object 'net.stats' not found"
+  # (a raw eval of this getter leaves that error in R's buffer, where an unrelated step can pick
+  # it up). Self-contained: some modules load misc_utils.R without the network utils.
+  if(!exists("net.stats", envir = .GlobalEnv, inherits = FALSE)) return("");
   paste(rownames(net.stats), collapse="||");
 }
 
