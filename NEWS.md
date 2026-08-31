@@ -31,6 +31,10 @@ suite. A citable Zenodo DOI will be minted for this release at publication.
   (`.RemoveCovariateEffectFold`), eliminating held-out leakage.
 
 ### Fixes
+- `data_impute.R`: phosphoproteomics `min` imputation now uses a reproducible,
+  PhosR-style site/condition draw from `N(group mean, group SD)` for sporadic
+  within-group gaps, while retaining scale-aware LoD fills for censored groups.
+  This avoids the variance deflation of deterministic group-mean replacement.
 - `data_impute.R`: corrected KNN feature×sample orientation in `knn_var` and
   `knn_smp` (previously crashed with "invalid 'row.names' length").
 - `data_utils_general.R` `replace_extension_with_qs()`: now maps `.xls`/`.xlsx`
