@@ -58,6 +58,21 @@ test_that("projecting labelled rows reproduces limma::removeBatchEffect exactly"
   expect_equal(max(abs(lab - ref)), 0, tolerance = 1e-8)
 })
 
+test_that("full-training predictive adjustment is the same linear feature space", {
+  skip_if_not_installed("limma")
+  e <- .load_biomarker_env()
+  adjust.full <- get(".LinearAdjustmentForBiomarker", envir = e)
+  fx <- .make_fixture()
+
+  got <- adjust.full(t(fx$X[fx$tr.idx, ]), fx$meta.tr, "Class", "Batch")
+  expected <- limma::removeBatchEffect(
+    t(fx$X[fx$tr.idx, ]),
+    covariates = model.matrix(~Batch, fx$meta.tr)[, -1, drop = FALSE],
+    design = model.matrix(~Class, fx$meta.tr))
+
+  expect_equal(got, expected, tolerance = 1e-10)
+})
+
 test_that("batch shift is removed from new/held-out samples (the bug)", {
   e <- .load_biomarker_env()
   f <- get(".AdjustNewSamplesForPrediction", envir = e)
@@ -73,7 +88,7 @@ test_that("batch shift is removed from new/held-out samples (the bug)", {
   expect_lt(adj.gap, raw.gap / 3)    # adjustment collapses it
 })
 
-test_that("unseen batch level falls back to un-adjusted input with a warning", {
+test_that("unseen batch level rejects prediction with a warning", {
   e <- .load_biomarker_env()
   f <- get(".AdjustNewSamplesForPrediction", envir = e)
   fx <- .make_fixture()
@@ -83,7 +98,7 @@ test_that("unseen batch level falls back to un-adjusted input with a warning", {
   meta.bad <- fx$meta.all; meta.bad[fx$new.idx[1], "Batch"] <- "C"  # level not in training
   bad$meta.info.original <- meta.bad
   expect_warning(out <- f(bad, new.raw))
-  expect_identical(out, new.raw)
+  expect_null(out)
 })
 
 test_that("no covariate adjustment active is a no-op", {

@@ -813,7 +813,9 @@ phosphoCollapseLocal <- function(mat, id, stat, by = "max") {
   }
 
   ids <- as.character(id)
-  stats <- as.numeric(stat)
+  # Selection is based on signal magnitude, not direction.  This also makes
+  # the local implementation agree with its documented PhosR-style contract.
+  stats <- abs(as.numeric(stat))
   stats[is.na(stats) | is.infinite(stats)] <- -Inf
 
   idx_by_id <- split(seq_len(nrow(mat)), ids)

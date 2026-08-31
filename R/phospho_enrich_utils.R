@@ -1951,7 +1951,125 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
 # or a DIA-NN pg_matrix).  Both MaxQuant-phospho and DIA-NN-phospho formats are
 # supported as long as the protein reference has been loaded.
 #
-DetectPhosphoOccupancyBySite <- function(dataName) {
+#' Native MSstatsPTM engine for the protein-adjusted phosphosite analysis.
+#'
+#' Reuses MSstatsPTM::groupComparisonPTM on ProteoAnalyst's own summarized site
+#' and protein matrices, so users can obtain the exact MSstatsPTM adjusted model
+#' as an alternative to PA's limma delta method (DetectPhosphoOccupancyBySite).
+#' A minimal MSstatsPTM "summarized" object (list(PTM=, PROTEIN=), each with
+#' Feature/ProteinLevelData + SummaryMethod) is assembled from the already-
+#' summarized matrices, then groupComparisonPTM performs its own site model,
+#' parent-protein model, and adjustment. Returns the same core result columns as
+#' the PA engine (so the shared downstream — FDR, compartment annotation, kinase
+#' enrichment, plotting — is engine-agnostic), or NULL to fall back.
+.msstatsptmOccupancy <- function(phospho.mat, prot.ref, groups, uniq.grp,
+                                 g1.idx, g2.idx, site.ids, prot.ids, residues, gene.lookup,
+                                 subjects = NULL, moderated = FALSE) {
+  # restrict to protein-adjustable sites (parent present in the reference)
+  matched <- unique(prot.ids[prot.ids %in% rownames(prot.ref)])
+  if (length(matched) == 0) return(NULL)
+  keep.site <- prot.ids %in% matched
+  site.sub  <- phospho.mat[keep.site, , drop = FALSE]
+  prot.sub  <- prot.ref[matched, , drop = FALSE]
+  if (nrow(site.sub) == 0) return(NULL)
+
+  # SUBJECT (biological replicate / pairing). Using the real design is what makes
+  # this reproduce native MSstatsPTM exactly: when `subjects` encodes a genuine
+  # blocking factor (e.g. batch repeated across conditions) groupComparisonPTM
+  # fits the paired model; a sequential per-group index (the fallback) collapses
+  # to the unpaired case and is less powerful (and can drop non-estimable sites).
+  subj.valid <- FALSE
+  if (!is.null(subjects)) {
+    sv <- as.character(subjects[colnames(phospho.mat)])
+    if (!anyNA(sv)) {
+      bf <- factor(sv)
+      # a usable blocking/subject factor: >=2 levels, not simply the sample id
+      if (nlevels(bf) >= 2 && nlevels(bf) < length(bf)) subj.valid <- TRUE
+    }
+  }
+
+  # a plain summarized matrix -> one MSstatsPTM summarized branch
+  mat2branch <- function(mat, grp) {
+    runs <- colnames(mat); ri <- setNames(seq_along(runs), runs)
+    if (subj.valid) subj <- as.character(subjects[runs])                   # real design (paired/blocked)
+    else            subj <- as.character(ave(seq_along(runs), grp[runs], FUN = seq_along))  # unpaired fallback
+    names(subj) <- runs
+    long <- do.call(rbind, lapply(rownames(mat), function(p) {
+      v <- mat[p, ]; ok <- is.finite(v); if (!any(ok)) return(NULL)
+      data.frame(RUN = ri[runs][ok], Protein = p, LogIntensities = as.numeric(v[ok]),
+                 originalRUN = runs[ok], GROUP = grp[runs][ok], SUBJECT = subj[ok],
+                 stringsAsFactors = FALSE)
+    }))
+    if (is.null(long)) return(NULL)
+    # feature-count metadata columns the object carries (unused when moderated=FALSE)
+    long$TotalGroupMeasurements <- ave(long$RUN, long$GROUP, FUN = length)
+    long$NumMeasuredFeature <- 1L; long$MissingPercentage <- 0
+    long$more50missing <- FALSE;   long$NumImputedFeature <- 0L
+    long <- long[order(long$Protein, long$RUN), ]; rownames(long) <- NULL
+    list(FeatureLevelData = long, ProteinLevelData = long, SummaryMethod = "TMP")
+  }
+  ptm.branch  <- mat2branch(site.sub, groups)
+  prot.branch <- mat2branch(prot.sub, groups)
+  if (is.null(ptm.branch) || is.null(prot.branch)) return(NULL)
+  summ <- list(PTM = ptm.branch, PROTEIN = prot.branch)
+
+  # single contrast uniq.grp[2] - uniq.grp[1], columns = all group levels present
+  lvls <- sort(unique(as.character(groups)))
+  cvec <- setNames(rep(0, length(lvls)), lvls)
+  cvec[uniq.grp[1]] <- -1; cvec[uniq.grp[2]] <- 1
+  cm <- matrix(cvec, nrow = 1,
+               dimnames = list(paste(uniq.grp[2], "vs", uniq.grp[1]), lvls))
+
+  gc <- tryCatch(
+    MSstatsPTM::groupComparisonPTM(summ, data.type = "LabelFree",
+                                   contrast.matrix = cm, moderated = moderated,
+                                   verbose = FALSE),
+    error = function(e) { message("[PhosphoOccupancy][MSstatsPTM] ", conditionMessage(e)); NULL })
+  if (is.null(gc) || is.null(gc$ADJUSTED.Model)) return(NULL)
+
+  adj  <- as.data.frame(gc$ADJUSTED.Model)
+  ptmm <- tryCatch(as.data.frame(gc$PTM.Model), error = function(e) NULL)
+  site.p <- if (!is.null(ptmm) && all(c("Protein","pvalue") %in% colnames(ptmm)))
+              setNames(ptmm$pvalue, as.character(ptmm$Protein)) else NULL
+
+  rn.prot <- rownames(prot.ref)
+  rows <- lapply(seq_len(nrow(adj)), function(k) {
+    sid <- as.character(adj$Protein[k])
+    if (!(sid %in% rownames(phospho.mat))) return(NULL)
+    i   <- match(sid, site.ids); if (is.na(i)) return(NULL)
+    pid <- prot.ids[i]; res <- residues[i]
+    adj.lfc <- adj$log2FC[k]; p.occ <- adj$pvalue[k]
+    if (!is.finite(adj.lfc) || !is.finite(p.occ)) return(NULL)
+    pidx <- which(rn.prot == pid)
+    if (length(pidx) == 0) pidx <- which(grepl(pid, rn.prot, fixed = TRUE))
+    if (length(pidx) == 0) return(NULL)
+    # display occupancy means per condition: log2(phospho) - log2(protein)
+    phos.vec <- as.numeric(phospho.mat[sid, ])
+    prot.vec <- as.numeric(prot.ref[pidx[1], ])
+    occ.vec  <- phos.vec - prot.vec
+    occ.g1 <- mean(occ.vec[g1.idx], na.rm = TRUE)
+    occ.g2 <- mean(occ.vec[g2.idx], na.rm = TRUE)
+    mod.name <- if (identical(res, "K")) "KGG(K)" else if (nchar(res) > 0) paste0("Phospho(", res, ")") else "PTM"
+    data.frame(
+      Gene             = gene.lookup[[sid]],
+      Peptide          = sid,
+      Modification     = mod.name,
+      Mod.Sig          = tolower(paste0("phospho_", res)),
+      Precursors.Unmod = 0L,
+      Precursors.Mod   = as.integer(sum(!is.na(phos.vec))),
+      Occupancy.Cond1  = round(occ.g1, 3),
+      Occupancy.Cond2  = round(occ.g2, 3),
+      Delta.Occupancy  = round(adj.lfc, 3),
+      Occ.Pvalue       = signif(p.occ, 3),
+      Total.Pvalue     = if (!is.null(site.p) && sid %in% names(site.p)) signif(site.p[[sid]], 3) else NA_real_,
+      stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, Filter(Negate(is.null), rows))
+  if (is.null(out) || nrow(out) == 0) return(NULL)
+  out
+}
+
+DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
   msgSet   <- readSet(msgSet,   "msgSet")
   dataSet  <- readDataset(dataName)
   paramSet <- readSet(paramSet, "paramSet")
@@ -2011,6 +2129,50 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
   if (sum(g1.idx) < 2 || sum(g2.idx) < 2)
     return(fail("At least 2 replicates per condition required."))
 
+  # --- optional random-effect blocking (limma duplicateCorrelation) ---
+  # Nested designs (technical injections, batches, repeated subjects) violate the
+  # independence assumption of the plain 0+group model: treating correlated runs
+  # as independent replicates is anti-conservative. When a block column is named
+  # (env PA_PTM_BLOCK or paramSet$ptm.block.col) and groups >=2 correlated
+  # samples, both the site and protein fits use duplicateCorrelation so all runs
+  # contribute while their within-block correlation is modelled. Default off ->
+  # behaviour is unchanged for datasets without a declared block.
+  block.col <- Sys.getenv("PA_PTM_BLOCK", unset = "")
+  if (!nzchar(block.col) && !is.null(paramSet$ptm.block.col))
+    block.col <- as.character(paramSet$ptm.block.col)
+  block.fac <- NULL
+  if (nzchar(block.col) && block.col %in% colnames(meta.info)) {
+    bf <- factor(as.character(meta.info[common.smp, block.col]))
+    # usable only if it actually groups replicates: >=2 levels, at least one
+    # level repeated, and it is not simply the sample identity.
+    if (nlevels(bf) >= 2 && nlevels(bf) < length(bf) && any(table(bf) >= 2)) {
+      block.fac <- bf
+      message("[PhosphoOccupancy] blocking on '", block.col, "' (",
+              nlevels(bf), " levels) via duplicateCorrelation")
+    } else {
+      message("[PhosphoOccupancy] block column '", block.col,
+              "' not usable (levels=", nlevels(bf), "); ignoring")
+    }
+  }
+
+  # --- optional DEqMS-style count moderation ---
+  # Moderate the site (and parent-protein) variance as a function of the
+  # per-feature measurement count, the power lever MSstatsPTM gets from its
+  # feature-level model. Enabled via env PA_PTM_DEQMS=1 or paramSet$ptm.deqms,
+  # and only when per-feature counts are supplied on the dataset. Default off ->
+  # unchanged behaviour.
+  site.count <- NULL; prot.count <- NULL
+  if ((identical(Sys.getenv("PA_PTM_DEQMS"), "1") || isTRUE(paramSet$ptm.deqms)) &&
+      requireNamespace("DEqMS", quietly = TRUE)) {
+    if (!is.null(dataSet$ptm.site.count)) site.count <- dataSet$ptm.site.count
+    if (!is.null(dataSet$ptm.prot.count)) prot.count <- dataSet$ptm.prot.count
+    if (!is.null(site.count) || !is.null(prot.count))
+      message("[PhosphoOccupancy] DEqMS count moderation on (site count: ",
+              !is.null(site.count), ", protein count: ", !is.null(prot.count), ")")
+    else
+      message("[PhosphoOccupancy] DEqMS requested but no per-feature counts on dataset; using eBayes")
+  }
+
   # --- site-to-protein mapping ---
   site.ids   <- rownames(phospho.mat)
   # Parent protein per site. Accept the standard "PROT_RES_POS" form as well as
@@ -2044,7 +2206,57 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     }
   }
 
-  # --- MSstatsPTM-style adjustment ---
+  # --- engine selection: ProteoAnalyst delta method (default) or native MSstatsPTM ---
+  # Resolved from the `engine` argument, env PA_PTM_ENGINE, or paramSet$ptm.engine
+  # (in that order); default "pa". "msstatsptm" reuses MSstatsPTM::groupComparisonPTM
+  # on the same summarized matrices for the exact MSstatsPTM adjusted model.
+  ptm.engine <- if (!is.null(engine) && nzchar(engine)) engine else Sys.getenv("PA_PTM_ENGINE", unset = "")
+  if (!nzchar(ptm.engine) && !is.null(paramSet$ptm.engine))
+    ptm.engine <- as.character(paramSet$ptm.engine)
+  results <- NULL
+  if (identical(tolower(ptm.engine), "msstatsptm")) {
+    if (!requireNamespace("MSstatsPTM", quietly = TRUE))
+      return(fail("The MSstatsPTM engine option requires the MSstatsPTM package, which is not installed."))
+    message("[PhosphoOccupancy] engine = native MSstatsPTM (groupComparisonPTM)")
+    # SUBJECT for MSstatsPTM = the EXPLICITLY declared block/subject column (env
+    # PA_PTM_BLOCK / paramSet$ptm.block.col), else a column literally named
+    # "BioReplicate" (the MSstats convention). Auto-guessing among candidate
+    # batch/subject columns is deliberately avoided: on two-level nested designs
+    # the choice of nesting level swings the result enormously (nested biological
+    # level -> underpowered; crossed batch -> anti-conservative; see the PTM
+    # blocking analysis), so the design must be declared, exactly as native
+    # MSstatsPTM requires a BioReplicate. The helper validates the factor (>=2
+    # levels, repeated across samples) and otherwise uses the unpaired case, so a
+    # unique-per-sample BioReplicate correctly reduces to unpaired.
+    subj.col <- if (nzchar(block.col) && block.col %in% colnames(meta.info)) block.col else ""
+    if (!nzchar(subj.col) && "BioReplicate" %in% colnames(meta.info)) subj.col <- "BioReplicate"
+    subjects <- NULL
+    if (nzchar(subj.col)) {
+      subjects <- setNames(as.character(meta.info[common.smp, subj.col]), common.smp)
+      message("[PhosphoOccupancy][MSstatsPTM] SUBJECT/design column: ", subj.col)
+    }
+    # eBayes moderation. Default FALSE = MSstatsPTM's own default (keeps the engine
+    # faithful to native groupComparisonPTM). Note moderation does NOT rescue power
+    # on low-replication/single-feature input: on the n=2 KGG spike-in TRUE and
+    # FALSE are identical, because the per-site d.f. there comes from feature-level
+    # replication (absent in PA's summarized matrices), not cross-site shrinkage.
+    # Exposed for real multi-feature uploads via PA_PTM_MSSTATS_MODERATED=1 /
+    # paramSet$ptm.msstats.moderated.
+    ptm.mod <- FALSE
+    mflag <- Sys.getenv("PA_PTM_MSSTATS_MODERATED", unset = "")
+    if (nzchar(mflag)) ptm.mod <- (mflag %in% c("1", "TRUE", "true", "yes"))
+    else if (!is.null(paramSet$ptm.msstats.moderated)) ptm.mod <- isTRUE(paramSet$ptm.msstats.moderated)
+    results <- .msstatsptmOccupancy(phospho.mat, prot.ref, groups, uniq.grp,
+                                    g1.idx, g2.idx, site.ids, prot.ids, residues, gene.lookup,
+                                    subjects = subjects, moderated = ptm.mod)
+    if (is.null(results) || nrow(results) == 0)
+      return(fail(paste0(
+        "The MSstatsPTM engine returned no protein-adjusted sites. ",
+        "Check that the protein-reference IDs align with the phosphosite parent IDs.")))
+  }
+
+  if (is.null(results)) {
+  # --- ProteoAnalyst delta-method adjustment ---
   # Fit limma on site matrix and protein matrix separately, then adjust
   # site-level fold changes for protein-level changes (delta-method SE propagation).
   require(limma)
@@ -2062,10 +2274,24 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     levels = design
   )
 
-  .fitLimma <- function(mat, des, cmat) {
+  .fitLimma <- function(mat, des, cmat, block = NULL, count = NULL) {
     keep <- apply(mat, 1, function(x) sum(!is.na(x)) >= 2)
     mat  <- mat[keep, , drop = FALSE]
-    fit  <- tryCatch(limma::lmFit(mat, des), error = function(e) NULL)
+    # Random-effect blocking: estimate the consensus within-block correlation and
+    # feed it to lmFit so correlated replicates are down-weighted instead of
+    # counted as independent. Falls back to the plain fit on any failure.
+    corr <- NULL
+    if (!is.null(block)) {
+      dc <- tryCatch(limma::duplicateCorrelation(mat, des, block = block),
+                     error = function(e) NULL)
+      if (!is.null(dc) && length(dc$consensus.correlation) == 1 &&
+          is.finite(dc$consensus.correlation))
+        corr <- dc$consensus.correlation
+    }
+    fit  <- tryCatch(
+      if (!is.null(corr)) limma::lmFit(mat, des, block = block, correlation = corr)
+      else               limma::lmFit(mat, des),
+      error = function(e) NULL)
     if (is.null(fit)) return(NULL)
     ## experiment hook (benchmarks; default off): PA_PTM_EBAYES=robust uses
     ## intensity-trend + outlier-robust variance moderation, protecting noisy
@@ -2075,10 +2301,23 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
       f2 <- limma::contrasts.fit(fit, cmat)
       limma::eBayes(f2, trend = rb, robust = rb)
     }, error = function(e) NULL)
+    if (is.null(fit2)) return(NULL)
+    # DEqMS count-moderated variance: refit the prior as a function of the
+    # per-feature measurement count. Requires >=3 usable, varying counts;
+    # falls back to the plain eBayes fit on any shortfall or failure.
+    if (!is.null(count) && requireNamespace("DEqMS", quietly = TRUE)) {
+      cv <- suppressWarnings(as.numeric(count[rownames(fit2)]))
+      ok <- is.finite(cv) & cv > 0
+      if (sum(ok) >= 3 && length(unique(cv[ok])) >= 3) {
+        cv[!ok] <- min(cv[ok])           # DEqMS needs a positive count for every row
+        fit2$count <- cv
+        fit2 <- tryCatch(DEqMS::spectraCounteBayes(fit2), error = function(e) fit2)
+      }
+    }
     fit2
   }
 
-  fit.site <- .fitLimma(phospho.mat, design, contrast.mat)
+  fit.site <- .fitLimma(phospho.mat, design, contrast.mat, block.fac, site.count)
   if (is.null(fit.site)) return(fail("limma fitting failed on site matrix."))
 
   # restrict protein matrix to proteins that appear in site list
@@ -2087,12 +2326,23 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     return(fail("No phosphosites matched to the protein reference. Check that protein IDs align."))
   prot.mat.sub <- prot.ref[matched.prot.ids, , drop = FALSE]
 
-  fit.prot <- .fitLimma(prot.mat.sub, design, contrast.mat)
+  fit.prot <- .fitLimma(prot.mat.sub, design, contrast.mat, block.fac, prot.count)
   if (is.null(fit.prot)) return(fail("limma fitting failed on protein reference matrix."))
 
   # extract per-feature logFC, posterior SE, and total df from each fit
   .extractStats <- function(fit) {
     lfc  <- fit$coefficients[, 1]
+    if (!is.null(fit$sca.postvar)) {
+      ## DEqMS count-moderated variance (spectraCounteBayes): the posterior
+      ## variance and prior df are modelled as a function of the per-feature
+      ## measurement count, giving well-measured sites tighter variance --
+      ## the power lever MSstatsPTM gets from its per-feature model.
+      se  <- sqrt(fit$sca.postvar) * fit$stdev.unscaled[, 1]
+      dft <- fit$sca.dfprior + fit$df.residual
+      if (length(dft) == 1) dft <- rep(dft, length(lfc))
+      names(se) <- names(dft) <- rownames(fit)
+      return(list(lfc = lfc, se = se, df = dft))
+    }
     if (identical(Sys.getenv("PA_PTM_EBAYES"), "ordinary")) {
       ## experiment hook: unmoderated per-feature OLS variance (MSstatsPTM-
       ## style) -- no cross-feature shrinkage of SEs, residual df.
@@ -2113,6 +2363,36 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
 
   prot.ref.ids <- rownames(prot.ref)
 
+  # --- optional per-sample ratio (paired occupancy) adjustment ---
+  # The default "delta" test subtracts two independently-fitted group models and
+  # ADDS their variances, which assumes site and parent-protein estimates are
+  # independent. They are measured on the SAME samples and positively co-vary, so
+  # the delta SE is inflated (lower power). "ratio" instead forms the per-sample
+  # log-ratio site-parent FIRST (a paired subtraction that cancels the shared
+  # sample-level variation, i.e. subtracts 2*Cov), then fits one moderated model
+  # on the ratios. Same point estimate, tighter variance when Cov>0. Enabled via
+  # env PA_PTM_ADJUST=ratio or paramSet$ptm.adjust; default "delta".
+  adjust.mode <- Sys.getenv("PA_PTM_ADJUST", unset = "")
+  if (!nzchar(adjust.mode) && !is.null(paramSet$ptm.adjust)) adjust.mode <- as.character(paramSet$ptm.adjust)
+  if (!nzchar(adjust.mode)) adjust.mode <- "delta"
+  rs <- NULL
+  if (identical(adjust.mode, "ratio")) {
+    ridx <- match(prot.ids, prot.ref.ids)                       # parent row per site
+    na.r <- which(is.na(ridx))
+    for (k in na.r) { hit <- which(grepl(prot.ids[k], prot.ref.ids, fixed = TRUE)); if (length(hit)) ridx[k] <- hit[1] }
+    keep.r <- which(!is.na(ridx))
+    if (length(keep.r)) {
+      ratio.mat <- phospho.mat[keep.r, , drop = FALSE] - prot.ref[ridx[keep.r], , drop = FALSE]
+      rownames(ratio.mat) <- site.ids[keep.r]
+      ratio.mat <- ratio.mat[!duplicated(rownames(ratio.mat)), , drop = FALSE]
+      fit.ratio <- .fitLimma(ratio.mat, design, contrast.mat, block.fac, site.count)
+      if (!is.null(fit.ratio)) {
+        rs <- .extractStats(fit.ratio)
+        message("[PhosphoOccupancy] per-sample ratio adjustment on ", length(rs$lfc), " sites")
+      }
+    }
+  }
+
   results.list <- lapply(seq_len(nrow(phospho.mat)), function(i) {
     pid <- prot.ids[i]
     sid <- site.ids[i]
@@ -2132,14 +2412,22 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
     prot.lfc <- ps$lfc[pname]; prot.se <- ps$se[pname]; prot.df <- ps$df[pname]
     if (any(is.na(c(site.lfc, site.se, prot.lfc, prot.se)))) return(NULL)
 
-    # MSstatsPTM delta-method correction
-    adj.lfc <- site.lfc - prot.lfc
-    adj.se  <- sqrt(site.se^2 + prot.se^2)
-    t.stat  <- adj.lfc / adj.se
-    # Satterthwaite df approximation
-    adj.df  <- (site.se^2 + prot.se^2)^2 /
-               (site.se^4 / site.df + prot.se^4 / prot.df)
-    p.occ   <- 2 * pt(-abs(t.stat), df = adj.df)
+    if (!is.null(rs) && sid %in% names(rs$lfc) && all(is.finite(c(rs$lfc[sid], rs$se[sid])))) {
+      # per-sample ratio adjustment: adjusted stats come directly from the single
+      # moderated fit on the site-parent ratios (covariance handled by pairing).
+      adj.lfc <- rs$lfc[sid]; adj.se <- rs$se[sid]; adj.df <- rs$df[sid]
+      t.stat  <- adj.lfc / adj.se
+      p.occ   <- 2 * pt(-abs(t.stat), df = adj.df)
+    } else {
+      # MSstatsPTM delta-method correction (subtract two group fits, add variances)
+      adj.lfc <- site.lfc - prot.lfc
+      adj.se  <- sqrt(site.se^2 + prot.se^2)
+      t.stat  <- adj.lfc / adj.se
+      # Satterthwaite df approximation
+      adj.df  <- (site.se^2 + prot.se^2)^2 /
+                 (site.se^4 / site.df + prot.se^4 / prot.df)
+      p.occ   <- 2 * pt(-abs(t.stat), df = adj.df)
+    }
     p.site  <- 2 * pt(-abs(site.lfc / site.se), df = site.df)
 
     # mean log2(phospho/protein) per condition for display
@@ -2173,6 +2461,7 @@ DetectPhosphoOccupancyBySite <- function(dataName) {
       "No phosphosites could be matched to the protein reference. ",
       "Verify that the protein IDs in the reference match those in the phospho data."
     )))
+  }  # end ProteoAnalyst delta-method branch
 
   results$Occ.FDR      <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
   results              <- results[order(results$Occ.Pvalue), ]

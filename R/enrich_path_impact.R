@@ -438,23 +438,26 @@ CalculateEnzymePathwayGsea <- function(dataName) {
   clean.ids <- sub("-\\d+$", "", clean.ids)
 
   # Collapse multiple phosphosites per protein: keep largest absolute logFC
-  lfc.df <- data.frame(uniprot = clean.ids, lfc = as.numeric(lfc), stringsAsFactors = FALSE)
-  lfc.df <- lfc.df[order(-abs(lfc.df$lfc)), ]
-  lfc.df <- lfc.df[!duplicated(lfc.df$uniprot), ]
+  lfc.by.protein <- .paCollapseRankedStats(lfc, clean.ids)
+  lfc.df <- data.frame(uniprot = names(lfc.by.protein),
+                       lfc = unname(lfc.by.protein), stringsAsFactors = FALSE)
 
   org <- paramSet$data.org
   uniprot.map <- queryGeneDB("entrez_uniprot", org)
   hit.inx <- match(lfc.df$uniprot, uniprot.map[, "accession"])
   entrez.ids <- uniprot.map[hit.inx, "gene_id"]
   valid <- !is.na(entrez.ids)
-  ranked.vec <- setNames(lfc.df$lfc[valid], entrez.ids[valid])
-  # Deduplicate Entrez (keep max absolute)
-  ranked.vec <- ranked.vec[order(-abs(ranked.vec))]
-  ranked.vec <- ranked.vec[!duplicated(names(ranked.vec))]
+  mapped.df <- data.frame(uniprot = lfc.df$uniprot[valid],
+                          entrez = as.character(entrez.ids[valid]),
+                          lfc = lfc.df$lfc[valid], stringsAsFactors = FALSE)
+  mapped.stats <- .paCollapseRankedStats(mapped.df$lfc, mapped.df$entrez)
+  selected <- match(names(mapped.stats), mapped.df$entrez)
+  mapped.df <- mapped.df[selected, , drop = FALSE]
+  ranked.vec <- stats::setNames(mapped.df$lfc, mapped.df$entrez)
 
   # Build symbol -> UniProt map (for network viewer highlighting)
   sym.paired <- doEntrez2SymbolMapping(names(ranked.vec), org, "entrez")
-  uniprot.paired <- lfc.df$uniprot[valid][!duplicated(names(ranked.vec))]
+  uniprot.paired <- mapped.df$uniprot
   valid.sym <- !is.na(sym.paired) & nchar(trimws(sym.paired)) > 0
   if (any(valid.sym)) {
     sym.uni.raw <- uniprot.paired[valid.sym]

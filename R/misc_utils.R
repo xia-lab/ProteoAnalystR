@@ -47,6 +47,25 @@ GetExtendRange<-function(vec, unit=10){
   c(var.min-exts, var.max+exts);
 }
 
+# Collapse a named ranking vector to one value per mapped identifier.  The
+# largest absolute statistic is retained; ties are resolved by input order so
+# repeated runs are deterministic.  Mapping-specific removal of NA/blank IDs is
+# deliberately left to the caller because this helper is also used after those
+# IDs have already been filtered.
+.paCollapseRankedStats <- function(values, ids = names(values)) {
+  if (is.null(ids) || length(ids) != length(values)) {
+    stop("ids must have the same length as values")
+  }
+
+  vals <- as.numeric(values)
+  ids <- as.character(ids)
+  original.order <- seq_along(vals)
+  ord <- order(-abs(vals), original.order, na.last = TRUE)
+  ord <- ord[!duplicated(ids[ord])]
+
+  stats::setNames(vals[ord], ids[ord])
+}
+
 # given a data with duplicates, dups is the one with duplicates
 RemoveDuplicates <- function(data, lvlOpt, quiet=T, paramSet, msgSet){
   paramSet <- readSet(paramSet, "paramSet");

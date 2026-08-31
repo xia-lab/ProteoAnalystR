@@ -46,10 +46,12 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
   }
   paramSet$data.org <- org;
   paramSet$data.idType <- idType;
+  annotation.attempted <- org != "NA" && idType != "NA";
   
   dataSet$type <- dataType;
   dataSet$id.orig <- dataSet$id.current <- idType;
   dataSet$annotated <- F;
+  did.level.collapse <- FALSE;
   # Use legacy-friendly matrix produced at ingestion
   if(dataType=="prot"){
     data.proc <- ov_qs_read("int.mat.qs");
@@ -142,6 +144,7 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
         # downstream ID-space decision read a non-unique, no-longer-current ID.
         paramSet$data.idType <- "uniprot";
         dataSet$annotated <- T;
+        did.level.collapse <- TRUE;
         #msg("[Annot] Summarized to ", nrow(data.anot), " unique UniProt IDs after duplicate handling (lvlOpt=", lvlOpt, ")")
       } else if (is_phospho) {
         # Keep phosphosite IDs as-is, do NOT summarize to protein level
@@ -162,6 +165,57 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
     current.msg <- paste("No annotation was performed."); 
     #msg("[Annot] Skipping annotation (org/idType is NA) - keeping ", length(feature.vec), " original IDs")
   }
+
+  # Export a row-level identifier audit before the quantitative matrix loses
+  # its original feature labels.  This makes first-match mapping, unmapped-row
+  # handling and duplicate aggregation inspectable rather than implicit state.
+  retained.in.quant <- if (did.level.collapse) hit.inx else rep(TRUE, length(feature.vec));
+  analysis.id <- if (did.level.collapse) as.character(anot.id) else as.character(feature.vec);
+  analysis.id[!retained.in.quant] <- NA_character_;
+  retained.ids <- analysis.id[retained.in.quant & !is.na(analysis.id)];
+  group.sizes <- table(retained.ids);
+  duplicate.group.size <- rep(NA_integer_, length(analysis.id));
+  has.output.id <- retained.in.quant & !is.na(analysis.id);
+  duplicate.group.size[has.output.id] <- as.integer(group.sizes[analysis.id[has.output.id]]);
+
+  mapping.audit <- data.frame(
+    input_id = as.character(feature.vec),
+    selected_annotation_id = as.character(anot.id),
+    mapping_status = if (!annotation.attempted) {
+      rep("not_attempted", length(feature.vec))
+    } else if (identical(idType, "uniprot")) {
+      rep("input_accession_preserved", length(feature.vec))
+    } else {
+      ifelse(hit.inx, "mapped", "unmapped")
+    },
+    retained_in_quantitative_matrix = retained.in.quant,
+    analysis_id = analysis.id,
+    duplicate_group_size = duplicate.group.size,
+    duplicate_aggregation = ifelse(
+      has.output.id & duplicate.group.size > 1L,
+      as.character(lvlOpt), "none"
+    ),
+    selection_rule = if (!annotation.attempted) "not_applicable" else
+      if (identical(idType, "uniprot")) "input_accession_preserved" else
+        "first_database_match",
+    stringsAsFactors = FALSE
+  );
+  fast.write(mapping.audit, file = "identifier_mapping.csv", row.names = FALSE);
+
+  paramSet$id.mapping.audit.file <- "identifier_mapping.csv";
+  paramSet$id.mapping.one.to.many <- if (!annotation.attempted) "not applicable" else
+    if (identical(idType, "uniprot")) "input accession preserved" else
+      "first matching row in the organism-specific mapping table";
+  paramSet$id.mapping.unmapped <- if (did.level.collapse)
+    "removed before quantitative duplicate aggregation" else
+    "retained because protein-level identifier aggregation was not applied";
+  paramSet$id.mapping.duplicate <- if (did.level.collapse)
+    paste0("duplicate analysis IDs aggregated sample-wise by ", lvlOpt) else "not applied";
+  paramSet$id.mapping.lookup.normalization <- paste(
+    "isoform (-digits) and phosphosite (_Residue_Position) suffixes are removed only",
+    "for gene-level lookup/enrichment; primary quantitative UniProt row labels are preserved"
+  );
+
   # need to save the ids (mixed gene annotation and original id) 
   # in case, users needs to keep unannotated features
   # this need to be updated to gether with data from now on

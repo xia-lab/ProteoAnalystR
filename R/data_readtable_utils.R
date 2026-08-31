@@ -107,7 +107,8 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     dataSet <- .readSkylineReport(paste0(path, fileName), sky.opts)
     metaContain <- "false"  # Condition/BioReplicate come from the report itself
   } else if (is.spectronaut) {
-    spec.opts <- getOption("pa.spectronaut.opts", list(inputType = "protein"))
+    spec.opts <- getOption("pa.spectronaut.opts",
+                           list(inputType = "peptide", featureLevel = "fragment", normArea = FALSE))
     dataSet <- .readSpectronaut(paste0(path, fileName), spec.opts)
     metaContain <- "false"  # metadata inferred from sample names
   } else {
@@ -1477,10 +1478,19 @@ SetFragpipeOptions <- function(quantType = "protein_maxlfq", removeContaminants 
   return(1L)
 }
 
-SetSpectronautOptions <- function(inputType = "protein") {
+SetSpectronautOptions <- function(inputType = "peptide", featureLevel = "fragment", normArea = FALSE) {
   paramSet <- readSet(paramSet, "paramSet")
+  # featureLevel: "precursor" (FG.Quantity) or "fragment" (F.PeakArea per
+  # transition with F.ExcludedFromQuantification filtering -- the MSstats
+  # SpectronauttoMSstatsFormat feature definition). Fragment-level features give
+  # more measurements per protein and interference filtering, which materially
+  # improve DIA calibration when paired with MSstats TMP+MBimpute summarization.
+  fl <- if (is.null(featureLevel) || !nzchar(featureLevel)) "fragment" else tolower(featureLevel)
+  if (!fl %in% c("precursor", "fragment")) fl <- "precursor"
   opts <- list(
-    inputType = if (is.null(inputType) || !nzchar(inputType)) "protein" else tolower(inputType)
+    inputType = if (is.null(inputType) || !nzchar(inputType)) "peptide" else tolower(inputType),
+    featureLevel = fl,
+    normArea = isTRUE(as.logical(normArea))
   )
   options(pa.spectronaut.opts = opts)
   paramSet$spectronaut <- opts
@@ -2935,7 +2945,7 @@ GetAnalysisType <- function(){
     spec_metadata
   }
 
-  read.spectronaut.peptide <- function(raw.dat) {
+  read.spectronaut.peptide <- function(raw.dat, opts = list()) {
     peptide.col <- if ("ModifiedSequence" %in% colnames(raw.dat)) {
       "ModifiedSequence"
     } else if ("EG.ModifiedSequence" %in% colnames(raw.dat)) {
@@ -2975,13 +2985,17 @@ GetAnalysisType <- function(){
       ##                         honoring F.ExcludedFromQuantification) -- the
       ##                         SpectronauttoMSstatsFormat feature definition --
       ##                         instead of precursor-level FG.Quantity
-      frag <- nzchar(Sys.getenv("PA_SPEC_FRAGMENT")) && "F.PeakArea" %in% colnames(raw.dat)
+      ## Fragment-level ingestion: UI option (SetSpectronautOptions featureLevel=
+      ## "fragment") or the PA_SPEC_FRAGMENT env override.
+      frag.opt <- !is.null(opts$featureLevel) && tolower(opts$featureLevel) == "fragment"
+      frag <- (frag.opt || nzchar(Sys.getenv("PA_SPEC_FRAGMENT"))) &&
+        "F.PeakArea" %in% colnames(raw.dat)
       if (frag) {
         quantity.col <- "F.PeakArea"
-        ## PA_SPEC_NORMAREA=1: use Spectronaut's RT-local cross-run normalized
-        ## fragment areas (the reference MSstats conversion's quantity) instead
-        ## of raw peak areas
-        if (nzchar(Sys.getenv("PA_SPEC_NORMAREA")) &&
+        ## normArea: use Spectronaut's RT-local cross-run normalized fragment
+        ## areas (the reference MSstats conversion's quantity) instead of raw
+        ## peak areas. Option (opts$normArea) or PA_SPEC_NORMAREA env override.
+        if ((isTRUE(opts$normArea) || nzchar(Sys.getenv("PA_SPEC_NORMAREA"))) &&
             "F.NormalizedPeakArea" %in% colnames(raw.dat)) {
           quantity.col <- "F.NormalizedPeakArea"
         }
@@ -3179,8 +3193,10 @@ GetAnalysisType <- function(){
   #msg('[Spectronaut] Read data table with ', nrow(dat), ' rows, ', ncol(dat), ' columns')
 
   input.type <- if (!is.null(opts$inputType)) tolower(opts$inputType) else "protein"
-  if (identical(input.type, "peptide")) {
-    peptide.res <- read.spectronaut.peptide(dat)
+  # Fragment-level ingestion requires the peptide/feature reader path.
+  frag.req <- !is.null(opts$featureLevel) && tolower(opts$featureLevel) == "fragment"
+  if (identical(input.type, "peptide") || frag.req) {
+    peptide.res <- read.spectronaut.peptide(dat, opts)
     if (!is.null(peptide.res)) {
       return(peptide.res)
     }

@@ -17,6 +17,8 @@ PerformCovariateAdjustmentForROC(
 \item{primary.condition}{Primary disease/condition variable (e.g., "Disease", "Group")}
 
 \item{blocking.factor}{Optional blocking factor for paired/repeated measures (e.g., "PatientID")}
+
+\item{use.combat}{Whether to use ComBat for the exploratory before/after display}
 }
 \value{
 1 on success, 0 on failure
@@ -24,5 +26,6 @@ PerformCovariateAdjustmentForROC(
 \description{
 This function removes confounding effects from the data before biomarker analysis
 to ensure that ROC models identify disease-specific signals rather than confounding
-factors like age, sex, batch, etc.
+factors like age, sex, batch, etc. ComBat is display-only; predictive modeling
+always uses the linear train-fit/test-apply adjustment.
 }

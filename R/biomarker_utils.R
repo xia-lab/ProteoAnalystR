@@ -895,12 +895,20 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
   # least-squares fit on TRAINING samples only: expression ~ primary + covariates
   X <- cbind(primary.train, cov.train.c);         # n.train x (p.primary + p.cov)
   qrX <- qr(X);
+  if(qrX$rank < ncol(X)){
+    stop(paste0(
+      "Fold-wise covariate adjustment is not estimable in this training split. ",
+      "Ensure every categorical covariate level is represented in training and ",
+      "is not perfectly confounded with the outcome, or reduce the adjustment model."
+    ));
+  }
   beta <- qr.coef(qrX, x.train);                  # (p.primary + p.cov) x features
 
   cov.cols <- (ncol(primary.train) + 1):(ncol(primary.train) + ncol(cov.train));
   beta.cov <- beta[cov.cols, , drop=FALSE];       # p.cov x features
-  # aliased/non-estimable coefficients (rank-deficient fold) -> do not remove them
-  beta.cov[is.na(beta.cov)] <- 0;
+  if(anyNA(beta.cov)){
+    stop("Fold-wise covariate adjustment produced non-estimable coefficients.");
+  }
 
   train.adj <- x.train - cov.train.c %*% beta.cov; # apply training-derived projection
   test.adj  <- x.test  - cov.test.c  %*% beta.cov; # to held-out fold (covariate values only)
@@ -910,20 +918,22 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
 
 #'Project new/held-out samples into the covariate-adjusted space used for training
 #'@description When covariate/batch adjustment is active, the final biomarker model
-#' is trained on the globally-adjusted matrix (\code{dataSet$data.norm.transposed}).
+#' is trained on the globally fitted linear-adjustment matrix
+#' (\code{dataSet$data.norm.transposed}).
 #' Genuinely new or unlabeled samples (rows whose class label is blank/Unknown) and
 #' user hold-out samples are stored UN-adjusted, so predicting them directly applies
 #' the model to inputs on a different feature scale -- a train/serve mismatch. This
 #' maps those samples through the SAME covariate removal, estimated on the labeled
 #' training samples only and applied via their covariate values (the leakage-free
-#' linear projection also used inside cross-validation). For the linear
-#' removeBatchEffect method this reproduces the global adjustment exactly; for ComBat
-#' it matches it up to the empirical-Bayes shrinkage. Rows with missing covariate
-#' metadata, or a batch/covariate level unseen in training, are returned unchanged
-#' with a warning (a new batch cannot be corrected from training data alone).
+#' linear projection also used inside cross-validation). ComBat, when requested,
+#' is restricted to the exploratory whole-dataset display and is never the feature
+#' space used to train or serve a biomarker model. Rows with missing covariate
+#' metadata, or a batch/covariate level unseen in training, are rejected with a
+#' warning (a new batch cannot be corrected from training data alone).
 #'@param dataSet The dataset object (must carry $cv.adjust when adjustment is active)
 #'@param new.mat Samples x features matrix of new/held-out samples to project
-#'@return new.mat with covariate effects removed (or unchanged if not applicable)
+#'@return new.mat with covariate effects removed, unchanged if adjustment is not
+#' active, or NULL when the required training-compatible metadata are unavailable
 .AdjustNewSamplesForPrediction <- function(dataSet, new.mat){
   if(is.null(new.mat) || nrow(new.mat) == 0) return(new.mat);
   ctx <- dataSet$cv.adjust;
@@ -936,8 +946,8 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
   if(is.null(meta.full)) meta.full <- dataSet$meta.info;
   rn <- rownames(new.mat);
   if(is.null(rn) || is.null(meta.full) || !all(rn %in% rownames(meta.full))){
-    warning("Covariate adjustment not applied to prediction inputs (sample metadata unavailable); using un-adjusted values.");
-    return(new.mat);
+    warning("Prediction skipped: covariate metadata are unavailable for adjusted inputs.");
+    return(NULL);
   }
 
   prim <- ctx$primary.condition;
@@ -952,13 +962,18 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
 
   # Align covariate factor levels to training; an unseen level cannot be corrected.
   for(v in ctx$adj.vec){
+    if(anyNA(new.meta[[v]])){
+      warning(paste0("Prediction skipped: covariate '", v,
+                     "' is missing for one or more prediction samples."));
+      return(NULL);
+    }
     if(is.numeric(train.meta[[v]])) next;
     tl <- levels(factor(train.meta[[v]]));
     nv <- as.character(new.meta[[v]]);
     if(any(is.na(nv) | !(nv %in% tl))){
-      warning(paste0("Covariate adjustment not applied to prediction inputs (level of '", v,
-                     "' unseen in training); using un-adjusted values."));
-      return(new.mat);
+      warning(paste0("Prediction skipped: level of '", v,
+                     "' was not observed in training and cannot be adjusted."));
+      return(NULL);
     }
     new.meta[[v]]   <- factor(nv, levels=tl);
     train.meta[[v]] <- factor(as.character(train.meta[[v]]), levels=tl);
@@ -968,14 +983,20 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
   vars <- unique(c(prim, ctx$adj.vec));
   comb.meta <- rbind(train.meta[, vars, drop=FALSE], new.meta[, vars, drop=FALSE]);
   design.all <- .BuildCovariateDesign(comb.meta, prim, ctx$adj.vec);
-  if(is.null(design.all$covariate.design)) return(new.mat);   # no covariate columns to remove
+  if(is.null(design.all$covariate.design)) {
+    warning("Prediction skipped: no estimable covariate columns are available.")
+    return(NULL)
+  }
 
   n.tr   <- nrow(train.meta);
   tr.idx <- seq_len(n.tr);
   nw.idx <- (n.tr + 1):nrow(comb.meta);
 
   feats <- intersect(colnames(ctx$base.data), colnames(new.mat));
-  if(length(feats) == 0) return(new.mat);
+  if(length(feats) == 0) {
+    warning("Prediction skipped: no adjusted training features match the prediction input.")
+    return(NULL)
+  }
   x.train <- ctx$base.data[, feats, drop=FALSE];
   x.new   <- new.mat[, feats, drop=FALSE];
 
@@ -1003,15 +1024,9 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
     return(NULL);
   }
   spec <- dataSet$cv.adjust;
-  # Note on ComBat (spec$use.combat): the per-fold correction below is the linear
-  # removeBatchEffect projection of spec$adj.vec (the batch variable), re-fit on
-  # each training fold -- this is leakage-free and validated. ComBat's empirical-
-  # Bayes location/scale shrinkage is deliberately NOT re-run inside folds: it is a
-  # whole-matrix, transductive method (per-batch parameters borrow strength across
-  # all samples) and per-fold refitting is unstable when a batch level is absent
-  # from a training fold. ComBat is therefore used only for the globally reported/
-  # displayed adjusted matrix; the CV estimate uses the linear per-fold removal of
-  # the same batch, which differs only by the EB shrinkage.
+  # ComBat, when requested, is display-only. All biomarker modeling uses this
+  # linear train-fit/test-apply projection consistently for CV, final fitting,
+  # permutation testing and prediction; no ComBat predictive performance is claimed.
   if(is.null(spec$base.data) || is.null(spec$meta.info) || is.null(spec$cls)){
     return(NULL);
   }
@@ -1022,6 +1037,24 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
     primary.design = design$primary.design,
     covariate.design = design$covariate.design
   );
+}
+
+# Apply the covariate adjustment inside one permutation split. The protected
+# primary-condition design is rebuilt from the PERMUTED labels; reusing the
+# original outcome design would contaminate the permutation null.
+.AdjustPermutationFold <- function(adj.ctx, x.train, x.test,
+                                   train.idx, test.idx, permuted.cls) {
+  if(is.null(adj.ctx) || is.null(adj.ctx$covariate.design)) {
+    return(list(train = x.train, test = x.test))
+  }
+  perm.factor <- factor(permuted.cls,
+                        levels = levels(factor(permuted.cls)))
+  primary.perm <- model.matrix(~ perm.factor)
+  .RemoveCovariateEffectFold(
+    x.train, x.test,
+    primary.perm[train.idx, , drop=FALSE],
+    adj.ctx$covariate.design[train.idx, , drop=FALSE],
+    adj.ctx$covariate.design[test.idx, , drop=FALSE])
 }
 
 #'Get VIP scores from PLS
@@ -1118,9 +1151,9 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
   analSet$tester.method <- method;
   analSet$tester.lvNum <- lvNum;
 
-  # `data` is the (globally covariate-adjusted, if requested) matrix used for the
-  # FINAL model, hold-out and new-sample prediction -- fitting the final deployed
-  # model on all data is legitimate. `cv.data` is the UN-adjusted base used inside
+  # `data` is the full-training LINEAR-adjusted matrix used for the final model,
+  # hold-out and new-sample prediction -- fitting the deployed adjustment/model
+  # on all labeled training data is legitimate. `cv.data` is the UN-adjusted base used inside
   # the CV loop, where the covariate adjustment is re-fit per training fold to
   # avoid the information leakage that inflates the reported CV AUC/accuracy.
   adj.ctx <- .GetCVAdjustContext(dataSet);
@@ -1220,20 +1253,42 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
   preds <- ROCR::prediction(prob.vec, act.vec, label.ordering = GetLabelOrdering(act.vec));
   auc <- mean(auc.vec);
   auc.ci <- GetCIs(as.matrix(auc.vec));
+
+  # Preserve a user-visible reason when adjusted external inputs are rejected.
+  # The CV result itself remains valid and is still saved.
+  prediction.notes <- character();
+  adjust.for.prediction <- function(input, label){
+    adjust.warning <- NULL;
+    adjusted <- withCallingHandlers(
+      .AdjustNewSamplesForPrediction(dataSet, input),
+      warning = function(w){
+        adjust.warning <<- conditionMessage(w);
+        invokeRestart("muffleWarning");
+      });
+    if(is.null(adjusted)){
+      if(is.null(adjust.warning)) adjust.warning <- "required adjusted input could not be constructed";
+      prediction.notes <<- c(prediction.notes, paste0(label, ": ", adjust.warning));
+    }
+    adjusted;
+  }
   
   # if there is holdout sample, do prediction
   # Project hold-out/new samples through the same covariate adjustment used to
   # train `data`, so the model is applied on the matching feature scale (no-op
   # when covariate adjustment is inactive).
   if(!is.null(dataSet$test.data)){
-    test.res <- Predict.class(data, cls, .AdjustNewSamplesForPrediction(dataSet, dataSet$test.data), method, lvNum);
+    test.input <- adjust.for.prediction(dataSet$test.data, "Hold-out prediction skipped")
+    test.res <- if(is.null(test.input)) NULL else
+      Predict.class(data, cls, test.input, method, lvNum)
   }else{
     test.res <- NULL;
   }
 
   # if there is new samples, do prediction
   if(!is.null(dataSet$new.data)){
-    new.res <<- Predict.class(data, cls, .AdjustNewSamplesForPrediction(dataSet, dataSet$new.data), method, lvNum);
+    new.input <- adjust.for.prediction(dataSet$new.data, "New-sample prediction skipped")
+    new.res <<- if(is.null(new.input)) NULL else
+      Predict.class(data, cls, new.input, method, lvNum)
   }else{
     new.res <- NULL;
   }
@@ -1287,7 +1342,11 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
     );
   }
   
-  msgSet$current.msg <- "CV test analysis completed successfully.";
+  msgSet$current.msg <- if(length(prediction.notes) == 0){
+    "CV test analysis completed successfully."
+  } else {
+    paste("CV test analysis completed;", paste(prediction.notes, collapse=" "))
+  };
   
   # Save objects
   saveSet(analSet, "analSet");
@@ -1314,8 +1373,19 @@ Perform.Permut <- function(dataName = "", perf.measure, perm.num, propTraining =
   cvRuns = perm.num;
   propTraining = propTraining;
   
-  cls <- dataSet$cls;
-  datmat <- dataSet$data.norm.transposed;
+  # Adjustment is part of the predictive pipeline and must therefore be re-fit
+  # for every permutation and training split. Never permute labels downstream of
+  # a globally adjusted matrix: that would retain information from the original
+  # outcome and invalidate the permutation null.
+  adj.ctx <- .GetCVAdjustContext(dataSet);
+  if(!is.null(adj.ctx)){
+    cls <- adj.ctx$cls;
+    datmat <- adj.ctx$base.data;
+  } else {
+    cls <- dataSet$cls;
+    datmat <- dataSet$data.norm.transposed;
+  }
+  original.cls <- cls;
   
   if(analSet$mode == "test"){
     clsMethod <- analSet$tester.method;
@@ -1330,8 +1400,8 @@ Perform.Permut <- function(dataName = "", perf.measure, perm.num, propTraining =
   # now, do the permutation
   perf.outp <- actualCls <- vector(length = cvRuns, mode = "list");
   irun <- 1;
-  while(irun < cvRuns){
-    cls <- cls[order(runif(length(cls)))];
+  while(irun <= cvRuns){
+    cls <- sample(original.cls, length(original.cls), replace = FALSE);
     trainingSampleRun <- trainInx[irun, ]
     testSampleRun <- testInx[irun, ];
     y.in <- cls[trainingSampleRun];
@@ -1339,8 +1409,15 @@ Perform.Permut <- function(dataName = "", perf.measure, perm.num, propTraining =
     if(length(unique(as.numeric(y.in))) > 1){
       y.out <- cls[testSampleRun];
       actualCls[[irun]] <- as.numeric(y.out);
-      perf.outp[[irun]] <- Get.pred(datmat[trainingSampleRun,], y.in,
-                                    datmat[testSampleRun, ], y.out, clsMethod);
+      x.train <- datmat[trainingSampleRun, , drop=FALSE];
+      x.test <- datmat[testSampleRun, , drop=FALSE];
+      if(!is.null(adj.ctx) && !is.null(adj.ctx$covariate.design)){
+        fold.adj <- .AdjustPermutationFold(
+          adj.ctx, x.train, x.test, trainingSampleRun, testSampleRun, cls);
+        x.train <- fold.adj$train;
+        x.test <- fold.adj$test;
+      }
+      perf.outp[[irun]] <- Get.pred(x.train, y.in, x.test, y.out, clsMethod);
       irun <- irun + 1;
     }else{
       print("redo....");
@@ -1366,6 +1443,8 @@ Perform.Permut <- function(dataName = "", perf.measure, perm.num, propTraining =
   accs <- c(mean(analSet$ROCtest$accu.mat[1,]), accs);
   aucs <- c(mean(analSet$ROCtest$auc.vec), aucs);
   analSet$ROCtest$perm.res <- list(perf.measure=perf.measure, perf.obj=perf.obj, auc.vec=aucs, acc.vec=accs);
+  analSet$ROCtest$perm.adjustment <- if(is.null(adj.ctx)) "none" else
+    "linear adjustment re-fit within each permuted training split";
   
   msgSet$current.msg <- paste0("Permutation test completed with ", perm.num, " runs.");
   
@@ -4399,15 +4478,30 @@ Plot.Permutation<-function(dataName = "", imgName, format="png", dpi=default.dpi
 ## Remove confounding effects before ROC analysis
 ##############################################
 
+# Shared full-training linear adjustment used for the final biomarker feature
+# space. Fold-wise and new-sample projection use the matching QR formulation.
+.LinearAdjustmentForBiomarker <- function(data.limma, meta.info,
+                                          primary.condition, adj.vec) {
+  design <- .BuildCovariateDesign(meta.info, primary.condition, adj.vec)
+  if(is.null(design$covariate.design) || ncol(design$covariate.design) == 0) {
+    stop("No covariate effects to remove (design matrix issue)")
+  }
+  limma::removeBatchEffect(data.limma,
+                           covariates = design$covariate.design,
+                           design = design$primary.design)
+}
+
 #' Perform Covariate Adjustment for Biomarker Analysis
 #'
 #' This function removes confounding effects from the data before biomarker analysis
 #' to ensure that ROC models identify disease-specific signals rather than confounding
-#' factors like age, sex, batch, etc.
+#' factors like age, sex, batch, etc. ComBat is display-only; predictive modeling
+#' always uses the linear train-fit/test-apply adjustment.
 #'
 #' @param dataName Name of the dataset
 #' @param primary.condition Primary disease/condition variable (e.g., "Disease", "Group")
 #' @param blocking.factor Optional blocking factor for paired/repeated measures (e.g., "PatientID")
+#' @param use.combat Whether to use ComBat for the exploratory before/after display
 #' @return 1 on success, 0 on failure
 #' @export
 PerformCovariateAdjustmentForROC <- function(dataName,
@@ -4535,6 +4629,7 @@ PerformCovariateAdjustmentForROC <- function(dataName,
   }
 
   data.adjusted <- NULL
+  data.model.adjusted <- NULL
   block.vec <- NULL
 
   if(use.combat) {
@@ -4552,6 +4647,12 @@ PerformCovariateAdjustmentForROC <- function(dataName,
     }
 
     suppressPackageStartupMessages(require(sva))
+    # ComBat delegates to BiocParallel internally. Register an explicit serial
+    # backend so an empty/stale session registry cannot make this deterministic
+    # exploratory operation fail (and avoid unnecessary parallel overhead here).
+    if(requireNamespace("BiocParallel", quietly=TRUE)){
+      BiocParallel::register(BiocParallel::SerialParam(), default=TRUE)
+    }
 
     batch.var <- adj.vec[1]
     batch.vec <- meta.info[, batch.var]
@@ -4575,6 +4676,20 @@ PerformCovariateAdjustmentForROC <- function(dataName,
                             mod=modcombat,
                             par.prior=TRUE,
                             prior.plots=FALSE)
+
+    # ComBat is retained only for exploratory whole-dataset visualization.
+    # Predictive modeling uses the same linear feature space for fold-wise CV,
+    # final fitting and new-sample projection, avoiding a train/serve mismatch.
+    data.model.adjusted <- tryCatch(
+      .LinearAdjustmentForBiomarker(data.limma, meta.info,
+                                    primary.condition, adj.vec),
+      error = function(e) e)
+    if(inherits(data.model.adjusted, "error")) {
+      msgSet$current.msg <- paste0("Error: Linear predictive adjustment failed: ",
+                                   conditionMessage(data.model.adjusted))
+      saveSet(msgSet, "msgSet")
+      return(0)
+    }
   } else {
     # Handle blocking factor if specified
     if(!is.null(blocking.factor) && !is.na(blocking.factor) &&
@@ -4626,18 +4741,25 @@ PerformCovariateAdjustmentForROC <- function(dataName,
     data.adjusted <- removeBatchEffect(data.limma,
                                        covariates=covariate.design,
                                        design=primary.design)
+    data.model.adjusted <- data.adjusted
   }
 
-  # Transpose back to Samples x Features for biomarker analysis
+  # The selected adjustment is retained for the before/after exploratory plots.
+  # The model matrix is always the linear adjustment used consistently by CV,
+  # final fitting, permutation testing and prediction.
   data.adjusted.transposed <- t(data.adjusted)
+  data.model.adjusted.transposed <- t(data.model.adjusted)
 
   # Store both versions in dataSet
   dataSet$data.adjusted <- data.adjusted
   dataSet$data.adjusted.transposed <- data.adjusted.transposed
+  dataSet$biomarker.model.data <- data.model.adjusted.transposed
   dataSet$covariate.adjusted <- TRUE
   dataSet$adjusted.for <- adj.vec
   dataSet$primary.condition <- primary.condition
   dataSet$covariate.adjustment.method <- ifelse(use.combat, "combat", "limma")
+  dataSet$biomarker.adjustment.method <- "linear_train_fit_test_apply"
+  dataSet$combat.scope <- ifelse(use.combat, "exploratory_display_only", "not_requested")
 
   # Update metadata to match adjusted data (samples may have been removed due to missing covariates)
   dataSet$meta.info.original <- dataSet$meta.info
@@ -4647,9 +4769,10 @@ PerformCovariateAdjustmentForROC <- function(dataName,
   dataSet$data.norm.original <- dataSet$data.norm
   dataSet$data.norm <- data.limma
 
-  # Update the data.norm.transposed to use adjusted data for downstream ROC analysis
+  # Downstream ROC/biomarker functions always consume the linear model matrix.
+  # ComBat output remains in data.adjusted(.transposed) for exploratory plots only.
   dataSet$data.norm.transposed.original <- dataSet$data.norm.transposed
-  dataSet$data.norm.transposed <- data.adjusted.transposed
+  dataSet$data.norm.transposed <- data.model.adjusted.transposed
 
   # -------------------------------------------------------------------------
   # Stash a cross-validation adjustment spec so the biomarker CV loops can
@@ -4678,7 +4801,9 @@ PerformCovariateAdjustmentForROC <- function(dataName,
     cls = cv.cls               # aligned to base.data rows
   );
 
-  method.label <- ifelse(use.combat, "ComBat", "limma removeBatchEffect")
+  method.label <- ifelse(use.combat,
+                         "ComBat (exploratory display) + linear adjustment (biomarker modeling)",
+                         "limma removeBatchEffect")
   msgSet$current.msg <- paste0("Successfully adjusted for: ", paste(adj.vec, collapse=", "),
                                " using ", method.label)
   saveSet(msgSet, "msgSet")

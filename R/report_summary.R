@@ -123,6 +123,39 @@
     .pa_line("Total missing percentage", miss.pct))
 }
 
+## ---- Identifier mapping and duplicate handling -------------------------
+.pa_identifier_section <- function(paramSet, dataSet) {
+  input.type <- .pa_g(dataSet, "id.orig", NULL)
+  current.type <- .pa_g(dataSet, "id.current", .pa_g(paramSet, "data.idType", NULL))
+  audit.file <- .pa_g(paramSet, "id.mapping.audit.file", NULL)
+  if (is.null(input.type) && is.null(audit.file)) return(NULL)
+
+  filter.unmapped <- .pa_g(paramSet, "summ.filter.unmapped", NULL)
+  filter.label <- if (is.null(filter.unmapped)) {
+    "not requested in this workflow"
+  } else if (isTRUE(filter.unmapped)) {
+    "enabled after peptide-to-protein summarization (requires a mapped gene symbol)"
+  } else {
+    "disabled"
+  }
+
+  c("== Identifier Mapping and Duplicate Handling ==",
+    .pa_line("Input identifier type", .pa_idtype_label(input.type)),
+    .pa_line("Quantitative analysis ID", .pa_idtype_label(current.type)),
+    .pa_line("One-to-many mapping rule",
+             .pa_g(paramSet, "id.mapping.one.to.many", "first database match")),
+    .pa_line("Unmapped annotation rows", .pa_g(paramSet, "id.mapping.unmapped")),
+    .pa_line("Optional unmapped-protein filter", filter.label),
+    .pa_line("Duplicate quantitative rows", .pa_g(paramSet, "id.mapping.duplicate")),
+    .pa_line("Lookup suffix normalization",
+             .pa_g(paramSet, "id.mapping.lookup.normalization")),
+    .pa_line("Gene-level ORA mapping",
+             "unmapped IDs excluded; unique mapped genes tested; site-to-gene provenance retained"),
+    .pa_line("GSEA duplicate mapped genes",
+             "largest absolute ranking statistic retained; input order breaks exact ties"),
+    .pa_line("Mapping audit export", audit.file))
+}
+
 ## ---- Data filtering + normalization ------------------------------------
 ## Parameters persisted by PerformNormalization() (norm_utils.R): the two
 ## percentile filter knobs (var.perc / abun.perc), the valid-value filter
@@ -387,17 +420,24 @@
 }
 
 ## ---- Biomarker / ROC ----------------------------------------------------
-.pa_biomarker_section <- function(analSet) {
+.pa_biomarker_section <- function(analSet, dataSet = NULL) {
   roc   <- .pa_g(analSet, "ROCtest", NULL)
   multi <- .pa_g(analSet, "multiROC", NULL)
   frank <- .pa_g(analSet, "feat.rank.mat", NULL)
   if (is.null(roc) && is.null(multi) && is.null(frank)) return(NULL)
 
+  predictive.adjustment <- .pa_g(dataSet, "biomarker.adjustment.method", NULL)
+  display.adjustment <- .pa_g(dataSet, "covariate.adjustment.method", NULL)
+  combat.scope <- .pa_g(dataSet, "combat.scope", NULL)
+
   c("== Biomarker / ROC Analysis ==",
     .pa_line("Model built", if (!is.null(roc) || !is.null(multi)) "yes" else "no"),
     .pa_line("Ranked candidate features", .pa_nrow(frank)),
     .pa_line("Performance", "cross-validated AUC (see roc/biomarker CSVs)"),
-    .pa_line("Covariate/batch adjustment", "re-fit within each CV fold (leakage-free)"))
+    .pa_line("Predictive adjustment", if (is.null(predictive.adjustment))
+      "none recorded" else "linear train-fit/test-apply; re-fit within CV and permutations"),
+    .pa_line("Exploratory display adjustment", display.adjustment),
+    .pa_line("ComBat predictive scope", combat.scope))
 }
 
 ## ---- Network ------------------------------------------------------------
@@ -471,6 +511,7 @@ WriteAnalysisSummary <- function(out.file = "analysis_summary.txt") {
     add <- function(acc, sec) if (is.null(sec)) acc else c(acc, sec, "")
     body <- NULL
     body <- add(body, .pa_dataset_section(paramSet, msgSet, dataSet))
+    body <- add(body, .pa_identifier_section(paramSet, dataSet))
     body <- add(body, .pa_filternorm_section(paramSet, msgSet))
     body <- add(body, .pa_summarization_section(paramSet))
     body <- add(body, .pa_de_section(paramSet))
@@ -478,7 +519,7 @@ WriteAnalysisSummary <- function(out.file = "analysis_summary.txt") {
     body <- add(body, .pa_enrich_section(paramSet, analSet))
     body <- add(body, .pa_gsea_section(paramSet))
     body <- add(body, .pa_kinase_section(analSet))
-    body <- add(body, .pa_biomarker_section(analSet))
+    body <- add(body, .pa_biomarker_section(analSet, dataSet))
     body <- add(body, .pa_network_section(paramSet, analSet))
     body <- add(body, .pa_coexp_section(paramSet))
     body <- add(body, .pa_meta_section(paramSet, analSet))

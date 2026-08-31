@@ -1233,22 +1233,38 @@ SummarizeProteomicsData <- function(dataName = "",
     ms <- .normalizeWithMSstats("msstats_input.qs", dataSet$meta.info)
     prot.mat <- ms$mat
     if (is.null(prot.mat) || !is.matrix(prot.mat) || nrow(prot.mat) == 0) {
+      # MSstats did not return a protein matrix (missing package/input, or the
+      # dataProcess run failed/was killed, e.g. under memory pressure). CRITICAL:
+      # never silently leave peptide/fragment-level data for DE -- that yields
+      # nonsense (DE on fragment ions). Fall back to a robust Tukey median-polish
+      # roll-up so a protein-level matrix is always produced, and warn loudly.
       msgSet$current.msg <- c(msgSet$current.msg,
-        paste0("MSstats summarization failed: requires the MSstats package and ",
-               "a peptide-level input format that provides msstats_input.qs ",
-               "(DIA-NN, Spectronaut, MaxQuant evidence)."))
+        paste0("MSstats summarization did not return a protein matrix; falling back to ",
+               "Tukey median-polish summarization. (The MSstats route needs the MSstats ",
+               "package and a peptide-level input providing msstats_input.qs; a dataProcess ",
+               "failure can also occur under low memory.)"))
       saveSet(msgSet, "msgSet")
-      return(0)
-    }
-    msgSet$current.msg <- c(msgSet$current.msg,
-      paste0("MSstats dataProcess (equalizeMedians, TMP, MBimpute, featureSubset=all) ",
-             "summarized ", nrow(prot.mat), " proteins. Censored missing values were ",
-             "imputed within the model; set protein-level imputation to 'none' for this route."))
-    saveSet(msgSet, "msgSet")
-    # Persist the dataProcess object so the MSstats statistical engine
-    # (de.method = "msstats", groupComparison) can run on it downstream.
-    if (!is.null(ms$proc)) {
-      tryCatch(ov_qs_save(ms$proc, "msstats_proc.qs"), error = function(e) NULL)
+      prot.mat <- try(summarize_peptides(pep.mat, pep.map, method = "tukey",
+                                         top_n_count = top_n, min_peptides = min_peptides),
+                      silent = TRUE)
+      if (inherits(prot.mat, "try-error") || is.null(prot.mat) ||
+          !is.matrix(prot.mat) || nrow(prot.mat) == 0) {
+        msgSet$current.msg <- c(msgSet$current.msg,
+          "Fallback Tukey summarization also failed; cannot produce a protein matrix.")
+        saveSet(msgSet, "msgSet")
+        return(0)
+      }
+    } else {
+      msgSet$current.msg <- c(msgSet$current.msg,
+        paste0("MSstats dataProcess (equalizeMedians, TMP, MBimpute, featureSubset=all) ",
+               "summarized ", nrow(prot.mat), " proteins. Censored missing values were ",
+               "imputed within the model; set protein-level imputation to 'none' for this route."))
+      saveSet(msgSet, "msgSet")
+      # Persist the dataProcess object so the MSstats statistical engine
+      # (de.method = "msstats", groupComparison) can run on it downstream.
+      if (!is.null(ms$proc)) {
+        tryCatch(ov_qs_save(ms$proc, "msstats_proc.qs"), error = function(e) NULL)
+      }
     }
   } else {
   prot.mat <- try(summarize_peptides(pep.mat,
@@ -1343,6 +1359,7 @@ SummarizeProteomicsData <- function(dataName = "",
   paramSet$summ.topn   <- top_n
   paramSet$summ.minpep <- min_peptides
   paramSet$summ.impute <- if (is.null(peptide.impute) || !nzchar(as.character(peptide.impute))) "none" else as.character(peptide.impute)
+  paramSet$summ.filter.unmapped <- isTRUE(filter.unmapped)
   saveSet(paramSet, "paramSet")
 
   # Perform protein-level annotation using UniProt IDs derived above

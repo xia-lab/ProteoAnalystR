@@ -61,3 +61,37 @@ test_that("no covariate design is a safe no-op", {
   expect_equal(out$train, fx$X[fx$tr, ])
   expect_equal(out$test,  fx$X[fx$te, ])
 })
+
+test_that("a non-estimable training-fold adjustment fails explicitly", {
+  .env <<- .load_env()
+  fold <- get(".RemoveCovariateEffectFold", envir = .env)
+  fx <- .fixture()
+  # The requested covariate is identical to the protected class term in this
+  # training split, so its effect cannot be estimated separately.
+  aliased <- fx$prim[, 2, drop = FALSE]
+  expect_error(
+    fold(fx$X[fx$tr, ], fx$X[fx$te, ],
+         fx$prim[fx$tr, , drop = FALSE],
+         aliased[fx$tr, , drop = FALSE], aliased[fx$te, , drop = FALSE]),
+    "not estimable"
+  )
+})
+
+test_that("permutation adjustment protects the permuted, not original, outcome", {
+  .env <<- .load_env()
+  adjust.perm <- get(".AdjustPermutationFold", envir = .env)
+  fold <- get(".RemoveCovariateEffectFold", envir = .env)
+  fx <- .fixture()
+  perm <- factor(sample(factor(rep(c("ctrl", "case"), each = 15))))
+  ctx <- list(covariate.design = fx$cov,
+              primary.design = matrix(999, nrow = nrow(fx$X), ncol = 2))
+
+  got <- adjust.perm(ctx, fx$X[fx$tr, ], fx$X[fx$te, ], fx$tr, fx$te, perm)
+  perm.design <- model.matrix(~ factor(perm, levels = levels(factor(perm))))
+  expected <- fold(fx$X[fx$tr, ], fx$X[fx$te, ],
+                   perm.design[fx$tr, , drop = FALSE],
+                   fx$cov[fx$tr, , drop = FALSE], fx$cov[fx$te, , drop = FALSE])
+
+  expect_equal(got$train, expected$train, tolerance = 1e-10)
+  expect_equal(got$test, expected$test, tolerance = 1e-10)
+})

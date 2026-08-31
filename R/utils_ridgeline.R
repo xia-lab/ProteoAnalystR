@@ -237,8 +237,7 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     # Deduplicate: multiple isoforms/UniProt IDs can map to the same symbol;
     # keep the entry with the largest absolute value (strongest signal)
     if (any(duplicated(names(rankedVec)))) {
-      rankedVec <- rankedVec[order(-abs(rankedVec))]
-      rankedVec <- rankedVec[!duplicated(names(rankedVec))]
+      rankedVec <- .paCollapseRankedStats(rankedVec)
     }
 
 
