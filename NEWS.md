@@ -20,6 +20,12 @@ suite. A citable Zenodo DOI will be minted for this release at publication.
   ProteinName, run design, KGG sites, paired protein abundance); repeated
   site/run and protein/run values aggregated by median; protein references
   aligned and log2-converted when supplied on a linear scale.
+- Paired converter-level PTM and protein rows are now retained for the optional
+  native MSstatsPTM engine, which runs `dataSummarizationPTM` (log2 transform,
+  equalize-medians normalization, TMP with MBimpute) before
+  `groupComparisonPTM`. Already-summarized uploads are detected
+  explicitly and use the existing matrix fallback; result exports identify the
+  path and the applied summarization settings.
 - Parent-protein extraction preserves identifiers containing underscores.
 
 ### Statistics

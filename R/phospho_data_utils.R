@@ -343,8 +343,11 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
 # Read canonical paired MSstatsPTM feature-level tables. The PTM table must
 # contain SiteName (or a site-level ProteinName), ProteinName, Run, Condition,
 # BioReplicate and Intensity. The protein table uses ProteinName with the same
-# run/design columns. Duplicate features are collapsed by the median; protein
-# reference values are stored on the log2 scale used by occupancy adjustment.
+# run/design columns. Duplicate features are collapsed by the median for the
+# ProteoAnalyst matrix path, while the untouched feature-level tables are retained
+# in `msstatsptm.raw` for the native dataSummarizationPTM -> groupComparisonPTM
+# path. Protein reference values are stored on the log2 scale used by occupancy
+# adjustment.
 .readMSstatsPTMLong <- function(ptmFile, proteinFile) {
   if (!file.exists(ptmFile) || is.null(proteinFile) || !nzchar(proteinFile) || !file.exists(proteinFile)) {
     return(NULL)
@@ -365,6 +368,13 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
   if (!"ProteinName" %in% colnames(ptm)) {
     ptm$ProteinName <- sub("_[A-Z]_[0-9]+$", "", as.character(ptm$SiteName))
   }
+
+  # MSstatsPTM requires the PTM branch's ProteinName to be the combined
+  # protein-plus-site identifier. Generic paired uploads may instead provide a
+  # separate SiteName plus the parent accession in ProteinName; normalize only
+  # the retained native branch, while preserving the parent mapping below.
+  ptm.native <- ptm
+  ptm.native$ProteinName <- as.character(ptm.native$SiteName)
 
   run.meta <- unique(ptm[, c("Run", "Condition", "BioReplicate"), drop = FALSE])
   if (anyDuplicated(run.meta$Run)) return(NULL)
@@ -428,6 +438,12 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
     feature.info = feature.info,
     protein.ref = protein.mat,
     feature.long = ptm,
+    protein.feature.long = protein,
+    # Preserve the converter-level rows. DetectPhosphoOccupancyBySite uses these
+    # only when both branches carry genuine feature identifiers (for example,
+    # PeptideSequence). Already-summarized site x run inputs therefore continue
+    # through the existing matrix fallback instead of being summarized twice.
+    msstatsptm.raw = list(PTM = ptm.native, PROTEIN = protein),
     ptm.type = ptm.type,
     aggregation = "median"
   )

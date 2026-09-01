@@ -177,6 +177,11 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
     if (identical(dataSet, 0)) return(0);
     dataSet <- .perform_msstats_de(dataSet);
     if (identical(dataSet, 0)) return(0);
+  }else if (dataSet$de.method == "msqrob2"){
+    dataSet <- prepareContrast(dataSet, anal.type, par1, par2, nested.opt);
+    if (identical(dataSet, 0)) return(0);
+    dataSet <- .perform_msqrob2_de(dataSet);
+    if (identical(dataSet, 0)) return(0);
   }else if (dataSet$de.method == "edger"){
     dataSet <- prepareEdgeRContrast(dataSet, anal.type, par1, par2, nested.opt);
     if (identical(dataSet, 0)) return(0);
@@ -825,6 +830,155 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
     "Benchmark note: on controlled-mixture ground truth, limma on the same ",
     "summarized data showed stronger error control; choose this engine when exact ",
     "MSstats comparability is required.")
+  saveSet(msgSet, "msgSet")
+  dataSet
+}
+
+# msqrob2 (Sticker/Clement, Bioconductor): robust ridge regression for
+# protein-level differential expression. Fits a robust M-estimator per protein
+# on the normalized (log) abundance matrix and moderates the residual variance
+# via empirical Bayes, giving calibrated error control without imputation. On
+# our LFQbench DIA benchmark protein-mode msqrob2 was the strongest protein-level
+# engine tested (beating the limma default on sensitivity, specificity and
+# empirical FDR); on DDA/Skyline it is the more conservative choice. Protein-mode
+# only (the peptide-level ridge model is intentionally not exposed here). Mirrors
+# the benchmarked pa_msqrob2_results(mode="protein") configuration.
+.perform_msqrob2_de <- function(dataSet) {
+  msgSet   <- readSet(msgSet, "msgSet")
+  paramSet <- readSet(paramSet, "paramSet")
+
+  for (p in c("msqrob2", "QFeatures", "SummarizedExperiment")) {
+    if (!requireNamespace(p, quietly = TRUE)) {
+      msgSet$current.msg <- paste0("The msqrob2 engine requires the '", p,
+        "' package. Install with: BiocManager::install('", p, "')")
+      saveSet(msgSet, "msgSet")
+      return(0)
+    }
+  }
+  if (is.null(dataSet$design) || is.null(dataSet$contrast.matrix)) {
+    AddErrMsg("design and/or contrast.matrix missing in dataSet. Run prepareContrast() first.")
+    return(0)
+  }
+
+  # Align the abundance matrix and the group factor to the samples actually used
+  # in the design (drop rmidx-excluded columns), matching the limma/DEqMS paths.
+  mat <- if (length(dataSet$rmidx) > 0) {
+    as.matrix(dataSet$data.norm[, -dataSet$rmidx, drop = FALSE])
+  } else {
+    as.matrix(dataSet$data.norm)
+  }
+  mat[!is.finite(mat)] <- NA
+  cond <- factor(as.character(dataSet$cls))
+  if (ncol(mat) != length(cond)) {
+    msgSet$current.msg <- paste0("msqrob2 engine: abundance matrix has ", ncol(mat),
+      " samples but the group factor has ", length(cond), "; cannot align.")
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+  if (nlevels(cond) < 2) {
+    msgSet$current.msg <- "msqrob2 engine: at least two groups are required."
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+  samples <- colnames(mat)
+  if (is.null(samples)) samples <- paste0("S", seq_len(ncol(mat)))
+
+  se <- SummarizedExperiment::SummarizedExperiment(assays = list(intensity = mat))
+  pe <- QFeatures::QFeatures(list(protein = se))
+  # msqrob() reads the model variables from the QFeatures-level colData, not the
+  # assay's, so set condition there (matches the benchmarked runner).
+  SummarizedExperiment::colData(pe)$condition <- cond
+  SummarizedExperiment::colData(pe)$sample <- samples
+
+  pe <- tryCatch(
+    msqrob2::msqrob(object = pe, i = "protein", formula = ~condition,
+                    robust = TRUE, overwrite = TRUE),
+    error = function(e) { msgSet$current.msg <<- paste("msqrob2 model fitting failed:", e$message); NULL })
+  if (is.null(pe)) { saveSet(msgSet, "msgSet"); return(0) }
+
+  # Discover coefficient names from the first successfully fitted model and map
+  # each group level to its coefficient (msqrob2 naming varies with the fit).
+  models <- SummarizedExperiment::rowData(pe[["protein"]])$msqrobModels
+  coef.nms <- NULL
+  for (m in models) {
+    cf <- try(msqrob2::getCoef(m), silent = TRUE)
+    if (!inherits(cf, "try-error") && !is.null(cf)) { coef.nms <- names(cf); break }
+  }
+  if (is.null(coef.nms)) {
+    msgSet$current.msg <- "msqrob2 engine: no proteins could be fitted (insufficient observations)."
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+  cond.coefs <- grep("condition", coef.nms, value = TRUE)
+  lvl.coef <- vapply(levels(cond), function(lv) {
+    hit <- cond.coefs[grepl(lv, cond.coefs, fixed = TRUE)]
+    if (!length(hit)) hit <- cond.coefs[endsWith(cond.coefs, sub("^condition", "", lv))]
+    if (length(hit) == 1) hit else NA_character_
+  }, character(1))
+  ref <- levels(cond)[1]   # baseline level: coefficient is 0
+
+  # Translate each limma-style contrast column (weights over design rows) into a
+  # msqrob2 linear-combination expression over the condition coefficients. The
+  # reference level contributes 0, so a contrast whose numerator IS the reference
+  # collapses to "0 - <coef>" (the ref-level-numerator case).
+  cm  <- dataSet$contrast.matrix
+  grp <- levels(cond)
+  contrast.names <- colnames(cm)
+  exprs <- character(0)
+  for (nm in contrast.names) {
+    w <- cm[, nm]
+    terms <- character(0)
+    ok <- TRUE
+    for (g in grp) {
+      wg <- if (g %in% rownames(cm)) w[[g]] else 0
+      if (is.na(wg) || wg == 0) next
+      if (g == ref) next                       # reference coefficient is 0
+      if (is.na(lvl.coef[[g]])) { ok <- FALSE; break }
+      terms <- c(terms, sprintf("%+g*%s", wg, lvl.coef[[g]]))
+    }
+    if (!ok || !length(terms)) next
+    exprs[nm] <- paste0(paste(terms, collapse = " "), " = 0")
+  }
+  if (!length(exprs)) {
+    msgSet$current.msg <- "msqrob2 engine: no contrast could be resolved to condition coefficients."
+    saveSet(msgSet, "msgSet")
+    return(0)
+  }
+
+  L  <- msqrob2::makeContrast(unname(exprs), parameterNames = cond.coefs)
+  pe <- tryCatch(
+    msqrob2::hypothesisTest(object = pe, i = "protein", contrast = L, overwrite = TRUE),
+    error = function(e) { msgSet$current.msg <<- paste("msqrob2 hypothesisTest failed:", e$message); NULL })
+  if (is.null(pe)) { saveSet(msgSet, "msgSet"); return(0) }
+
+  rd <- SummarizedExperiment::rowData(pe[["protein"]])
+  result.list <- list()
+  for (k in seq_along(exprs)) {
+    lbl <- names(exprs)[k]
+    res <- rd[[colnames(L)[k]]]
+    keep <- !is.na(res$pval)
+    tbl <- data.frame(
+      logFC     = res$logFC[keep],
+      AveExpr   = NA_real_,
+      t         = if (!is.null(res$t)) res$t[keep] else NA_real_,
+      P.Value   = res$pval[keep],
+      adj.P.Val = res$adjPval[keep],
+      row.names = rownames(rd)[keep],
+      stringsAsFactors = FALSE)
+    tbl <- tbl[order(tbl$P.Value), , drop = FALSE]
+    result.list[[lbl]] <- tbl
+  }
+
+  dataSet$comp.res.list <- result.list
+  dataSet$comp.res <- result.list[[1]]
+  dataSet$de.method.requested <- "msqrob2"
+  dataSet$de.method.effective <- "msqrob2"
+  msgSet$current.msg <- paste0(
+    "msqrob2 robust ridge regression completed for ", length(result.list),
+    " contrast(s), ", nrow(result.list[[1]]), " proteins tested (imputation-free, ",
+    "empirical-Bayes moderated). Benchmark note: on controlled-mixture DIA ground ",
+    "truth msqrob2 was the strongest protein-level engine tested; on DDA it is the ",
+    "more conservative choice, so compare against the limma default.")
   saveSet(msgSet, "msgSet")
   dataSet
 }

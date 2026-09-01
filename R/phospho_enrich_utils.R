@@ -1951,6 +1951,101 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
 # or a DIA-NN pg_matrix).  Both MaxQuant-phospho and DIA-NN-phospho formats are
 # supported as long as the protein reference has been loaded.
 #
+#' Test whether paired MSstatsPTM inputs retain converter-level features.
+#'
+#' Already-summarized benchmark tables can have the core design columns but no
+#' peptide/precursor identity. Treating those rows as raw features would make
+#' dataSummarizationPTM a misleading no-op. Both branches must therefore carry a
+#' PeptideSequence and the standard run-level columns before the native
+#' summarization path is enabled.
+.msstatsptmRawReady <- function(raw, runs = NULL) {
+  if (!is.list(raw) || is.null(raw$PTM) || is.null(raw$PROTEIN)) return(FALSE)
+  required <- c("ProteinName", "PeptideSequence", "Condition",
+                "BioReplicate", "Run", "Intensity")
+  valid.branch <- function(x) {
+    is.data.frame(x) && nrow(x) > 0 && all(required %in% colnames(x)) &&
+      any(nzchar(trimws(as.character(x$PeptideSequence)))) &&
+      any(is.finite(suppressWarnings(as.numeric(x$Intensity)))) &&
+      (is.null(runs) || any(as.character(x$Run) %in% runs))
+  }
+  valid.branch(raw$PTM) && valid.branch(raw$PROTEIN)
+}
+
+#' Run the native MSstatsPTM feature-level summarization stage.
+#'
+#' The converter-level PTM and protein branches are aligned to the samples used
+#' by the current analysis, then summarized jointly with TMP and model-based
+#' imputation. Linear inputs are log2 transformed; already-log2 feature tables
+#' are left on their supplied scale. NULL signals that the summarized-matrix
+#' fallback should be used.
+.summarizeMSstatsPTMRaw <- function(raw, runs, groups, subjects = NULL,
+                                    normalization = "equalizeMedians",
+                                    summary.method = "TMP",
+                                    censored.int = "NA",
+                                    mbimpute = TRUE,
+                                    log.trans = 2) {
+  if (!.msstatsptmRawReady(raw, runs) ||
+      !requireNamespace("MSstatsPTM", quietly = TRUE)) return(NULL)
+
+  prepare.branch <- function(x) {
+    x <- as.data.frame(x, stringsAsFactors = FALSE)
+    x$Run <- as.character(x$Run)
+    x <- x[x$Run %in% runs, , drop = FALSE]
+    if (nrow(x) == 0) return(NULL)
+    x$ProteinName <- as.character(x$ProteinName)
+    x$PeptideSequence <- as.character(x$PeptideSequence)
+    x$Intensity <- suppressWarnings(as.numeric(x$Intensity))
+    x <- x[is.finite(x$Intensity) & nzchar(x$ProteinName) &
+             nzchar(x$PeptideSequence), , drop = FALSE]
+    if (nrow(x) == 0) return(NULL)
+
+    # The application metadata is authoritative for the active run subset.
+    x$Condition <- unname(groups[x$Run])
+    if (!is.null(subjects)) {
+      sv <- as.character(subjects[x$Run])
+      use <- !is.na(sv) & nzchar(sv)
+      x$BioReplicate[use] <- sv[use]
+    }
+    if (!"PrecursorCharge" %in% colnames(x)) x$PrecursorCharge <- "2"
+    if (!"FragmentIon" %in% colnames(x)) x$FragmentIon <- NA_character_
+    if (!"ProductCharge" %in% colnames(x)) x$ProductCharge <- NA_character_
+    if (!"IsotopeLabelType" %in% colnames(x)) x$IsotopeLabelType <- "L"
+    x
+  }
+
+  ptm <- prepare.branch(raw$PTM)
+  protein <- prepare.branch(raw$PROTEIN)
+  if (is.null(ptm) || is.null(protein)) return(NULL)
+
+  # Dedicated MSstatsPTM converters emit linear intensities and the package's
+  # documented default is logTrans=2. A headless caller may explicitly supply
+  # NULL for an already-log2 canonical table; no scale guessing is performed.
+  ans <- tryCatch(
+    MSstatsPTM::dataSummarizationPTM(
+      list(PTM = ptm, PROTEIN = protein),
+      logTrans = log.trans,
+      normalization = normalization,
+      normalization.PTM = normalization,
+      summaryMethod = summary.method,
+      censoredInt = censored.int,
+      MBimpute = isTRUE(mbimpute),
+      MBimpute.PTM = isTRUE(mbimpute),
+      use_log_file = FALSE,
+      append = FALSE,
+      verbose = FALSE
+    ),
+    error = function(e) {
+      message("[PhosphoOccupancy][MSstatsPTM] feature-level summarization failed: ",
+              conditionMessage(e), "; using summarized-matrix fallback")
+      NULL
+    }
+  )
+  if (!is.null(ans)) {
+    attr(ans, "pa.log.transform") <- if (is.null(log.trans)) "none" else paste0("log", log.trans)
+  }
+  ans
+}
+
 #' Native MSstatsPTM engine for the protein-adjusted phosphosite analysis.
 #'
 #' Reuses MSstatsPTM::groupComparisonPTM on ProteoAnalyst's own summarized site
@@ -1964,7 +2059,13 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
 #' enrichment, plotting — is engine-agnostic), or NULL to fall back.
 .msstatsptmOccupancy <- function(phospho.mat, prot.ref, groups, uniq.grp,
                                  g1.idx, g2.idx, site.ids, prot.ids, residues, gene.lookup,
-                                 subjects = NULL, moderated = FALSE) {
+                                 subjects = NULL, moderated = FALSE,
+                                 raw.feature = NULL,
+                                 normalization = "equalizeMedians",
+                                 summary.method = "TMP",
+                                 censored.int = "NA",
+                                 mbimpute = TRUE,
+                                 log.trans = 2) {
   # restrict to protein-adjustable sites (parent present in the reference)
   matched <- unique(prot.ids[prot.ids %in% rownames(prot.ref)])
   if (length(matched) == 0) return(NULL)
@@ -2008,17 +2109,41 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
     long <- long[order(long$Protein, long$RUN), ]; rownames(long) <- NULL
     list(FeatureLevelData = long, ProteinLevelData = long, SummaryMethod = "TMP")
   }
-  ptm.branch  <- mat2branch(site.sub, groups)
-  prot.branch <- mat2branch(prot.sub, groups)
-  if (is.null(ptm.branch) || is.null(prot.branch)) return(NULL)
-  summ <- list(PTM = ptm.branch, PROTEIN = prot.branch)
+  # Prefer the true feature-level pipeline when converter rows were retained.
+  # Otherwise preserve the existing summarized-matrix path. This distinction is
+  # important for deposited benchmarks whose "FeatureLevelData" contains only
+  # one already-summarized row per site x run: MBimpute cannot act there.
+  summ <- .summarizeMSstatsPTMRaw(
+    raw.feature, colnames(phospho.mat), groups, subjects,
+    normalization = normalization, summary.method = summary.method,
+    censored.int = censored.int, mbimpute = mbimpute,
+    log.trans = log.trans
+  )
+  applied.log.transform <- attr(summ, "pa.log.transform")
+  input.path <- "feature-level dataSummarizationPTM (TMP + MBimpute)"
+  if (is.null(summ)) {
+    ptm.branch  <- mat2branch(site.sub, groups)
+    prot.branch <- mat2branch(prot.sub, groups)
+    if (is.null(ptm.branch) || is.null(prot.branch)) return(NULL)
+    summ <- list(PTM = ptm.branch, PROTEIN = prot.branch)
+    input.path <- "summarized-matrix groupComparisonPTM fallback"
+  }
+  message("[PhosphoOccupancy][MSstatsPTM] input path: ", input.path)
 
-  # single contrast uniq.grp[2] - uniq.grp[1], columns = all group levels present
+  # Native MSstatsPTM behaviour: fit ALL conditions jointly (pooled variance). This
+  # is what gives groupComparisonPTM its residual d.f. and thus power -- restricting
+  # to a 2-group subset per contrast starves the variance estimate (on the KGG
+  # spike-in that alone collapses sensitivity to 0). With >2 conditions we emit ALL
+  # pairwise contrasts (native default); with exactly 2, the single grpB-vs-grpA.
   lvls <- sort(unique(as.character(groups)))
-  cvec <- setNames(rep(0, length(lvls)), lvls)
-  cvec[uniq.grp[1]] <- -1; cvec[uniq.grp[2]] <- 1
-  cm <- matrix(cvec, nrow = 1,
-               dimnames = list(paste(uniq.grp[2], "vs", uniq.grp[1]), lvls))
+  if (length(lvls) > 2) {
+    cm <- "pairwise"
+  } else {
+    cvec <- setNames(rep(0, length(lvls)), lvls)
+    cvec[uniq.grp[1]] <- -1; cvec[uniq.grp[2]] <- 1
+    cm <- matrix(cvec, nrow = 1,
+                 dimnames = list(paste(uniq.grp[2], "vs", uniq.grp[1]), lvls))
+  }
 
   gc <- tryCatch(
     MSstatsPTM::groupComparisonPTM(summ, data.type = "LabelFree",
@@ -2027,19 +2152,26 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
     error = function(e) { message("[PhosphoOccupancy][MSstatsPTM] ", conditionMessage(e)); NULL })
   if (is.null(gc) || is.null(gc$ADJUSTED.Model)) return(NULL)
 
-  adj  <- as.data.frame(gc$ADJUSTED.Model)
+  adj <- as.data.frame(gc$ADJUSTED.Model)
+  adj <- adj[is.finite(adj$log2FC) & is.finite(adj$pvalue), , drop = FALSE]
+  if (nrow(adj) == 0) return(NULL)
   ptmm <- tryCatch(as.data.frame(gc$PTM.Model), error = function(e) NULL)
-  site.p <- if (!is.null(ptmm) && all(c("Protein","pvalue") %in% colnames(ptmm)))
-              setNames(ptmm$pvalue, as.character(ptmm$Protein)) else NULL
+  site.p <- if (!is.null(ptmm) && all(c("Protein", "Label", "pvalue") %in% colnames(ptmm)))
+              setNames(ptmm$pvalue, paste(ptmm$Protein, ptmm$Label, sep = "\r")) else NULL
 
   rn.prot <- rownames(prot.ref)
+  grp.chr <- as.character(groups); names(grp.chr) <- colnames(phospho.mat)
   rows <- lapply(seq_len(nrow(adj)), function(k) {
     sid <- as.character(adj$Protein[k])
     if (!(sid %in% rownames(phospho.mat))) return(NULL)
     i   <- match(sid, site.ids); if (is.na(i)) return(NULL)
     pid <- prot.ids[i]; res <- residues[i]
     adj.lfc <- adj$log2FC[k]; p.occ <- adj$pvalue[k]
-    if (!is.finite(adj.lfc) || !is.finite(p.occ)) return(NULL)
+    fdr <- if ("adj.pvalue" %in% colnames(adj)) adj$adj.pvalue[k] else NA_real_
+    # contrast groups parsed from the MSstatsPTM label "grpB vs grpA" (grpB - grpA)
+    lab <- as.character(adj$Label[k]); pr <- strsplit(lab, " vs ", fixed = TRUE)[[1]]
+    if (length(pr) != 2) return(NULL)
+    grpB <- trimws(pr[1]); grpA <- trimws(pr[2])
     pidx <- which(rn.prot == pid)
     if (length(pidx) == 0) pidx <- which(grepl(pid, rn.prot, fixed = TRUE))
     if (length(pidx) == 0) return(NULL)
@@ -2047,9 +2179,10 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
     phos.vec <- as.numeric(phospho.mat[sid, ])
     prot.vec <- as.numeric(prot.ref[pidx[1], ])
     occ.vec  <- phos.vec - prot.vec
-    occ.g1 <- mean(occ.vec[g1.idx], na.rm = TRUE)
-    occ.g2 <- mean(occ.vec[g2.idx], na.rm = TRUE)
+    occ.gA <- mean(occ.vec[grp.chr == grpA], na.rm = TRUE)
+    occ.gB <- mean(occ.vec[grp.chr == grpB], na.rm = TRUE)
     mod.name <- if (identical(res, "K")) "KGG(K)" else if (nchar(res) > 0) paste0("Phospho(", res, ")") else "PTM"
+    sp <- if (!is.null(site.p)) site.p[[paste(sid, lab, sep = "\r")]] else NULL
     data.frame(
       Gene             = gene.lookup[[sid]],
       Peptide          = sid,
@@ -2057,15 +2190,36 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
       Mod.Sig          = tolower(paste0("phospho_", res)),
       Precursors.Unmod = 0L,
       Precursors.Mod   = as.integer(sum(!is.na(phos.vec))),
-      Occupancy.Cond1  = round(occ.g1, 3),
-      Occupancy.Cond2  = round(occ.g2, 3),
+      Occupancy.Cond1  = round(occ.gA, 3),
+      Occupancy.Cond2  = round(occ.gB, 3),
       Delta.Occupancy  = round(adj.lfc, 3),
       Occ.Pvalue       = signif(p.occ, 3),
-      Total.Pvalue     = if (!is.null(site.p) && sid %in% names(site.p)) signif(site.p[[sid]], 3) else NA_real_,
+      Occ.FDR          = if (is.finite(fdr)) signif(fdr, 3) else NA_real_,
+      Total.Pvalue     = if (!is.null(sp) && length(sp) == 1 && is.finite(sp)) signif(sp, 3) else NA_real_,
+      Cond1.Label      = grpA,
+      Cond2.Label      = grpB,
+      Contrast         = lab,
       stringsAsFactors = FALSE)
   })
   out <- do.call(rbind, Filter(Negate(is.null), rows))
   if (is.null(out) || nrow(out) == 0) return(NULL)
+  out$Analysis.Engine <- "MSstatsPTM"
+  out$MSstatsPTM.Input.Path <- input.path
+  if (identical(input.path, "feature-level dataSummarizationPTM (TMP + MBimpute)")) {
+    out$MSstatsPTM.Normalization <- normalization
+    out$MSstatsPTM.Summary.Method <- summary.method
+    out$MSstatsPTM.Censored.Intensity <- censored.int
+    out$MSstatsPTM.MBimpute <- isTRUE(mbimpute)
+    out$MSstatsPTM.Log.Transform <- applied.log.transform
+  } else {
+    out$MSstatsPTM.Normalization <- "not applied (summarized input)"
+    out$MSstatsPTM.Summary.Method <- "not applied (summarized input)"
+    out$MSstatsPTM.Censored.Intensity <- "not applied (summarized input)"
+    out$MSstatsPTM.MBimpute <- FALSE
+    out$MSstatsPTM.Log.Transform <- "not applied (summarized input)"
+  }
+  out$MSstatsPTM.Version <- as.character(utils::packageVersion("MSstatsPTM"))
+  attr(out, "msstatsptm.input.path") <- input.path
   out
 }
 
@@ -2217,7 +2371,7 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
   if (identical(tolower(ptm.engine), "msstatsptm")) {
     if (!requireNamespace("MSstatsPTM", quietly = TRUE))
       return(fail("The MSstatsPTM engine option requires the MSstatsPTM package, which is not installed."))
-    message("[PhosphoOccupancy] engine = native MSstatsPTM (groupComparisonPTM)")
+    message("[PhosphoOccupancy] engine = native MSstatsPTM (dataSummarizationPTM when raw features are available; groupComparisonPTM fallback otherwise)")
     # SUBJECT for MSstatsPTM = the EXPLICITLY declared block/subject column (env
     # PA_PTM_BLOCK / paramSet$ptm.block.col), else a column literally named
     # "BioReplicate" (the MSstats convention). Auto-guessing among candidate
@@ -2246,9 +2400,31 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
     mflag <- Sys.getenv("PA_PTM_MSSTATS_MODERATED", unset = "")
     if (nzchar(mflag)) ptm.mod <- (mflag %in% c("1", "TRUE", "true", "yes"))
     else if (!is.null(paramSet$ptm.msstats.moderated)) ptm.mod <- isTRUE(paramSet$ptm.msstats.moderated)
+    ms.norm <- if (!is.null(paramSet$ptm.msstats.normalization))
+      as.character(paramSet$ptm.msstats.normalization) else "equalizeMedians"
+    ms.summary <- if (!is.null(paramSet$ptm.msstats.summary.method))
+      as.character(paramSet$ptm.msstats.summary.method) else "TMP"
+    ms.censored <- if (!is.null(paramSet$ptm.msstats.censored.int))
+      as.character(paramSet$ptm.msstats.censored.int) else "NA"
+    ms.mbimpute <- if (!is.null(paramSet$ptm.msstats.mbimpute))
+      isTRUE(paramSet$ptm.msstats.mbimpute) else TRUE
+    ms.log.trans <- if (!is.null(paramSet$ptm.msstats.log.trans)) {
+      lv <- paramSet$ptm.msstats.log.trans
+      if (is.character(lv) && tolower(lv[1]) %in% c("none", "null", "false")) NULL
+      else {
+        parsed <- suppressWarnings(as.numeric(lv[1]))
+        if (length(parsed) == 1 && is.finite(parsed) && parsed > 0) parsed else 2
+      }
+    } else 2
     results <- .msstatsptmOccupancy(phospho.mat, prot.ref, groups, uniq.grp,
                                     g1.idx, g2.idx, site.ids, prot.ids, residues, gene.lookup,
-                                    subjects = subjects, moderated = ptm.mod)
+                                    subjects = subjects, moderated = ptm.mod,
+                                    raw.feature = dataSet$msstatsptm.raw,
+                                    normalization = ms.norm,
+                                    summary.method = ms.summary,
+                                    censored.int = ms.censored,
+                                    mbimpute = ms.mbimpute,
+                                    log.trans = ms.log.trans)
     if (is.null(results) || nrow(results) == 0)
       return(fail(paste0(
         "The MSstatsPTM engine returned no protein-adjusted sites. ",
@@ -2463,10 +2639,14 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
     )))
   }  # end ProteoAnalyst delta-method branch
 
-  results$Occ.FDR      <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
-  results              <- results[order(results$Occ.Pvalue), ]
-  results$Cond1.Label  <- uniq.grp[1]
-  results$Cond2.Label  <- uniq.grp[2]
+  # FDR/labels: the MSstatsPTM engine already supplies per-contrast Occ.FDR and
+  # per-row Cond labels (it may span multiple pairwise contrasts). Only compute the
+  # single-contrast BH / scalar labels for the ProteoAnalyst delta-method path.
+  if (is.null(results$Occ.FDR))
+    results$Occ.FDR <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
+  results <- results[order(results$Occ.Pvalue), ]
+  if (is.null(results$Cond1.Label)) results$Cond1.Label <- uniq.grp[1]
+  if (is.null(results$Cond2.Label)) results$Cond2.Label <- uniq.grp[2]
 
   # Use UniProt protein IDs (extracted from site IDs) for compartment annotation.
   # This is more reliable than gene symbol lookup because:

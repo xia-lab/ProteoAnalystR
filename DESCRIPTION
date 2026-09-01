@@ -34,7 +34,7 @@ Imports:
     pcaMethods, Rtsne, uwot, RSQLite, RSclient, curl, pryr, png, xtable,
     RhpcBLASctl, arrow
 Suggests:
-    patchwork, PhosR, backbone,
+    patchwork, PhosR, MSstatsPTM, backbone,
     multiUS, SeqKnn, rrcovNA,
     callr, BiocManager,
     testthat
