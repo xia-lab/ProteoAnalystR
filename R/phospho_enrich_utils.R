@@ -601,6 +601,24 @@ GetSelectedKinaseDb <- function() {
 #' @return list(fc = named numeric (site id -> log2FC), source, contrast), or
 #'   NULL when no usable fold changes exist.
 .getKseaSiteStats <- function(dataName, dataSet, paramSet) {
+  # When the current matrix itself is the sample-wise site-minus-parent matrix,
+  # its active differential result is already protein-adjusted. Prefer it over
+  # any cached two-group result and do not invoke a second adjustment.
+  if (identical(paramSet$norm.opt, "abundance_corr")) {
+    cr <- dataSet$comp.res
+    if (!is.null(cr)) {
+      fc.col <- intersect(c("logFC", "log2FC", "coefficient"), colnames(cr))[1]
+      if (!is.na(fc.col)) {
+        fc <- suppressWarnings(as.numeric(cr[[fc.col]]))
+        names(fc) <- rownames(cr)
+        fc <- fc[is.finite(fc)]
+        if (length(fc) >= 10)
+          return(list(fc = fc, source = "protein-adjusted (sample-wise site-parent)",
+                      contrast = dataSet$contrast))
+      }
+    }
+  }
+
   occ.file <- "ptm_occupancy_results.qs"
   if (!file.exists(occ.file) &&
       isTRUE(paramSet$has.protein.ref) && !is.null(paramSet$protein.ref)) {
@@ -2234,6 +2252,17 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
     saveSet(msgSet, "msgSet")
     return(0L)
   }
+
+  # The sample-wise site-minus-parent route already produces a protein-adjusted
+  # matrix for downstream (including multifactor) contrasts. Applying either
+  # engine here would subtract the parent-protein effect a second time.
+  if (identical(paramSet$norm.opt, "abundance_corr"))
+    return(fail(paste0(
+      "The current matrix is already protein-adjusted by sample-wise log2(site) - ",
+      "log2(parent). Use its differential-analysis results directly, or re-run ",
+      "normalization with an unadjusted transformation before using the dedicated ",
+      "Protein-Adjusted Phosphosite Analysis."
+    )))
 
   if (!isTRUE(paramSet$has.protein.ref) || is.null(paramSet$protein.ref))
     return(fail(paste0(

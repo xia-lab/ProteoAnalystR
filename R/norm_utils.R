@@ -28,6 +28,10 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
   msg <- ""
   msgSet$sample.norm.msg <- character(0)
 
+  # Any prior protein-adjusted result was derived from a different normalized
+  # matrix and must not be reused after normalization is rerun.
+  unlink(c("ptm_occupancy_results.qs", "ptm_occupancy_results.csv"))
+
   #msg("[Norm] PerformNormalization start data=", dataName, " type=", dataSet$type, " norm.opt=", norm.opt,
   #        " var.thresh=", var.thresh, " count.thresh=", count.thresh, " filterUnmapped=", filterUnmapped)
 
@@ -1003,36 +1007,47 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     data<- apply(data, 2, MedianNorm);
     msg <- paste(msg, "Normalization to sample median.", collapse=" ");
   }else if(norm.opt=='abundance_corr'){
-    # Protein abundance correction for phosphoproteomics
-    # Normalizes phosphosite intensity by dividing by protein abundance (log-ratio subtraction).
-    # The protein reference is already log2-transformed; ensure phospho data is also log2 first.
-    paramSet <- readSet(paramSet, "paramSet");
-
-    if (!is.null(paramSet$data.type) && paramSet$data.type == "phospho" &&
-        !is.null(paramSet$has.protein.ref) && paramSet$has.protein.ref) {
-
-      # Log2-transform phospho intensities if still on linear scale (values > 100 indicate linear)
-      data_min <- min(data, na.rm = TRUE)
-      data_max <- max(data, na.rm = TRUE)
-      looks_linear <- data_min >= 0 && data_max > 100
-      if (looks_linear) {
-        data[data == 0] <- NA
-        data <- log2(data)
-        msg <- paste(msg, "Log2 transformation applied before protein abundance correction.", collapse=" ");
-      }
-
-      protein_ref <- paramSet$protein.ref
-      corrected_data <- .correctPhosphoByProteinAbundance(data, protein_ref)
-
-      if (!is.null(corrected_data)) {
-        data <- corrected_data
-        msg <- paste(msg, "Protein abundance correction applied (log-ratio subtraction).", collapse=" ");
-      } else {
-        msg <- paste(msg, "Warning: Protein abundance correction failed; keeping original data.", collapse=" ");
-      }
-    } else {
-      msg <- paste(msg, "Warning: Protein abundance correction requires phospho data with protein reference.", collapse=" ");
+    # Sample-wise protein-adjusted relative phosphorylation. This is an analysis
+    # route for downstream designs (including multifactor contrasts), not an
+    # ordinary normalization step. The dedicated protein-adjusted analysis rejects
+    # this matrix so that the parent effect cannot be subtracted twice.
+    paramSet <- readSet(paramSet, "paramSet")
+    if (is.null(paramSet$has.protein.ref) || !isTRUE(paramSet$has.protein.ref) ||
+        is.null(paramSet$protein.ref)) {
+      AddErrMsg("Protein-adjusted relative phosphorylation requires a matched total-proteome reference.")
+      return(0)
     }
+
+    # The protein reference is stored on the log2 scale. Transform phosphosite
+    # intensities when they still look linear; otherwise retain their existing
+    # log2 scale.
+    finite.data <- data[is.finite(data)]
+    looks.linear <- length(finite.data) > 0 && min(finite.data) >= 0 && max(finite.data) > 100
+    if (looks.linear) {
+      data[data <= 0] <- NA
+      data <- log2(data)
+      msg <- paste(msg, "Log2 transformation applied before parent-protein adjustment.", collapse=" ")
+    }
+
+    n.before <- nrow(data)
+    data <- .correctPhosphoByProteinAbundance(data, paramSet$protein.ref)
+    if (is.null(data) || nrow(data) == 0) {
+      AddErrMsg(paste0(
+        "No phosphosites had an unambiguous matched parent protein with overlapping samples; ",
+        "protein-adjusted analysis cannot proceed."
+      ))
+      return(0)
+    }
+    # This route deliberately removes sites without an eligible parent match;
+    # refresh the names restored by NormalizeData at function exit.
+    row.nms <- rownames(data)
+    col.nms <- colnames(data)
+    msg <- paste(
+      msg,
+      paste0("Protein-adjusted relative phosphorylation calculated by sample-wise log2(site) - log2(parent); ",
+             nrow(data), " of ", n.before, " sites retained."),
+      collapse=" "
+    )
   }
 
 
@@ -2144,50 +2159,53 @@ BuildProteinOptions <- function() {
   rownames(corrected_data) <- rownames(phospho_data_sub)
   colnames(corrected_data) <- colnames(phospho_data_sub)
 
-  # Match phosphosites to proteins and perform correction
+  # Match phosphosites to proteins and perform correction. Only unambiguous
+  # matches are eligible; an unadjusted value must never be mixed into the
+  # protein-adjusted matrix.
   protein_ref_ids <- rownames(protein_ref_sub)
   sites_corrected <- 0
   sites_no_protein <- 0
   values_corrected <- 0
-  values_kept_original <- 0
 
   for (i in 1:nrow(phospho_data_sub)) {
     site_protein_id <- protein_ids[i]
 
-    # Try exact match first
+    # Try an exact protein-group identifier first.
     protein_match_idx <- which(protein_ref_ids == site_protein_id)
 
-    # If no exact match, try partial match (for UniProt IDs with isoforms)
+    # Otherwise match the canonical accession at the beginning of a MaxQuant
+    # protein group (or an isoform of that accession). Avoid an unrestricted
+    # prefix match, which could map e.g. P1234 to P12345.
     if (length(protein_match_idx) == 0) {
-      # Try matching the first part (main protein ID without isoform)
-      main_protein_id <- strsplit(site_protein_id, "-")[[1]][1]
-      protein_match_idx <- which(grepl(paste0("^", main_protein_id), protein_ref_ids))
+      main_protein_id <- sub("-[0-9]+$", "", site_protein_id)
+      starts <- startsWith(protein_ref_ids, main_protein_id)
+      remainder <- substring(protein_ref_ids, nchar(main_protein_id) + 1L)
+      protein_match_idx <- which(
+        starts & (remainder == "" | startsWith(remainder, ";") | startsWith(remainder, "-"))
+      )
     }
 
-    if (length(protein_match_idx) > 0) {
-      # Use first match if multiple matches found
-      protein_abundances <- protein_ref_sub[protein_match_idx[1], ]
+    if (length(protein_match_idx) == 1) {
+      protein_abundances <- protein_ref_sub[protein_match_idx, ]
 
-      # Perform log-ratio subtraction ONLY when BOTH values are present
-      # If protein is NA, keep original phosphosite value (cannot correct)
+      # Calculate a ratio only when both measurements are present. A missing
+      # parent measurement remains non-estimable and may be handled later by the
+      # user's declared imputation policy; it is never replaced by an unadjusted
+      # phosphosite intensity.
       for (j in 1:ncol(phospho_data_sub)) {
         if (!is.na(phospho_data_sub[i, j]) && !is.na(protein_abundances[j])) {
-          # Both present: perform correction
           corrected_data[i, j] <- phospho_data_sub[i, j] - protein_abundances[j]
           values_corrected <- values_corrected + 1
         } else {
-          # Either phospho or protein is NA: keep original phospho value
-          corrected_data[i, j] <- phospho_data_sub[i, j]
-          if (!is.na(phospho_data_sub[i, j])) {
-            values_kept_original <- values_kept_original + 1
-          }
+          corrected_data[i, j] <- NA_real_
         }
       }
 
       sites_corrected <- sites_corrected + 1
     } else {
-      # No protein reference found - keep original phosphosite intensity
-      corrected_data[i, ] <- phospho_data_sub[i, ]
+      # No match or an ambiguous match: exclude the site from the adjusted
+      # matrix rather than silently carrying its unadjusted intensity forward.
+      corrected_data[i, ] <- NA_real_
       sites_no_protein <- sites_no_protein + 1
     }
   }
@@ -2198,23 +2216,28 @@ BuildProteinOptions <- function() {
   #msg("  - Sites with protein match: ", sites_corrected)
   #msg("  - Sites without protein match: ", sites_no_protein)
   #msg("  - Values corrected (both phospho & protein present): ", values_corrected)
-  #msg("  - Values kept original (protein missing): ", values_kept_original)
+  #msg("  - Non-estimable values retained as NA: ", total_values - values_corrected)
   #msg("  - Total values processed: ", total_values)
   #msg("  - Correction rate: ", round(100 * values_corrected / total_values, 1), "%")
 
-  # For samples not in protein reference, keep original phospho values
+  # Samples absent from the protein reference are not eligible for adjustment.
   if (ncol(phospho_data) > length(common_samples)) {
     missing_samples <- setdiff(colnames(phospho_data), common_samples)
     #msg("[.correctPhosphoByProteinAbundance] Warning: ", length(missing_samples),
     #        " samples not corrected (no protein reference): ", paste(missing_samples, collapse = ", "))
 
-    # Create full matrix with all original samples
-    full_corrected <- phospho_data
+    # Preserve the input sample shape for metadata alignment, but mark absent
+    # reference samples non-estimable instead of retaining unadjusted values.
+    full_corrected <- matrix(
+      NA_real_, nrow = nrow(phospho_data), ncol = ncol(phospho_data),
+      dimnames = dimnames(phospho_data)
+    )
     full_corrected[, common_samples] <- corrected_data
-    return(full_corrected)
+    corrected_data <- full_corrected
   }
 
-  return(corrected_data)
+  # Entirely unmatched/ambiguous rows cannot support protein-adjusted analysis.
+  corrected_data[rowSums(!is.na(corrected_data)) > 0, , drop = FALSE]
 }
 
 ##################################################

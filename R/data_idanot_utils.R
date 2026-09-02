@@ -195,9 +195,6 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
       has.output.id & duplicate.group.size > 1L,
       as.character(lvlOpt), "none"
     ),
-    selection_rule = if (!annotation.attempted) "not_applicable" else
-      if (identical(idType, "uniprot")) "input_accession_preserved" else
-        "first_database_match",
     stringsAsFactors = FALSE
   );
   fast.write(mapping.audit, file = "identifier_mapping.csv", row.names = FALSE);
