@@ -2074,9 +2074,18 @@ PrepareROCData <- function(dataName = "", sel.meta="NA", factor1="NA", factor2="
   
   dataSet$meta.info.proc <- process_metadata(dataSet$meta.info)  
   
-  # Check if original normalized data exists, if not, initialize it
+  # Check if original normalized data exists, if not, initialize it.
+  # When covariate adjustment is active, feature ranking and every downstream
+  # ROC view must see the SAME linear-adjusted matrix the final model trains
+  # on (biomarker.model.data); data.norm deliberately holds the UN-adjusted
+  # matrix (kept for fold-wise re-adjustment) and must not leak in here --
+  # otherwise the feature table silently ignores the adjustment.
   if (is.null(dataSet$norm.orig.roc)) {
-    dataSet$norm.orig.roc <- t(dataSet$data.norm)
+    if (isTRUE(dataSet$covariate.adjusted) && !is.null(dataSet$biomarker.model.data)) {
+      dataSet$norm.orig.roc <- dataSet$biomarker.model.data
+    } else {
+      dataSet$norm.orig.roc <- t(dataSet$data.norm)
+    }
   }
   
   # Get original data and metadata
@@ -2201,7 +2210,13 @@ PrepareROCData_old <- function(dataName = ""){
   dataSet <- readDataset(dataName);
   
   if(is.null(dataSet$norm.all)){
-    dataSet$norm.all <- t(dataSet$data.norm);
+    # Same adjusted-matrix rule as PrepareROCData: never rebuild ROC caches
+    # from the un-adjusted data.norm while covariate adjustment is active.
+    if (isTRUE(dataSet$covariate.adjusted) && !is.null(dataSet$biomarker.model.data)) {
+      dataSet$norm.all <- dataSet$biomarker.model.data;
+    } else {
+      dataSet$norm.all <- t(dataSet$data.norm);
+    }
     dataSet$cls.all<- dataSet$cls;
   }
   
@@ -4807,6 +4822,12 @@ PerformCovariateAdjustmentForROC <- function(dataName,
   msgSet$current.msg <- paste0("Successfully adjusted for: ", paste(adj.vec, collapse=", "),
                                " using ", method.label)
   saveSet(msgSet, "msgSet")
+
+  # ROC-view caches built BEFORE this adjustment hold un-adjusted data;
+  # drop them so PrepareROCData rebuilds from the adjusted model matrix.
+  dataSet$norm.orig.roc <- NULL
+  dataSet$norm.all <- NULL
+  dataSet$cls.all <- NULL
 
   cat("Covariate adjustment completed:\n")
   cat("  Method:", method.label, "\n")
