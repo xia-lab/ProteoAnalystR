@@ -517,7 +517,7 @@ my.compute.ranked.vec <- function(data, opt, inx = 1){
     rankedVec <- res;
   }else if(opt == "tstat"){
     m <- length(colnames(matr))
-    if (data$de.method=="limma" || data$de.method=="deqms"){
+    if (data$de.method=="limma" || data$de.method=="deqms" || data$de.method=="msqrob2" || data$de.method=="msstats"){
       if("t" %in% colnames(matr)){
         rankedVec <- as.vector(matr[,"t"]);
       }else{

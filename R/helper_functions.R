@@ -362,6 +362,10 @@ GetExpressResultMatrix <- function(dataName = "", inxt) {
   tryCatch({
     .GetExpressResultMatrixInner(dataName, inxt)
   }, error = function(e) {
+    # Surface the real error to the R console log; it was previously only stored
+    # in msgSet, so the downstream "express.de.res.qs not found" masked the cause.
+    message("[GetExpressResultMatrix] FAILED (dataName=", dataName, ", inxt=", inxt,
+            "): ", conditionMessage(e))
     msgSet <- readSet(msgSet, "msgSet")
     msgSet$current.msg <- paste("Failed to retrieve DE results:", e$message)
     saveSet(msgSet, "msgSet")
@@ -373,16 +377,24 @@ GetExpressResultMatrix <- function(dataName = "", inxt) {
     dataSet  <- readDataset(dataName);
     paramSet <- readSet(paramSet, "paramSet");
     inxt     <- as.numeric(inxt)
-    #msg("[GetExpressResultMatrix] method=", dataSet$de.method, " inxt=", inxt, " comp.res.list length=", length(dataSet$comp.res.list))
+    message("[GetExpressResultMatrix] method=", dataSet$de.method, " inxt=", inxt,
+            " comp.res=", paste(dim(dataSet$comp.res), collapse="x"),
+            " cols=", paste(utils::head(colnames(dataSet$comp.res), 8), collapse=","),
+            " comp.res.list length=", length(dataSet$comp.res.list))
 
-    # choose base columns and comparison-specific slice
+    # choose base columns and comparison-specific slice.
+    # msqrob2 and msstats build comp.res = comp.res.list[[1]], a single-contrast
+    # limma-shaped table (logFC, AveExpr, t, P.Value, adj.P.Val) -- NOT the wide
+    # per-contrast layout the final `else` assumes -- so they belong here with
+    # limma/deqms, not in the wide branch (which also left `inx` undefined for them).
     if (dataSet$de.method == "deseq2") {
         inx <- match("baseMean", colnames(dataSet$comp.res))
         res <- dataSet$comp.res.list[[inxt]];
     } else if (dataSet$de.method=="edger") {
         inx <- match("logCPM", colnames(dataSet$comp.res))
         res <- dataSet$comp.res.list[[inxt]];
-    } else if (dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt") {
+    } else if (dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt"
+               || dataSet$de.method=="msqrob2" || dataSet$de.method=="msstats") {
         inx <- match("AveExpr", colnames(dataSet$comp.res))
         res <- dataSet$comp.res.list[[inxt]];
     } else {
@@ -400,7 +412,7 @@ GetExpressResultMatrix <- function(dataName = "", inxt) {
     ## No re-sorting needed -- re-sorting would desync comp.res from comp.features.symbols.
 
     ## --- now extract the column(s) for the return value -------
-    if (dataSet$de.method %in% c("limma", "deqms", "edger", "deseq2", "wtt")) {
+    if (dataSet$de.method %in% c("limma", "deqms", "edger", "deseq2", "wtt", "msqrob2", "msstats")) {
       res <- dataSet$comp.res
     } else {
       res <- dataSet$comp.res[ , c(inxt, (inx+1):ncol(dataSet$comp.res)), drop = FALSE]

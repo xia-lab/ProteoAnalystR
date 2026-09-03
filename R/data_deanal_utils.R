@@ -973,6 +973,9 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   dataSet$comp.res <- result.list[[1]]
   dataSet$de.method.requested <- "msqrob2"
   dataSet$de.method.effective <- "msqrob2"
+  message("[msqrob2] DE complete: ", length(result.list), " contrast(s); comp.res=",
+          paste(dim(dataSet$comp.res), collapse="x"), " cols=",
+          paste(colnames(dataSet$comp.res), collapse=","))
   msgSet$current.msg <- paste0(
     "msqrob2 robust ridge regression completed for ", length(result.list),
     " contrast(s), ", nrow(result.list[[1]]), " proteins tested (imputation-free, ",

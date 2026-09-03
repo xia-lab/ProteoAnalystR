@@ -112,7 +112,10 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     }
     resTable <- dataSet$comp.res;
     hit.inx <- which(colnames(resTable) == "baseMean");
-   } else if (dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt" ){
+   } else if (dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt"
+              || dataSet$de.method=="msqrob2" || dataSet$de.method=="msstats" ){
+    # msqrob2/msstats comp.res is limma-shaped (logFC, AveExpr, t, P.Value, adj.P.Val),
+    # so they take the AveExpr-based path, not the edgeR logCPM fallback below.
     #msg("[GetSigfeatures] Processing limma/deqms/wtt method...")
 
     # Safer column name matching with detailed diagnostics
@@ -221,7 +224,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
     fc.vec <- apply(pos.mat, 1, max);   # for > comparisons - in this case, use the largest logFC among all comparisons
     hit.inx.fc <- fc.vec >= fc.lvl;
     resTable <- resTable[hit.inx.fc, , drop = FALSE];
-  } else if (dataSet$de.method=="deseq2" || dataSet$de.method=="edger" || dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt"){
+  } else if (dataSet$de.method=="deseq2" || dataSet$de.method=="edger" || dataSet$de.method=="limma" || dataSet$de.method=="deqms" || dataSet$de.method=="wtt" || dataSet$de.method=="msqrob2" || dataSet$de.method=="msstats"){
     #msg("[GetSigfeatures] DEBUG: Using limma/deqms/wtt FC filter...")
     pos.mat <- abs(logfc.mat);
     fc.vec <- pos.mat[,1];

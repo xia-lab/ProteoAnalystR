@@ -21,7 +21,8 @@
 #'
 PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, filterUnmapped,
                                  islog = "false", countOpt = "sum", removeMissing = "false", missingPercent = 50,
-                                 sampleNormOpt = "none", sampleNormParam = "__manual__") {
+                                 sampleNormOpt = "none", sampleNormParam = "__manual__",
+                                 groupAwareMissing = "true") {
   paramSet <- readSet(paramSet, "paramSet");
   msgSet   <- readSet(msgSet, "msgSet");
   dataSet  <- readDataset(dataName);
@@ -67,7 +68,8 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
     
 
   data <- PerformFiltering(dataSet, var.thresh, count.thresh, filterUnmapped, countOpt,
-                           removeMissing = removeMissing, missingPercent = missingPercent)
+                           removeMissing = removeMissing, missingPercent = missingPercent,
+                           groupAwareMissing = groupAwareMissing)
 
   # Check if we have data after filtering
   if (nrow(data) == 0 || ncol(data) == 0) {
@@ -586,11 +588,15 @@ ApplyProteotypicFilter <- function(dataName) {
 }
 
 PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, countOpt,
-                             removeMissing = "false", missingPercent = 50){
+                             removeMissing = "false", missingPercent = 50,
+                             groupAwareMissing = "true"){
   msg <- "";
   remove.missing.flag <- isTRUE(removeMissing) ||
     identical(removeMissing, "true") ||
     identical(removeMissing, "TRUE")
+  group.aware.flag <- isTRUE(groupAwareMissing) ||
+    identical(groupAwareMissing, "true") ||
+    identical(groupAwareMissing, "TRUE")
   msgSet <- readSet(msgSet, "msgSet")
 
   if (isTRUE(dataSet$annotated)) {
@@ -736,8 +742,8 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
     # The fraction is therefore taken WITHIN each group and the BEST group decides. With the
     # threshold at 30 this keeps a protein present in at least 70% of the samples of at least
     # one group, and the parameter keeps its existing meaning ("% missing tolerated").
-    grp <- dataSet$cls
-    if (is.null(grp) || length(grp) != ncol(data)) {
+    grp <- if (group.aware.flag) dataSet$cls else NULL
+    if (group.aware.flag && (is.null(grp) || length(grp) != ncol(data))) {
       grp <- tryCatch(dataSet$meta.info[colnames(data), 1], error = function(e) NULL)
     }
     if (!is.null(grp) && length(grp) == ncol(data) &&
@@ -749,15 +755,18 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
       }, numeric(nrow(miss.ind)))
       if (is.null(dim(per.grp))) per.grp <- matrix(per.grp, nrow = nrow(miss.ind))
       miss.frac <- apply(per.grp, 1, min, na.rm = TRUE)   # the group where it is best observed
+      miss.mode.msg <- "(group-aware: assessed within each group, best group decides)"
     } else {
-      miss.frac <- rowMeans(miss.ind)                     # no usable grouping -> previous behaviour
+      miss.frac <- rowMeans(miss.ind)                     # disabled or no usable grouping
+      miss.mode.msg <- "(assessed across all samples)"
     }
 
     rm.miss <- miss.frac > (miss.pct.num/100)
 
     if (any(rm.miss)) {
       data <- data[!rm.miss, , drop = FALSE]
-      rm.miss.msg <- paste("Removed", sum(rm.miss), "features with >", miss.pct.num, "% missing values.")
+      rm.miss.msg <- paste("Removed", sum(rm.miss), "features with >", miss.pct.num,
+                           "% missing values", miss.mode.msg)
       msg <- paste(msg, rm.miss.msg)
     }
   }
