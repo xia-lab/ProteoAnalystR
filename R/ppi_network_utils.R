@@ -248,11 +248,25 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
 
   # Determine if this database uses UniProt IDs (ppi_uniprot.sqlite) or Entrez IDs (ppi.sqlite).
   # Routing is per-database, not based on file existence.
+  # NOTE: dbName arrives org-prefixed from NetworkBean ("hsa_intact"), while UNIPROT_DBS holds
+  # bare suffixes, so this test never fires and these four databases are in fact served from
+  # ppi.sqlite in Entrez mode. That is the long-standing shipped behaviour and is left as-is
+  # here deliberately; switching them to the UniProt tables is a separate decision.
   UNIPROT_DBS <- c("intact", "huri", "rolland", "irefinx")
   use_uniprot_sqlite <- dbName %in% UNIPROT_DBS &&
                         file.exists(paste0(sqlite.path, "ppi_uniprot.sqlite"))
+
+  # OmniPath ships only in ppi_uniprot.sqlite (human only) but carries the same Entrez id1/id2
+  # columns as the ppi.sqlite tables, so it needs the UniProt *file* with Entrez *columns*.
+  omnipath_db <- grepl("_omnipath$", dbName)
+  use_uniprot_file <- (use_uniprot_sqlite || omnipath_db) &&
+                      file.exists(paste0(sqlite.path, "ppi_uniprot.sqlite"))
+  if (omnipath_db && !use_uniprot_file) {
+    .setCurrentMessage("The OmniPath interactome requires ppi_uniprot.sqlite, which is not installed on this server.")
+    return(c(0, 0, 0))
+  }
   msg(sprintf("[PPI] Database: %s | ID mode: %s | ppi_uniprot.sqlite used: %s",
-              dbName, ifelse(use_uniprot_sqlite, "UniProt", "Entrez"), use_uniprot_sqlite))
+              dbName, ifelse(use_uniprot_sqlite, "UniProt", "Entrez"), use_uniprot_file))
   if (length(seeds) > 0) {
   }
 
@@ -349,7 +363,8 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
               dbName, ifelse(use_uniprot_sqlite, "UniProt", "Entrez"), length(seeds), min.score, order))
 
   edges <- tryCatch({
-    QueryPpiSQLite(sqlite.path, dbName, seeds, requireExp, min.score, use.uniprot = use_uniprot_sqlite)
+    QueryPpiSQLite(sqlite.path, dbName, seeds, requireExp, min.score,
+                   use.uniprot = use_uniprot_sqlite, uniprot.file = use_uniprot_file)
   }, error = function(e) {
     msg(sprintf("[PPI] ERROR during database query: %s", conditionMessage(e)))
     .setCurrentMessage(paste("Database query failed:", conditionMessage(e)))
@@ -1029,6 +1044,28 @@ PrepareNetwork <- function(net.nm, json.nm) {
   }
   node.labels[is.na(node.labels) | !nzchar(node.labels)] <- nms[is.na(node.labels) | !nzchar(node.labels)]
 
+  # OmniPath (and some other resources) encode protein COMPLEXES as their member ids
+  # joined by "_" (e.g. "3688_3672" = ITGB1 + ITGA1). These are not single genes, so the
+  # symbol mapping above leaves the raw composite id as the label. Detect them, build a
+  # readable "SYMBOL:SYMBOL" label from the members, and flag them so the node is typed
+  # as a complex rather than a gene.
+  is.complex <- grepl("_", nms, fixed = TRUE)
+  if (any(is.complex)) {
+    complex.members <- strsplit(nms[is.complex], "_", fixed = TRUE)
+    all.members <- unique(unlist(complex.members))
+    member.sym <- tryCatch({
+      doEntrez2SymbolMapping(all.members, org, "entrez")
+    }, error = function(e) rep(NA_character_, length(all.members)))
+    names(member.sym) <- all.members
+    complex.labels <- vapply(complex.members, function(mem) {
+      sym <- member.sym[mem]
+      # Fall back to the raw member id for any member that has no symbol.
+      sym[is.na(sym) | !nzchar(sym)] <- mem[is.na(sym) | !nzchar(sym)]
+      paste(sym, collapse = ":")
+    }, character(1))
+    node.labels[is.complex] <- complex.labels
+  }
+
   loc.map <- NULL
   node.categories <- rep("Unknown", length(nms))
   node.category.all <- rep("Unknown", length(nms))
@@ -1122,6 +1159,8 @@ PrepareNetwork <- function(net.nm, json.nm) {
       }
     }
 
+    node.mol.type <- if (isTRUE(is.complex[i])) "complex" else "gene"
+
     node.data <- list(
       id = node.id,
       label = node.labels[i],
@@ -1129,8 +1168,8 @@ PrepareNetwork <- function(net.nm, json.nm) {
       entrez = entrez.id,
       size = node.sizes[i],
       true_size = node.sizes[i],
-      molType = "gene",
-      type = "gene",
+      molType = node.mol.type,
+      type = node.mol.type,
       colorb = comp.color,
       colorw = comp.color,
       topocolb = topo.colsb[i],
