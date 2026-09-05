@@ -7,9 +7,14 @@
 ###################################################
 
 # note, last two par only for STRING database
-QueryPpiSQLite <- function(sqlite.path, table.nm, q.vec, requireExp, min.score, use.uniprot = FALSE){
+## use.uniprot selects the uniprot1/uniprot2 columns; uniprot.file selects which
+## SQLite file to open. They are usually the same, but hsa_omnipath ships only in
+## ppi_uniprot.sqlite while still carrying the Entrez id1/id2 columns, so it needs
+## the UniProt file with Entrez columns.
+QueryPpiSQLite <- function(sqlite.path, table.nm, q.vec, requireExp, min.score, use.uniprot = FALSE,
+                           uniprot.file = use.uniprot){
   require("RSQLite")
-  db.file <- if (isTRUE(use.uniprot)) "ppi_uniprot.sqlite" else "ppi.sqlite"
+  db.file <- if (isTRUE(uniprot.file)) "ppi_uniprot.sqlite" else "ppi.sqlite"
   db.path <- paste(sqlite.path, db.file, sep="")
   ppi.db <- .connect.sqlite(db.path)
   query <- paste(shQuote(q.vec), collapse=",")
@@ -181,22 +186,26 @@ doPpiIDMapping <- function(sqlite.path, q.vec, data.org="entrez_swissprot"){
     }
   }
   db.map <-  queryGeneDB(idType, data.org);
-  hit.inx <- match(q.vec, db.map[, "gene_id"]);
-  ppi.mat <- db.map[hit.inx, ];
-
-if(idType == "entrez"){
-  return(ppi.mat$gene_id);
+  if(idType == "entrez"){
+    hit.inx <- match(q.vec, db.map[, "gene_id"]);
+    return(db.map$gene_id[hit.inx]);
+  }else if(idType == "entrez_uniprot"){
+    # entrez->uniprot is one-to-many: resolve to a canonical accession per gene
+    # instead of match()'s arbitrary first row (avoids seeds missing DB nodes).
+    return(.paEntrez2UniprotCanonical(q.vec, data.org, db.map = db.map));
   }else{
-  return(ppi.mat$accession);
-}
+    # entrez_string etc.: ids are not UniProt, keep positional first-match.
+    hit.inx <- match(q.vec, db.map[, "gene_id"]);
+    return(db.map$accession[hit.inx]);
+  }
 }
 
 doEntrez2UniprotMapping<-function(entrez.vec, paramSet){
   data.org <- paramSet[["data.org"]];
- 
-  db.map <-  queryGeneDB("entrez_uniprot", data.org);
-  hit.inx <- match(entrez.vec, db.map[, "gene_id"]);
-  entrezs <- db.map[hit.inx, "accession"];
+
+  # entrez->uniprot is one-to-many; resolve to a canonical accession per gene
+  # rather than match()'s arbitrary first row (which is often a TrEMBL id).
+  entrezs <- .paEntrez2UniprotCanonical(entrez.vec, data.org);
   mode(entrezs) <- "character";
   na.inx <- is.na(entrezs);
   entrezs[na.inx] <- entrez.vec[na.inx];

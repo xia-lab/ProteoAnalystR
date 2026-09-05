@@ -429,9 +429,9 @@ AnnotateGeneData <- function(dataName, org, lvlOpt, idtype){
     return(entrez.vec)
   }
 
-  # Match Entrez IDs to get UniProt accessions
-  hit.inx <- match(entrez.vec, db.map[, "gene_id"]);
-  uniprot.ids <- db.map[hit.inx, "accession"];
+  # Resolve to a canonical accession per gene (entrez->uniprot is one-to-many;
+  # a plain match() would return an arbitrary, often TrEMBL, accession).
+  uniprot.ids <- .paEntrez2UniprotCanonical(entrez.vec, org, db.map = db.map);
 
   # For unmapped Entrez IDs, keep them as-is
   na.inx <- is.na(uniprot.ids);
@@ -1041,6 +1041,58 @@ queryGeneDB <- function(db.nm, org){
     assign(cache.key, db.map, envir = .GlobalEnv);
   }
   return(db.map)
+}
+
+## ------------------------------------------------------------------
+## Canonical Entrez -> UniProt resolution (one-to-many aware)
+##
+## The entrez_uniprot table is one gene_id -> MANY accessions (canonical
+## Swiss-Prot + TrEMBL); it carries no "reviewed" flag. A plain match()/setNames
+## returns whatever row sorts first, which is frequently a TrEMBL accession
+## (e.g. TP53 7157 -> A0A087WT22 instead of P04637). These helpers pick a stable,
+## canonical accession, optionally honouring accessions the user actually uploaded.
+## ------------------------------------------------------------------
+
+# Pick the best single accession for ONE gene from its accession vector.
+# Priority: (1) an accession present in `prefer` (the user's dataset ids) wins;
+# (2) classic 6-character Swiss-Prot-era accessions over 10-char TrEMBL ids;
+# (3) O/P/Q prefixes (classic reviewed) then alphabetical, for determinism.
+.paPickCanonicalUniprot <- function(accs, prefer = NULL) {
+  accs <- accs[!is.na(accs) & nzchar(accs)]
+  if (length(accs) == 0) {
+    return(NA_character_)
+  }
+  if (!is.null(prefer) && length(prefer) > 0) {
+    inpref <- accs[accs %in% prefer]
+    if (length(inpref) > 0) {
+      accs <- inpref
+    }
+  }
+  if (length(accs) == 1) {
+    return(accs)
+  }
+  six <- accs[nchar(accs) == 6]
+  cand <- if (length(six) > 0) six else accs
+  ord <- order(!grepl("^[OPQ]", cand), cand)
+  cand[ord[1]]
+}
+
+# Vectorized canonical Entrez -> UniProt. Returns one accession per input entrez
+# (NA where the gene is absent). `prefer` is an optional character vector of
+# accessions to favour (typically the accessions in the user's uploaded data).
+.paEntrez2UniprotCanonical <- function(entrez.vec, org, db.map = NULL, prefer = NULL) {
+  if (is.null(db.map)) {
+    db.map <- queryGeneDB("entrez_uniprot", org)
+  }
+  if (is.null(db.map) || !is.data.frame(db.map) || nrow(db.map) == 0 ||
+      !all(c("gene_id", "accession") %in% colnames(db.map))) {
+    return(rep(NA_character_, length(entrez.vec)))
+  }
+  by.gene <- split(as.character(db.map$accession), as.character(db.map$gene_id))
+  vapply(as.character(entrez.vec), function(g) {
+    a <- by.gene[[g]]
+    if (is.null(a)) NA_character_ else .paPickCanonicalUniprot(a, prefer)
+  }, character(1), USE.NAMES = FALSE)
 }
 
 getEntrezTableName <- function(data.org, data.idType){

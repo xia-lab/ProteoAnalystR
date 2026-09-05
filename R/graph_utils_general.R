@@ -278,9 +278,14 @@ rescale2NewRange <- function(qvec, a, b){
         }
 
         if (any(is_empty(uniprot.ids))) {
-          hit.inx <- match(entrez.ids, map.entrez)
-          fill <- is_empty(uniprot.ids) & !is.na(hit.inx)
-          uniprot.ids[fill] <- map.accession[hit.inx[fill]]
+          # entrez->uniprot is one-to-many: pick a canonical accession per gene
+          # instead of match()'s first row (else nodes display arbitrary TrEMBL ids).
+          need.idx <- which(is_empty(uniprot.ids))
+          canon.map <- data.frame(gene_id = map.entrez, accession = map.accession,
+                                  stringsAsFactors = FALSE)
+          canon <- .paEntrez2UniprotCanonical(entrez.ids[need.idx], org, db.map = canon.map)
+          ok <- !is.na(canon)
+          uniprot.ids[need.idx[ok]] <- canon[ok]
         }
       }
     }, error = function(e) {
@@ -893,6 +898,266 @@ GetNetsQueryNum <- function(){
 ## Cellular Localization Network Visualization
 ##################################################
 
+#' Build and write the "split" compartment network JSON.
+#'
+#' Multi-localized proteins are duplicated into one node COPY per annotated broad
+#' compartment (no cap), so every compartment box shows a complete sub-network of
+#' its residents. Interaction edges are drawn inside each compartment both partners
+#' share (visible / intra); interactions whose partners share no compartment become a
+#' single representative edge between the primary copies (hidden / inter). Dashed
+#' "identity" edges link a protein's own copies across compartments (hidden / inter).
+#' Inter-compartment and identity edges are flagged so the viewer can hide them by
+#' default and reveal them on node hover.
+#'
+#' All heavy inputs are precomputed by PrepareLocalizationNetwork and passed in.
+#' Output is written to <fileName>_compartment.json (the base PPI JSON is preserved).
+#' @return Integer, 1 on success, 0 on failure.
+.paWriteSplitCompartmentNetwork <- function(fileName, org, nodes, edges.df, loc.map,
+                                            collapsed.nodes, collapsed.idx, node.groups,
+                                            sizes, symVec, uniprot.vec, expr.vals,
+                                            is.query.vec, category.colors) {
+  require(igraph)
+  sanitize <- function(cat) gsub("[^A-Za-z0-9_]", "_", cat)
+
+  nP       <- length(collapsed.nodes)
+  rep.idx  <- collapsed.idx
+  prot.entrez <- as.character(collapsed.nodes)
+
+  # ---- Per-protein attributes (from representative vertex) ----
+  prot.label <- vapply(seq_len(nP), function(j) {
+    i <- rep.idx[j]
+    if (!is.na(symVec[i]) && nzchar(symVec[i])) symVec[i] else prot.entrez[j]
+  }, character(1))
+  prot.primary <- as.character(loc.map$Primary.category[rep.idx])
+  prot.primary[is.na(prot.primary) | !nzchar(prot.primary)] <- "Unknown"
+  prot.size    <- as.numeric(sizes[rep.idx])
+  prot.exp     <- as.numeric(expr.vals[rep.idx])
+  prot.mainloc <- as.character(loc.map$All.locations[rep.idx])
+  prot.mainloc[is.na(prot.mainloc) | !nzchar(prot.mainloc)] <- "Unknown"
+  prot.seed <- vapply(seq_len(nP), function(j) any(is.query.vec[node.groups[[j]]]), logical(1))
+  prot.uniprot <- vapply(seq_len(nP), function(j) {
+    vals <- unique(na.omit(uniprot.vec[node.groups[[j]]]))
+    vals <- vals[nzchar(vals)]
+    if (length(vals) > 0) as.character(vals[1]) else ""
+  }, character(1))
+
+  # Full broad-compartment set per protein (primary always included first).
+  prot.comps <- lapply(seq_len(nP), function(j) {
+    cs <- .paSplitCompartmentValues(loc.map$All.categories[rep.idx[j]])
+    cs <- cs[nzchar(cs)]
+    if (length(cs) == 0) cs <- prot.primary[j]
+    unique(c(prot.primary[j], cs))
+  })
+
+  entrez2pj <- setNames(seq_len(nP), prot.entrez)
+  copyId <- function(entrez, comp) paste0(entrez, "__", sanitize(comp))
+
+  # ---- Copy nodes: one per (protein, compartment) ----
+  copy.j <- integer(0); copy.comp <- character(0)
+  for (j in seq_len(nP)) {
+    cs <- prot.comps[[j]]
+    copy.j    <- c(copy.j, rep(j, length(cs)))
+    copy.comp <- c(copy.comp, cs)
+  }
+  ncopy       <- length(copy.j)
+  copy.comp.id <- sanitize(copy.comp)
+  copy.id     <- paste0(prot.entrez[copy.j], "__", copy.comp.id)
+  # ---- Collapse interactions to unique protein pairs ----
+  ef <- edges.df[, c("from", "to"), drop = FALSE]
+  ef$from <- as.character(ef$from); ef$to <- as.character(ef$to)
+  ef <- ef[ef$from %in% prot.entrez & ef$to %in% prot.entrez & ef$from != ef$to, , drop = FALSE]
+  if (nrow(ef) > 0) {
+    a <- pmin(ef$from, ef$to); b <- pmax(ef$from, ef$to)
+    ukey <- !duplicated(paste0(a, "||", b))
+    ef <- data.frame(from = a[ukey], to = b[ukey], stringsAsFactors = FALSE)
+  }
+
+  # ---- Build split edges ----
+  e.from <- character(0); e.to <- character(0)
+  e.inter <- logical(0); e.identity <- logical(0)
+  if (nrow(ef) > 0) {
+    for (r in seq_len(nrow(ef))) {
+      pa <- ef$from[r]; pb <- ef$to[r]
+      ja <- entrez2pj[[pa]]; jb <- entrez2pj[[pb]]
+      shared <- intersect(prot.comps[[ja]], prot.comps[[jb]])
+      if (length(shared) > 0) {
+        for (c in shared) {
+          e.from <- c(e.from, copyId(pa, c)); e.to <- c(e.to, copyId(pb, c))
+          e.inter <- c(e.inter, FALSE); e.identity <- c(e.identity, FALSE)
+        }
+      } else {
+        e.from <- c(e.from, copyId(pa, prot.primary[ja]))
+        e.to   <- c(e.to,   copyId(pb, prot.primary[jb]))
+        e.inter <- c(e.inter, TRUE); e.identity <- c(e.identity, FALSE)
+      }
+    }
+  }
+  # Identity (same-protein) links: star from primary copy to the protein's other copies.
+  for (j in seq_len(nP)) {
+    cs <- prot.comps[[j]]
+    if (length(cs) < 2) next
+    prim <- prot.primary[j]
+    for (c in setdiff(cs, prim)) {
+      e.from <- c(e.from, copyId(prot.entrez[j], prim))
+      e.to   <- c(e.to,   copyId(prot.entrez[j], c))
+      e.inter <- c(e.inter, TRUE); e.identity <- c(e.identity, TRUE)
+    }
+  }
+
+  # ---- Copy-level layout (compartment-clustered FR) ----
+  x.coords <- rep(0, ncopy); y.coords <- rep(0, ncopy)
+  if (ncopy >= 2) {
+    lay.from <- e.from; lay.to <- e.to
+    lay.w    <- ifelse(e.inter, 1, 15)   # intra PPI edges pull, inter/identity barely
+    # Hub-spoke temp edges within each compartment to force clustering.
+    comp.groups <- split(seq_len(ncopy), copy.comp.id)
+    intra.deg <- integer(ncopy); names(intra.deg) <- copy.id
+    if (length(e.from) > 0) {
+      tab <- table(c(e.from[!e.inter], e.to[!e.inter]))
+      intra.deg[names(tab)] <- as.integer(tab)
+    }
+    for (g in comp.groups) {
+      if (length(g) <= 1) next
+      hub <- g[which.max(intra.deg[copy.id[g]])]
+      others <- setdiff(g, hub)
+      lay.from <- c(lay.from, rep(copy.id[hub], length(others)))
+      lay.to   <- c(lay.to,   copy.id[others])
+      lay.w    <- c(lay.w,    rep(80, length(others)))
+    }
+    lg <- igraph::graph_from_data_frame(
+      data.frame(from = lay.from, to = lay.to, stringsAsFactors = FALSE),
+      directed = FALSE, vertices = copy.id
+    )
+    igraph::E(lg)$weight <- lay.w
+    set.seed(42)
+    lc <- igraph::layout_with_fr(lg, weights = igraph::E(lg)$weight, niter = 8000,
+                                 start.temp = sqrt(igraph::vcount(lg)) * 2, grid = "nogrid")
+    xc <- lc[, 1]; yc <- lc[, 2]
+    rng <- function(v, span) {
+      lo <- min(v); hi <- max(v)
+      if (is.finite(hi - lo) && (hi - lo) > 0) (v - lo) / (hi - lo) * span else rep(span / 2, length(v))
+    }
+    # layout vertex order follows copy.id (vertices arg), so direct assign
+    ord <- match(copy.id, igraph::V(lg)$name)
+    x.coords <- rng(xc, 1600)[ord]
+    y.coords <- rng(yc, 1000)[ord]
+  }
+
+  # ---- Compartment colors / summary ----
+  comp.color.of <- function(comp) {
+    col <- category.colors[[comp]]
+    if (is.null(col)) "#999999" else col
+  }
+  comp.present <- unique(copy.comp)
+  comp.counts  <- table(copy.comp)
+  compartment.info <- lapply(comp.present, function(comp) {
+    list(id = sanitize(comp), label = comp, color = comp.color.of(comp),
+         geneCount = as.integer(comp.counts[[comp]]))
+  })
+  names(compartment.info) <- sanitize(comp.present)
+
+  # ---- Copy node list ----
+  gene.nodes <- lapply(seq_len(ncopy), function(k) {
+    j <- copy.j[k]; comp <- copy.comp[k]; cid <- copy.comp.id[k]
+    col <- comp.color.of(comp)
+    list(
+      id           = copy.id[k],
+      protein_id   = prot.entrez[j],
+      label        = prot.label[j],
+      uniprot      = prot.uniprot[j],
+      entrez       = prot.entrez[j],
+      size         = prot.size[j],
+      true_size    = prot.size[j],
+      molType      = "gene",
+      colorb       = col,
+      colorw       = col,
+      exp          = round(prot.exp[j], 3),
+      posx         = round(x.coords[k], 2),
+      posy         = round(y.coords[k], 2),
+      compartment      = cid,
+      compartment_all  = cid,        # single wedge -> pie path inert
+      all_compartments = cid,
+      broad_category   = comp,
+      is_primary   = identical(comp, prot.primary[j]),
+      type         = "gene",
+      location     = prot.mainloc[j],
+      seedArr      = if (prot.seed[j]) "seed" else "notSeed"
+    )
+  })
+
+  # ---- Edge list with flags ----
+  nedge <- length(e.from)
+  edges.list <- lapply(seq_len(nedge), function(i) {
+    list(
+      id       = paste0("e", i),
+      source   = e.from[i],
+      target   = e.to[i],
+      weight   = 1,
+      size     = if (e.identity[i]) 0.6 else 1,
+      inter    = isTRUE(e.inter[i]),
+      identity = isTRUE(e.identity[i])
+    )
+  })
+
+  # ---- Per-protein node table (grid stays one row per protein) ----
+  prot.graph <- igraph::graph_from_data_frame(ef, directed = FALSE, vertices = prot.entrez)
+  prot.deg <- igraph::degree(prot.graph)
+  prot.btw <- if (igraph::vcount(prot.graph) < 1000) {
+    igraph::betweenness(prot.graph)
+  } else {
+    igraph::betweenness(prot.graph, cutoff = 3)
+  }
+  node.table <- data.frame(
+    id          = prot.entrez,
+    label       = prot.label,
+    uniprot     = prot.uniprot,
+    degree      = as.numeric(prot.deg[prot.entrez]),
+    betweenness = as.numeric(prot.btw[prot.entrez]),
+    expr        = as.numeric(prot.exp),
+    location    = prot.primary,
+    all_compartments = vapply(seq_len(nP), function(j) paste(prot.comps[[j]], collapse = "; "), character(1)),
+    stringsAsFactors = FALSE
+  )
+  node.table <- node.table[order(node.table$degree, decreasing = TRUE), ]
+
+  metadata <- list(
+    compartmentCount = length(comp.present),
+    geneCount = nP,
+    copyCount = ncopy,
+    edgeCount = nedge,
+    organism = org,
+    splitMultiloc = TRUE,
+    compartments = compartment.info
+  )
+
+  network.json <- list(
+    nodes           = gene.nodes,
+    edges           = edges.list,
+    backgroundColor = list("#f5f5f5", "#0066CC"),
+    naviString      = "Compartment Network",
+    org             = org,
+    hasPeptideData  = HasPeptideLevelData(),
+    splitMultiloc   = TRUE,
+    nodeTable       = node.table,
+    compartments    = compartment.info,
+    metadata        = metadata
+  )
+
+  output.file <- paste0(fileName, "_compartment.json")
+  ok <- tryCatch({
+    jsonlite::write_json(network.json, output.file, auto_unbox = TRUE, pretty = TRUE)
+    TRUE
+  }, error = function(e) {
+    AddErrMsg(paste0("Failed to write split compartment JSON: ", e$message)); FALSE
+  })
+  if (!ok) return(0)
+
+  ppi.net <- list()
+  ppi.net[["node.data"]] <- data.frame(Id = prot.entrez, Label = prot.label, stringsAsFactors = FALSE)
+  ppi.net <<- ppi.net
+  return(1)
+}
+
 #' PrepareLocalizationNetwork
 #'
 #' Generates a cytoscape.js JSON file for cellular localization network viewer
@@ -905,7 +1170,8 @@ GetNetsQueryNum <- function(){
 #' @return Integer, 1 if successful, 0 otherwise
 #'
 PrepareLocalizationNetwork <- function(fileName = "localization_network",
-                                       runCompartmentLayout = FALSE) {
+                                       runCompartmentLayout = FALSE,
+                                       splitMultiloc = FALSE) {
 
   paramSet <- readSet(paramSet, "paramSet")
   analSet <- readSet(analSet, "analSet")
@@ -1076,7 +1342,12 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
   cat(sprintf("[Localization] Category distribution: %s\n",
               paste(names(category.counts), "=", category.counts, collapse=", ")))
 
-  if (isTRUE(runCompartmentLayout)) {
+  if (isTRUE(splitMultiloc)) {
+    # Split (per-compartment copy) view computes its own copy-level coordinates
+    # further down; per-vertex primary coordinates are not needed here.
+    x.coords <- rep(0, length(nodes))
+    y.coords <- rep(0, length(nodes))
+  } else if (isTRUE(runCompartmentLayout)) {
     # Strategy: Add temporary hub-spoke edges within each compartment to force clustering
     # For each compartment, connect all nodes to the highest-degree node (hub)
     # This creates a star topology that clusters nodes together efficiently
@@ -1333,6 +1604,18 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
   node.groups <- split(seq_along(nodes), base.ids)
   collapsed.nodes <- names(node.groups)
   collapsed.idx <- vapply(node.groups, function(idx) idx[1], integer(1))
+
+  # Split (per-compartment copy) view: duplicate multi-localized proteins into one
+  # node copy per compartment and route/flag edges for hover-reveal. Self-contained
+  # builder writes <fileName>_compartment.json and returns.
+  if (isTRUE(splitMultiloc)) {
+    return(.paWriteSplitCompartmentNetwork(
+      fileName = fileName, org = org, nodes = nodes, edges.df = edges.df, loc.map = loc.map,
+      collapsed.nodes = collapsed.nodes, collapsed.idx = collapsed.idx, node.groups = node.groups,
+      sizes = sizes, symVec = symVec, uniprot.vec = uniprot.vec, expr.vals = expr.vals,
+      is.query.vec = is.query.vec, category.colors = category.colors
+    ))
+  }
 
   gene.nodes <- lapply(collapsed.nodes, function(base.id) {
     idx <- node.groups[[base.id]]

@@ -138,7 +138,7 @@ MapListIds <- function(listNm, geneIDs, org, idType){
 
 dat = data.frame(orig=rownames(dataList[[1]]),logFC=dataList[[1]])
 dat$accession <- GeneAnotDB$accession[match(dat$orig,GeneAnotDB$orig)]
-dat$gene_id <- GeneAnotDB$accession[match(dat$orig,GeneAnotDB$orig)]
+dat$gene_id <- GeneAnotDB$gene_id[match(dat$orig,GeneAnotDB$orig)]
 if(all(dat$LogFC)==0){
   dat$LogFC=NULL
 }
