@@ -1,0 +1,222 @@
+---
+title: "Replay the example datasets: from upstream output to a differential-expression report"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 2
+vignette: >
+  %\VignetteIndexEntry{Replay the example datasets: from upstream output to a differential-expression report}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+This vignette shows how to install `ProteoAnalystR` and **replay a full analysis
+locally** on data that ships inside the package: from a raw upstream search
+output, through filtering / normalization / imputation, to differential
+expression and a self-documenting `analysis_summary.txt`. It uses the same
+functions, in the same order, that the ProteoAnalyst web application runs; no
+app, Docker, Payara, or Rserve is required.
+
+Two small datasets are bundled, covering the two modalities and two different
+upstream tools:
+
+| dataset | modality / tool | organism | design |
+|---|---|---|---|
+| `fragpipe_proteomics` | protein LFQ / **FragPipe** | human | IDHmut vs IDHwt (3 vs 3) |
+| `diann_phospho`       | phosphosite / **DIA-NN** | human | CTL vs DRUG (4 vs 4) |
+
+## Requirements
+
+- **R >= 4.5** (the manuscript environment is pinned to R 4.5.3 / Bioconductor
+  3.22). The package `Imports` are Bioconductor-heavy (`limma`, `DEqMS`,
+  `DESeq2`, `edgeR`, `MSstats`, `impute`, `preprocessCore`, `fgsea`, ...); the
+  reproducibility deposit ships a complete `renv.lock` to recreate the exact
+  environment with `renv::restore()`.
+- **An organism annotation SQLite** (`hsa_genes.sqlite`) for identifier
+  mapping. Point the package at the directory that contains it with the
+  `OMICS_LIB_DIR` environment variable. The manuscript case-study reproduction
+  bundles ship a small `db/` subset that provides exactly this file (and the
+  kinase and compartment resources used below); see the *Reproducibility
+  deposit* section.
+
+## Locating the bundled data
+
+The bundled files are read straight from the installed package, so this works
+offline:
+
+```{r locate, eval = TRUE}
+library(ProteoAnalystR)
+
+list_bundled_datasets()[, c("dataset", "role", "tool", "organism", "design")]
+
+prot <- bundled_example("fragpipe_proteomics")
+phos <- bundled_example("diann_phospho")
+basename(prot)   # input + metadata
+basename(phos)
+```
+
+The pipeline chunks below are shown with `eval = FALSE` so this vignette renders
+anywhere. To actually run them, install the package dependencies and set
+`OMICS_LIB_DIR` to a directory containing `hsa_genes.sqlite`, then paste the code
+into an R session started in an empty working directory (the pipeline writes its
+per-session state there).
+
+```{r libdir, eval = FALSE}
+# point identifier mapping at the annotation SQLite (adjust to your path)
+Sys.setenv(OMICS_LIB_DIR = "/path/to/db")   # dir containing hsa_genes.sqlite
+```
+
+## Example 1 — FragPipe LFQ proteomics
+
+A FragPipe `combined_protein.tsv` (MaxLFQ, protein-level) comparing IDH-mutant
+vs IDH-wildtype human samples. Because this is already a protein-level matrix,
+there is no peptide-to-protein summarization step.
+
+```{r prot, eval = FALSE}
+prot <- bundled_example("fragpipe_proteomics")
+DATA <- prot[["input"]]; META <- prot[["metadata"]]
+
+Init.Data(TRUE, "data/")
+
+# FragPipe protein matrix -> MaxLFQ quant. (quantType = "protein_maxlfq")
+SetFragpipeOptions("protein_maxlfq", TRUE, NA, NA)
+dataSet <- ReadTabExpressData(DATA, META, "false", "default", "", "fragpipe")
+ExportMetaInfoArrow(DATA)
+
+# identifier annotation (human, protein), then QC
+dataSet <- PerformDataAnnot(DATA, "hsa", "prot", "NA", "mean")
+SummarizeQC(DATA, "proc", 0.1)
+
+# FragPipe format filtering (drops contaminants / decoys / by-site rows)
+ApplyFormatSpecificFiltering(DATA, "fragpipe",
+  list(removeContaminants = TRUE, removeDecoys = FALSE, removeOnlyBySite = FALSE,
+       minPeptides = 0, qvalueFilter = FALSE, minProb = 0.0, pepFilter = FALSE,
+       pepThreshold = 0.01, spectronautQValueFilter = FALSE,
+       spectronautQValueThreshold = 0.01, spectronautMinPeptides = 0))
+
+# log2 + sample-median centering; MNAR (limit-of-detection) imputation
+dataSet <- PerformNormalization(DATA, "logMedian", 15, 0, "true", "false",
+                                "sum", "true", 50, "none", "__manual__")
+dataSet <- ImputeMissingVar(DATA, "min")
+
+# design + limma DE (note: the reader normalizes the group column to "Condition")
+SetSelectedMetaInfo(DATA, "Condition", "NA", FALSE)
+dataSet <- SetupDesignMatrix(DATA, "limma")
+dataSet <- PerformDEAnal(DATA, "custom", "IDHmut vs. IDHwt", "NA", "intonly", FALSE)
+dataSet <- GetSigfeatures(DATA, "Result_1", 0.05, 0.0, 1, "true")
+
+# self-documenting parameter report
+WriteAnalysisSummary("analysis_summary.txt")
+```
+
+Expected result (limma, IDHmut vs IDHwt): **4135 features tested, 1345
+significant** at `adj.P.Val < 0.05` (up 625 / down 720). The
+`analysis_summary.txt` Differential Expression section reads:
+
+```
+== Differential Expression ==
+Method:                           limma
+Comparison:                       IDHmut-IDHwt
+Number of features tested:        4135
+Significance:                     adj.P.Val (BH-FDR) < 0.05
+Fold-change threshold (log2):     0
+p-value columns in results:       P.Value (raw), adj.P.Val (BH-FDR)
+Significant features:             1345  (up 625 / down 720)
+```
+
+## Example 2 — DIA-NN phosphoproteomics + enrichment
+
+A DIA-NN phosphosite report comparing a control vs drug-treated human sample
+(CTL vs DRUG). The site table carries a `SequenceWindow` column, which the motif
+enrichment uses directly.
+
+```{r phos, eval = FALSE}
+phos <- bundled_example("diann_phospho")
+DATA <- phos[["input"]]; META <- phos[["metadata"]]
+
+Init.Data(TRUE, "data/")
+
+# DIA-NN phospho: SetPhosphoOptions(format = "diann") + ReadPhosphoData(dataFormat = "diann")
+SetPhosphoOptions("diann", "phospho", 0.0, c("S", "T", "Y"))
+dataSet <- ReadPhosphoData(DATA, META, 0.0, "diann", "", 1.0, 1.0, FALSE, FALSE,
+                           c("S", "T", "Y"))
+ExportMetaInfoArrow(DATA)
+
+dataSet <- PerformDataAnnot(DATA, "hsa", "prot", "NA", "mean")
+SummarizeQC(DATA, "proc", 0.1)
+dataSet <- ApplyPhosphoFormatSpecificFiltering(DATA, "diann",
+  list(qvalueFilter = FALSE, minPeptides = 0))
+
+dataSet <- PerformNormalization(DATA, "logMedian", 15, 0, "true", "false",
+                                "sum", "true", 50, "none", "__manual__")
+dataSet <- ImputeMissingVarPhospho(DATA, "min")   # note: phospho variant
+
+# design + limma DE (phospho metadata keeps the "Group" column)
+SetSelectedMetaInfo(DATA, "Group", "NA", FALSE)
+dataSet <- SetupDesignMatrix(DATA, "limma")
+dataSet <- PerformDEAnal(DATA, "custom", "CTL vs. DRUG", "NA", "intonly", FALSE)
+dataSet <- GetSigfeatures(DATA, "Result_1", 0.05, 0.0, 1, "true")
+dataSet <- MapPhosphositeUniprotToSymbol()
+
+WriteAnalysisSummary("analysis_summary.txt")
+```
+
+Expected result (limma, CTL vs DRUG): **9844 sites tested, 2291 significant** at
+`adj.P.Val < 0.05` (up 1191 / down 1100).
+
+### Phosphosite enrichment
+
+Kinase, compartment, and motif enrichment run from the DE result once
+`paramSet$lib.path` points at the annotation `db/` (which holds
+`ksea/NetworKIN_uniprot_hsa.qs` and `hsa/hsa_localization.qs`):
+
+```{r phos-enrich, eval = FALSE}
+paramSet <- readSet(paramSet, "paramSet")
+paramSet$lib.path <- paste0(Sys.getenv("OMICS_LIB_DIR"), "/")   # dir with ksea/ and hsa/
+saveSet(paramSet, "paramSet")
+
+PerformKinaseEnrichment(DATA, "networkin")   # -> kinase_enrichment.csv
+PerformCompartmentEnrichment(DATA)           # -> compartment_enrichment.csv
+PerformMotifEnrichment(DATA)                 # -> motif_enrichment.csv
+
+WriteAnalysisSummary("analysis_summary.txt") # refresh so enrichment sections appear
+```
+
+- **Kinase enrichment** runs against NetworKIN (175 kinases; top hit NEK2,
+  ORA p 9.9e-6, FDR 0.0015). Needs `<lib.path>/ksea/NetworKIN_uniprot_hsa.qs`.
+- **Compartment enrichment** tests broad subcellular compartments (7 compartments;
+  Cytoskeleton FDR 2.1e-5 and Cell surface & adhesion FDR 0.013 are enriched).
+  Needs `<lib.path>/hsa/hsa_localization.qs`; if that file is absent the call
+  returns cleanly without a compartment section.
+- **Motif enrichment** is self-contained (it reads the `SequenceWindow` column);
+  8 broad motif classes are tested.
+
+Each enrichment section in `analysis_summary.txt` records the number of
+significant phosphosites tested, the DE-significance definition, the measured
+background and its size, and the BH-FDR cutoff, for example:
+
+```
+== Kinase Enrichment ==
+Number of kinases tested:         175
+Significant phosphosites tested:  2291
+DE significance definition:       FDR-adjusted p < 0.05
+Enrichment background:            9844 quantified phosphosites
+Enrichment significance cutoff:   BH-FDR < 0.05
+```
+
+## What `analysis_summary.txt` records
+
+`WriteAnalysisSummary()` reconstructs one section per analysis that has been run
+from the persisted session state, so the file always reflects what you did. For
+the differential-expression and enrichment steps it states, explicitly: the
+number of features / sites tested, the raw and adjusted (BH-FDR) p-value
+columns, the FDR threshold, the fold-change threshold, the enrichment
+multiple-testing correction, and the background/universe used for enrichment
+(the measured proteome / phosphoproteome). It is offered for download from the
+application's Downloads page and is written to the working directory here.
+
+

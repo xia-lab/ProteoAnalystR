@@ -959,14 +959,14 @@ CollapsePhosphoToProtein <- function() {
   # Determine statistic for collapsing
   msg("[CollapsePhosphoToProtein] Determining statistic for site selection...")
 
-  if (!is.null(paramSet$sig.mat) && "t" %in% colnames(paramSet$sig.mat)) {
-    msg("[CollapsePhosphoToProtein] Found DE test statistics in paramSet$sig.mat")
+  if (!is.null(dataSet$sig.mat) && "t" %in% colnames(dataSet$sig.mat)) {
+    msg("[CollapsePhosphoToProtein] Found DE test statistics in dataSet$sig.mat")
 
-    common_sites <- intersect(rownames(phospho_mat), rownames(paramSet$sig.mat));
+    common_sites <- intersect(rownames(phospho_mat), rownames(dataSet$sig.mat));
     msg("[CollapsePhosphoToProtein] Matched ", length(common_sites), " sites with DE statistics")
 
     if (length(common_sites) > 0) {
-      stat_vec <- abs(paramSet$sig.mat[common_sites, "t"]);
+      stat_vec <- abs(dataSet$sig.mat[common_sites, "t"]);
       names(stat_vec) <- common_sites;
 
       # Create stat_vec for all sites

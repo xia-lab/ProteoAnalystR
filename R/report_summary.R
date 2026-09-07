@@ -84,9 +84,13 @@
   # 12 missing-count.  (See data_idanot_utils.R.)
   gsv <- function(i) if (!is.null(sv) && length(sv) >= i) sv[[i]] else "NA"
 
-  # dataSet$type is the reliable per-dataset type ("prot"/"count"/"array");
-  # paramSet$data.type is only set for some flows (e.g. "phospho").
-  data.type <- as.character(.pa_g(dataSet, "type", .pa_g(paramSet, "data.type")))
+  # paramSet$data.type == "phospho" is set by ReadPhosphoData and is the
+  # authoritative modality signal for a phosphosite run; dataSet$type stays
+  # "prot" there, so it must be checked first. Otherwise dataSet$type is the
+  # reliable per-dataset type ("prot"/"count"/"array").
+  is.phospho <- identical(as.character(.pa_g(paramSet, "data.type", "")), "phospho")
+  data.type <- if (is.phospho) "phospho"
+               else as.character(.pa_g(dataSet, "type", .pa_g(paramSet, "data.type")))
   data.type.readable <- switch(data.type,
                                prot    = "Proteomics data",
                                count   = "RNA-seq count data",
@@ -94,7 +98,7 @@
                                phospho = "Phosphoproteomics data",
                                data.type)
   data.format <- tolower(paste(as.character(.pa_g(paramSet, "data.format", "")), collapse = ""))
-  quant <- if (grepl("phospho", data.format)) "Phosphosite-level" else
+  quant <- if (is.phospho || grepl("phospho", data.format)) "Phosphosite-level" else
            if (grepl("peptide", data.format)) "Peptide-level" else "Protein-level"
 
   miss.pct <- "NA"
@@ -389,6 +393,40 @@
     .pa_line("Multiple-testing correction", "Benjamini-Hochberg (FDR)"))
 }
 
+## ---- Shared phospho-enrichment reporting lines -------------------------
+## The kinase / compartment / motif enrichment tables all carry the
+## standardized statistics-reporting columns attached by
+## .annotateEnrichReport() (phospho_enrich_utils.R): N_Sig_Tested, N_Background,
+## DE_Sig_Type, DE_Sig_Cutoff, DE_log2FC_Cutoff, Enrich_FDR_Cutoff. Each is a
+## per-run constant repeated on every row, so the first row carries the value.
+## This mirrors, in the downloadable report, exactly what the enrichment tabs
+## display in the UI (number of significant sites tested, the DE-significance
+## definition that built the input set, the measured background and its size,
+## and the BH-FDR enrichment cutoff).
+.pa_enrich_meta_lines <- function(df, bg.label = "measured phosphosites") {
+  d <- tryCatch(as.data.frame(df), error = function(e) NULL)
+  if (is.null(d) || nrow(d) == 0) return(NULL)
+  g1 <- function(col) if (col %in% colnames(d)) d[[col]][1] else NULL
+
+  n.tested <- g1("N_Sig_Tested")
+  n.bg     <- g1("N_Background")
+  sig.type <- g1("DE_Sig_Type")
+  sig.cut  <- g1("DE_Sig_Cutoff")
+  fc.cut   <- suppressWarnings(as.numeric(g1("DE_log2FC_Cutoff")))
+  enr.fdr  <- g1("Enrich_FDR_Cutoff")
+
+  sig.def <- if (!is.null(sig.type) && !is.null(sig.cut)) {
+    fc.txt <- if (length(fc.cut) == 1 && !is.na(fc.cut) && fc.cut > 0)
+                paste0(", |log2FC| > ", signif(fc.cut, 3)) else ""
+    paste0(sig.type, " p < ", sig.cut, fc.txt)
+  } else NULL
+
+  c(if (!is.null(n.tested)) .pa_line("Significant phosphosites tested", n.tested),
+    if (!is.null(sig.def))  .pa_line("DE significance definition", sig.def),
+    if (!is.null(n.bg))     .pa_line("Enrichment background", paste0(n.bg, " ", bg.label)),
+    if (!is.null(enr.fdr))  .pa_line("Enrichment significance cutoff", paste0("BH-FDR < ", enr.fdr)))
+}
+
 ## ---- Kinase enrichment (phospho) ---------------------------------------
 .pa_kinase_section <- function(analSet) {
   ke <- .pa_g(analSet, "kinase.enrich", NULL)
@@ -412,11 +450,46 @@
 
   c("== Kinase Enrichment ==",
     .pa_line("Number of kinases tested", .pa_nrow(ke)),
+    .pa_enrich_meta_lines(ke, bg.label = "quantified phosphosites"),
     .pa_line("Raw p-value column", if (length(pcol)) pcol[1] else "P_value"),
     .pa_line("Adjusted p-value column", if (length(apcol)) apcol[1] else "FDR"),
     .pa_line("Multiple-testing correction", "Benjamini-Hochberg (FDR)"),
     .pa_line("Background set", "all quantified phosphosites"),
     ksea.lines)
+}
+
+## ---- Cellular-compartment enrichment (phospho) -------------------------
+.pa_compartment_section <- function(analSet) {
+  ce <- .pa_g(analSet, "comp.enrich", NULL)
+  if (is.null(ce)) return(NULL)
+  cn <- tryCatch(colnames(as.data.frame(ce)), error = function(e) character())
+  pcol  <- intersect(c("P_value", "Pval", "P.Value", "pvalue"), cn)
+  apcol <- intersect(c("FDR", "adj.P.Val", "padj"), cn)
+
+  c("== Cellular-Compartment Enrichment ==",
+    .pa_line("Number of compartments tested", .pa_nrow(ce)),
+    .pa_enrich_meta_lines(ce, bg.label = "phosphosites with compartment mapping"),
+    .pa_line("Raw p-value column", if (length(pcol)) pcol[1] else "P_value"),
+    .pa_line("Adjusted p-value column", if (length(apcol)) apcol[1] else "FDR"),
+    .pa_line("Test", "hypergeometric / one-sided Fisher's exact (phyper)"),
+    .pa_line("Multiple-testing correction", "Benjamini-Hochberg (FDR)"))
+}
+
+## ---- Motif / sequence-context enrichment (phospho) ---------------------
+.pa_motif_section <- function(analSet) {
+  me <- .pa_g(analSet, "motif.enrich", NULL)
+  if (is.null(me)) return(NULL)
+  cn <- tryCatch(colnames(as.data.frame(me)), error = function(e) character())
+  pcol  <- intersect(c("P_value", "Pval", "P.Value", "pvalue"), cn)
+  apcol <- intersect(c("FDR", "adj.P.Val", "padj"), cn)
+
+  c("== Motif / Sequence-Context Enrichment ==",
+    .pa_line("Number of motif classes tested", .pa_nrow(me)),
+    .pa_enrich_meta_lines(me, bg.label = "phosphosites with usable sequence context"),
+    .pa_line("Raw p-value column", if (length(pcol)) pcol[1] else "P_value"),
+    .pa_line("Adjusted p-value column", if (length(apcol)) apcol[1] else "FDR"),
+    .pa_line("Test", "hypergeometric / one-sided Fisher's exact (phyper)"),
+    .pa_line("Multiple-testing correction", "Benjamini-Hochberg (FDR)"))
 }
 
 ## ---- Biomarker / ROC ----------------------------------------------------
@@ -519,6 +592,8 @@ WriteAnalysisSummary <- function(out.file = "analysis_summary.txt") {
     body <- add(body, .pa_enrich_section(paramSet, analSet))
     body <- add(body, .pa_gsea_section(paramSet))
     body <- add(body, .pa_kinase_section(analSet))
+    body <- add(body, .pa_compartment_section(analSet))
+    body <- add(body, .pa_motif_section(analSet))
     body <- add(body, .pa_biomarker_section(analSet, dataSet))
     body <- add(body, .pa_network_section(paramSet, analSet))
     body <- add(body, .pa_coexp_section(paramSet))

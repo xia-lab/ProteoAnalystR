@@ -2072,11 +2072,6 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
   }
 }
 
-GetPcaOutliers <- function(){
-    paramSet <- readSet(paramSet, "paramSet")
-    return(paramSet$pca.outliers);
-}
-
 PlotDataNcov5 <- function(fileName, imgName, dpi, format){
   dataSet <- readDataset(fileName)
   if (is.null(dataSet$summary_df)) {

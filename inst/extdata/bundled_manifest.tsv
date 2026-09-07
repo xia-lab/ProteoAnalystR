@@ -1,0 +1,5 @@
+dataset	role	modality	tool	organism	design	format	relative_path
+fragpipe_proteomics	input	proteomics (protein LFQ)	FragPipe	human	IDHmut vs IDHwt (3 vs 3)	FragPipe combined_protein.tsv (MaxLFQ)	bundled/fragpipe_lfq_combined_protein.tsv
+fragpipe_proteomics	metadata	proteomics (protein LFQ)	FragPipe	human	IDHmut vs IDHwt (3 vs 3)	FragPipe experiment_annotation.tsv	bundled/fragpipe_lfq_annotation.tsv
+diann_phospho	input	phosphoproteomics (site)	DIA-NN	human	CTL vs DRUG (4 vs 4)	DIA-NN phospho report (site table with SequenceWindow)	bundled/diann_phospho_example.tsv
+diann_phospho	metadata	phosphoproteomics (site)	DIA-NN	human	CTL vs DRUG (4 vs 4)	metadata (#NAME/Group/Replicate)	bundled/diann_phospho_metadata.txt

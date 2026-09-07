@@ -371,7 +371,7 @@ CorrIgraph2SigmaJS <- function(g,
   # If any nodes still lack compartment info, try loading localization file
   missing.cats <- node.categories == "Unknown"
   if (any(missing.cats)) {
-    org <- if (!is.null(paramSet$org)) paramSet$org else "hsa"
+    org <- if (!is.null(paramSet$data.org) && nzchar(paramSet$data.org)) paramSet$data.org else "hsa"
     loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
     if (file.exists(loc.path)) {
       tryCatch({

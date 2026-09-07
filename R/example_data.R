@@ -134,3 +134,79 @@ fetch_example_data <- function(dataset = c("maxquant", "spectronaut", "ptm"),
   if (file.exists(tmp)) unlink(tmp)
   FALSE
 }
+
+# =============================================================================
+# Bundled (shipped-in-package) example datasets. Unlike the benchmark deposits
+# above, these two are small enough to ship inside the package, so they are
+# available immediately with no download. They exist so a user can install the
+# package and replay a full input -> normalize -> differential-expression run on
+# real data (see vignette "replay-example-datasets"). One protein-level
+# proteomics set (FragPipe LFQ) and one phosphosite set (DIA-NN) cover the two
+# supported modalities and two different upstream tools.
+# =============================================================================
+
+.bundled_manifest_path <- function() {
+  p <- system.file("extdata", "bundled_manifest.tsv", package = "ProteoAnalystR")
+  if (!nzchar(p)) p <- file.path("inst", "extdata", "bundled_manifest.tsv")  # dev fallback
+  p
+}
+
+.read_bundled_manifest <- function() {
+  p <- .bundled_manifest_path()
+  if (!file.exists(p)) stop("Bundled manifest not found: ", p)
+  utils::read.delim(p, stringsAsFactors = FALSE)
+}
+
+#' List the datasets bundled inside the package
+#'
+#' Returns a data frame describing the small example datasets shipped in the
+#' package (one FragPipe LFQ proteomics set, one DIA-NN phosphosite set). Unlike
+#' \code{\link{list_example_datasets}} (large public benchmarks fetched on
+#' demand), these are available immediately via \code{\link{bundled_example}}.
+#'
+#' @return A data frame with one row per file (dataset, role, modality, tool,
+#'   organism, design, format, relative_path).
+#' @seealso \code{\link{bundled_example}} to get their file paths.
+#' @export
+list_bundled_datasets <- function() {
+  .read_bundled_manifest()
+}
+
+#' Locate a bundled example dataset's files
+#'
+#' Returns local file paths to a dataset shipped inside the package. No download
+#' occurs; the files are read straight from the installed package via
+#' \code{system.file()}, so this works fully offline.
+#'
+#' @param dataset One of "fragpipe_proteomics" (FragPipe LFQ protein matrix,
+#'   human, IDHmut vs IDHwt) or "diann_phospho" (DIA-NN phosphosite report,
+#'   human, CTL vs DRUG).
+#' @param roles Which file roles to return. Default: both the analysis input and
+#'   its metadata annotation. Use \code{NULL} or "all" for every role.
+#' @return A named character vector of file paths (names = roles).
+#' @examples
+#'   f <- bundled_example("fragpipe_proteomics")
+#'   f[["input"]]     # -> .../fragpipe_lfq_combined_protein.tsv
+#'   f[["metadata"]]  # -> .../fragpipe_lfq_annotation.tsv
+#' @seealso \code{\link{list_bundled_datasets}}; the vignette
+#'   "replay-example-datasets" runs these end to end.
+#' @export
+bundled_example <- function(dataset = c("fragpipe_proteomics", "diann_phospho"),
+                            roles = c("input", "metadata")) {
+  dataset <- match.arg(dataset)
+  mf <- .read_bundled_manifest()
+  sub <- mf[mf$dataset == dataset, , drop = FALSE]
+  if (!is.null(roles) && !identical(roles, "all")) {
+    sub <- sub[sub$role %in% roles, , drop = FALSE]
+  }
+  if (nrow(sub) == 0) stop("No files for bundled dataset '", dataset,
+                           "' with roles: ", paste(roles, collapse = ", "))
+  out <- vapply(sub$relative_path, function(rp) {
+    p <- system.file("extdata", rp, package = "ProteoAnalystR")
+    if (!nzchar(p)) p <- file.path("inst", "extdata", rp)  # dev fallback
+    if (!file.exists(p)) stop("Bundled file missing from install: ", rp)
+    normalizePath(p)
+  }, character(1))
+  names(out) <- sub$role
+  out
+}

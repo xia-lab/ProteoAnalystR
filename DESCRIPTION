@@ -37,7 +37,9 @@ Suggests:
     patchwork, PhosR, MSstatsPTM, backbone,
     multiUS, SeqKnn, rrcovNA,
     callr, BiocManager,
-    testthat
+    testthat,
+    knitr, rmarkdown
+VignetteBuilder: knitr
 Remotes:
     github::xia-lab/XiaLabCppLib
 Roxygen: list(markdown = TRUE)

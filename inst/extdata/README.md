@@ -1,3 +1,37 @@
+# ProteoAnalystR example datasets
+
+This directory ships two kinds of example data:
+
+1. **Bundled datasets** (`bundled/`) — two small, self-contained datasets that
+   are shipped *inside* the package, available offline with no download. They
+   let a user install the package and replay a full
+   input → normalize → differential-expression run on real data. Walked through
+   end to end in the vignette **`replay-example-datasets`**.
+2. **Benchmark datasets** (`benchmark_manifest.tsv`) — the large public
+   controlled-mixture / spike-in deposits, fetched on demand (below).
+
+## Bundled datasets (shipped in the package)
+
+Small enough to ship in the package; accessed via `bundled_example()` — no
+download. Two modalities, two different upstream tools.
+
+| dataset | modality / tool | organism | design | files |
+|---|---|---|---|---|
+| `fragpipe_proteomics` | proteomics (protein LFQ) / **FragPipe** | human | IDHmut vs IDHwt (3 vs 3) | `bundled/fragpipe_lfq_combined_protein.tsv` + `bundled/fragpipe_lfq_annotation.tsv` |
+| `diann_phospho`       | phosphoproteomics (site) / **DIA-NN** | human | CTL vs DRUG (4 vs 4)     | `bundled/diann_phospho_example.tsv` + `bundled/diann_phospho_metadata.txt` |
+
+```r
+library(ProteoAnalystR)
+list_bundled_datasets()                 # describe the two
+f <- bundled_example("fragpipe_proteomics")
+f[["input"]]; f[["metadata"]]           # local paths, offline
+```
+
+Registry: `bundled_manifest.tsv`. See the `replay-example-datasets` vignette for
+the full replay recipe (reader → normalization → DE → `analysis_summary.txt`).
+
+---
+
 # ProteoAnalystR benchmark example datasets
 
 These are the public controlled-mixture / spike-in datasets used to benchmark

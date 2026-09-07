@@ -1,0 +1,4 @@
+# compiled objects
+src/*.so
+src/*.o
+src/*.dll

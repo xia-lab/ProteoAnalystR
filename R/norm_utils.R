@@ -945,6 +945,10 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     data <- normalize.quantiles(as.matrix(data), copy=TRUE);
     msg <- paste(msg, "Quantile normalization.", collapse=" ");
   }else if(norm.opt=="combined"){
+    # Retired: VSN followed by quantile is no longer offered in the interface. Stacking
+    # the two is a double correction with no published basis, and upstream search engines
+    # already normalize. The branch is kept only so that projects saved with
+    # norm.opt = "combined" still reload; nothing in the UI can select it.
     require(limma);
     data <- tryCatch(
       normalizeVSN(data),
@@ -1005,13 +1009,23 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
     norm.data[data<0] <- - norm.data[data<0];
     data <- norm.data;
   }else if(norm.opt=='Rlr'){
+    # The fitted matrix has to be written back to data. Assigning only to a local
+    # norm.data made this branch a silent no-op: the message claimed RLR ran while
+    # the log2 matrix was returned unchanged.
     norm.data <- RLRNorm(data)
+    dimnames(norm.data) <- dimnames(data);
+    data <- norm.data;
     msg <- paste(msg, "Performed Linear Regression Normalization.", collapse=" ");
   }else if(norm.opt=='Loess'){
     norm.data <- LoessNorm(data)
+    dimnames(norm.data) <- dimnames(data);
+    data <- norm.data;
     msg <- paste(msg, "Performed Local Regression Normalization.", collapse=" ");
   }else if(norm.opt=='EigenMS'){
-     msg <- paste(msg, "Performed EigenMS Normalization.", collapse=" ");
+     # No EigenMS implementation is wired up here. Fail loudly rather than return
+     # the input unchanged under a message saying it was normalized.
+     AddErrMsg("EigenMS normalization is not available. Please choose another normalization method.");
+     return(0);
   }else if(norm.opt=='median'){
     data<- apply(data, 2, MedianNorm);
     msg <- paste(msg, "Normalization to sample median.", collapse=" ");
@@ -2743,8 +2757,13 @@ SampleNorm_Specific <- function(data, paramSet, sampleNormParam = "__manual__") 
     }
   }
  
-  if (is.null(norm_vec) && !is.null(paramSet$meta.info)) {
-    meta <- paramSet$meta.info
+  # sample metadata lives on the dataset, not paramSet; resolve via the current dataName
+  meta <- paramSet$meta.info
+  if (is.null(meta) && !is.null(paramSet$dataName)) {
+    ds <- try(readDataset(paramSet$dataName), silent = TRUE)
+    if (!inherits(ds, "try-error") && !is.null(ds$meta.info)) meta <- ds$meta.info
+  }
+  if (is.null(norm_vec) && !is.null(meta)) {
     sample_names <- colnames(data)
     
     meta_sample_col <- if ("Sample" %in% colnames(meta)) "Sample" else NULL
@@ -4202,48 +4221,74 @@ DetectPTMOccupancy <- function(dataName) {
     grp.seq[grp.sig != "unmodified"]
   )
 
-  results.list <- lapply(seqs.with.both, function(sq) {
-    int.unmod <- grp.sum[paste0(sq, "___unmodified"), ]
-    mod.sigs  <- unique(mod.sigs.by.seq[[sq]])
+  logit <- function(p) log((p + 1e-6) / (1 - p + 1e-6))
 
-    lapply(mod.sigs, function(sig) {
+  pair.list <- list()
+  for (sq in seqs.with.both) {
+    int.unmod <- grp.sum[paste0(sq, "___unmodified"), ]
+    for (sig in unique(mod.sigs.by.seq[[sq]])) {
       int.mod   <- grp.sum[paste0(sq, "___", sig), ]
       total.int <- int.unmod + int.mod
       occ <- ifelse(is.na(int.unmod) | is.na(int.mod) | total.int == 0,
                     NA_real_, int.mod / total.int)
+      if (sum(!is.na(occ[g1.idx])) < 2 || sum(!is.na(occ[g2.idx])) < 2) next
+      pair.list[[paste0(sq, "___", sig)]] <-
+        list(sq = sq, sig = sig, occ = occ, total.log = log2(total.int + 1))
+    }
+  }
+  if (length(pair.list) == 0)
+    return(fail(paste0(
+      "Insufficient data for PTM occupancy analysis. ",
+      "Need \u22652 samples with both modified and unmodified forms detected per condition."
+    )))
 
-      valid.g1 <- occ[g1.idx][!is.na(occ[g1.idx])]
-      valid.g2 <- occ[g2.idx][!is.na(occ[g2.idx])]
-      if (length(valid.g1) < 2 || length(valid.g2) < 2) return(NULL)
+  # Moderated test: limma eBayes shrinks each pair's variance toward the
+  # cross-pair trend, recovering small-sample power a per-pair t-test cannot
+  # reach; validated on the semi-synthetic occupancy mixture. Falls back to
+  # per-pair Welch t-tests if the moderated fit is not possible.
+  occ.mat   <- do.call(rbind, lapply(pair.list, `[[`, "occ"))
+  total.mat <- do.call(rbind, lapply(pair.list, `[[`, "total.log"))
+  design    <- cbind(Intercept = 1, G2 = as.numeric(g2.idx))
+  mod.p <- function(mat) {
+    require(limma)
+    fit <- lmFit(mat, design)
+    fit <- tryCatch(eBayes(fit, robust = TRUE), error = function(e) eBayes(fit))
+    fit$p.value[, "G2"]
+  }
+  welch.p <- function(mat, trans = identity) vapply(seq_len(nrow(mat)), function(i) {
+    v1 <- mat[i, g1.idx]; v2 <- mat[i, g2.idx]
+    tryCatch(t.test(trans(v1[!is.na(v1)]), trans(v2[!is.na(v2)]))$p.value,
+             error = function(e) NA_real_)
+  }, numeric(1))
+  occ.p <- tryCatch(mod.p(logit(occ.mat)), error = function(e) NULL)
+  tot.p <- tryCatch(mod.p(total.mat),      error = function(e) NULL)
+  if (is.null(occ.p)) { message("[PTMOccupancy] limma unavailable; Welch fallback (occupancy)"); occ.p <- welch.p(occ.mat, logit) }
+  if (is.null(tot.p)) { message("[PTMOccupancy] limma unavailable; Welch fallback (total)");     tot.p <- welch.p(total.mat) }
+  message("[PTMOccupancy] moderated test over ", length(pair.list), " pairs")
 
-      logit <- function(p) log((p + 1e-6) / (1 - p + 1e-6))
-      tt.occ  <- tryCatch(t.test(logit(valid.g1), logit(valid.g2)), error = function(e) NULL)
-      if (is.null(tt.occ)) return(NULL)
-
-      total.log <- log2(total.int + 1)
-      tt.total  <- tryCatch(t.test(total.log[g1.idx], total.log[g2.idx]), error = function(e) NULL)
-
-      data.frame(
-        Gene             = gene.for.seq[sq],
-        Peptide          = sq,
-        Modification     = ptm.format.mod.name(strsplit(sig, "+", fixed = TRUE)[[1]]),
-        Mod.Sig          = sig,
-        Precursors.Unmod = as.integer(prec.count[paste0(sq, "___unmodified")]),
-        Precursors.Mod   = as.integer(prec.count[paste0(sq, "___", sig)]),
-        Occupancy.Cond1  = round(mean(valid.g1), 3),
-        Occupancy.Cond2  = round(mean(valid.g2), 3),
-        Delta.Occupancy  = round(mean(valid.g2) - mean(valid.g1), 3),
-        Occ.Pvalue       = signif(tt.occ$p.value, 3),
-        Total.Pvalue     = if (!is.null(tt.total)) signif(tt.total$p.value, 3) else NA_real_,
-        Total.LogFC      = round(mean(total.log[g2.idx]) - mean(total.log[g1.idx]), 3),
-        stringsAsFactors = FALSE
-      )
-    })
-  })
-
-  results <- do.call(rbind, Filter(Negate(is.null),
-                                   unlist(results.list, recursive = FALSE)))
-  if (is.null(results) || nrow(results) == 0)
+  results <- do.call(rbind, lapply(seq_along(pair.list), function(i) {
+    pr <- pair.list[[i]]
+    valid.g1 <- pr$occ[g1.idx][!is.na(pr$occ[g1.idx])]
+    valid.g2 <- pr$occ[g2.idx][!is.na(pr$occ[g2.idx])]
+    data.frame(
+      Gene             = gene.for.seq[pr$sq],
+      Peptide          = pr$sq,
+      Modification     = ptm.format.mod.name(strsplit(pr$sig, "+", fixed = TRUE)[[1]]),
+      Mod.Sig          = pr$sig,
+      Precursors.Unmod = as.integer(prec.count[paste0(pr$sq, "___unmodified")]),
+      Precursors.Mod   = as.integer(prec.count[paste0(pr$sq, "___", pr$sig)]),
+      Occupancy.Cond1  = round(mean(valid.g1), 3),
+      Occupancy.Cond2  = round(mean(valid.g2), 3),
+      Delta.Occupancy  = round(mean(valid.g2) - mean(valid.g1), 3),
+      Occ.Pvalue       = signif(occ.p[i], 3),
+      Total.Pvalue     = if (!is.na(tot.p[i])) signif(tot.p[i], 3) else NA_real_,
+      Total.LogFC      = round(mean(pr$total.log[g2.idx], na.rm = TRUE) -
+                               mean(pr$total.log[g1.idx], na.rm = TRUE), 3),
+      stringsAsFactors = FALSE
+    )
+  }))
+  results <- results[!is.na(results$Occ.Pvalue), , drop = FALSE]
+  if (nrow(results) == 0)
     return(fail(paste0(
       "Insufficient data for PTM occupancy analysis. ",
       "Need \u22652 samples with both modified and unmodified forms detected per condition."

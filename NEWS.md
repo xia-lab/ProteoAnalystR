@@ -1,5 +1,36 @@
 # ProteoAnalystR NEWS
 
+## Unreleased
+
+### Statistics
+- `DetectPTMOccupancy()`: the per-pair Welch t-test on logit occupancies is
+  replaced by a limma-moderated test (lmFit + eBayes robust across all
+  mod/unmod pairs; Welch fallback if limma is unavailable). The occupancy
+  estimator is unchanged. On the semi-synthetic occupancy mixture this raises
+  BH-FDR power at |delta occupancy| = 0.1/0.2 from 0.18/0.51 to 0.49/0.95
+  while keeping null FPR (BH 0.011) and abundance-confounded calls (BH 0.018)
+  under the nominal 5%. The parallel total-abundance test is moderated the
+  same way.
+
+### Reproducibility & examples
+- Bundled two small, self-contained example datasets in the package
+  (`inst/extdata/bundled/`), accessible offline via `bundled_example()` and
+  described by `list_bundled_datasets()`: `fragpipe_proteomics` (FragPipe LFQ
+  protein matrix, human, IDHmut vs IDHwt) and `diann_phospho` (DIA-NN
+  phosphosite report, human, CTL vs DRUG). Two modalities, two upstream tools.
+- New vignette `replay-example-datasets` walks a user from a bundled input
+  through reader → normalization → differential expression →
+  `analysis_summary.txt`, so the package can be installed and the analyses
+  replayed locally.
+
+### Analysis summary report
+- `WriteAnalysisSummary()` now emits dedicated **Cellular-Compartment
+  Enrichment** and **Motif / Sequence-Context Enrichment** sections (previously
+  only Kinase enrichment was reported), and the Kinase section now states the
+  number of significant phosphosites tested, the DE-significance definition, the
+  measured background size, and the enrichment FDR cutoff — matching what the
+  enrichment tabs show in the UI.
+
 ## Version 1.0.0 — 2026-08 (manuscript release)
 
 First versioned, installable release of the ProteoAnalyst analysis backend,

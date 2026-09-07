@@ -279,13 +279,27 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   # camelCase toggle that SetUniverseOpt never wrote.
   universeOpt <- if (!is.null(paramSet$universe.opt)) paramSet$universe.opt else "uploaded"
   if (universeOpt == "uploaded") {
-    all.vec    <- rownames(dataSet$norm.mat)
+    all.vec    <- rownames(dataSet$data.norm)
+    if (is.null(all.vec) || length(all.vec) == 0) all.vec <- rownames(dataSet$comp.res)
+    if (is.null(all.vec)) all.vec <- character(0)
     all.vec    <- sub("_[A-Z]_\\d+$", "", all.vec)
     all.vec    <- sub("-\\d+$", "", all.vec)
     all.vec    <- unique(trimws(all.vec))
     hit.inx2   <- match(all.vec, uniprot.map[, "accession"])
     all.entrez <- unique(uniprot.map[hit.inx2, "gene_id"])
     all.entrez <- all.entrez[!is.na(all.entrez)]
+    if (length(all.entrez) == 0) {
+      # No measured proteome to draw a universe from (e.g. protein-list uploads
+      # carry only sig.mat, no quantitative matrix) -- fall back to the full
+      # enrichment library as the background instead of failing.
+      all.entrez <- unique(unlist(current.featureset))
+      msgSet$current.msg <- paste0("No measured proteome is available to serve as the background universe; ",
+                                   "the full KEGG pathway library was used as the background instead.")
+      saveSet(msgSet, "msgSet")
+    } else {
+      # the hit set must be part of the universe or the hypergeometric test is ill-posed
+      all.entrez <- unique(c(all.entrez, sig.entrez))
+    }
   } else {
     all.entrez <- unique(unlist(current.featureset))
   }
@@ -627,6 +641,46 @@ GetEnzymeHitsSymbols <- function(pathwayQuery) {
   paramSet <- readSet(paramSet, "paramSet")
   sym.vec <- doEntrez2SymbolMapping(entrez.ids, paramSet$data.org, "entrez")
   return(unique(sym.vec[!is.na(sym.vec) & nchar(trimws(sym.vec)) > 0]))
+}
+
+.getEnzymePathwayHitEntrez <- function(pathwayQuery) {
+  if (!exists("ora.enzyme.hits.list") || length(ora.enzyme.hits.list) == 0) return(character(0))
+  if (pathwayQuery %in% names(ora.enzyme.hits.list)) {
+    return(as.character(ora.enzyme.hits.list[[pathwayQuery]]))
+  }
+  if (exists("ora.enzyme.kegg.ids") && exists("ora.enzyme.paths") &&
+      pathwayQuery %in% ora.enzyme.kegg.ids) {
+    path.name <- ora.enzyme.paths[match(pathwayQuery, ora.enzyme.kegg.ids)]
+    if (!is.na(path.name) && path.name %in% names(ora.enzyme.hits.list)) {
+      return(as.character(ora.enzyme.hits.list[[path.name]]))
+    }
+  }
+  return(character(0))
+}
+
+GetEnzymePathwayHeatmapJSON <- function(dataName = "", pathwayQuery = "") {
+  empty <- rjson::toJSON(list(status = "empty", rows = list(), cols = list(), values = list()))
+  entrez.ids <- .getEnzymePathwayHitEntrez(pathwayQuery)
+  if (length(entrez.ids) == 0) return(empty)
+
+  dataSet <- readDataset(dataName)
+  if (is.null(dataSet$data.norm)) return(empty)
+
+  paramSet <- readSet(paramSet, "paramSet")
+  uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
+  if (is.null(uniprot.map)) return(empty)
+  acc.vec <- unique(as.character(uniprot.map[as.character(uniprot.map[, "gene_id"]) %in% entrez.ids, "accession"]))
+  acc.vec <- acc.vec[!is.na(acc.vec) & nchar(trimws(acc.vec)) > 0]
+  if (length(acc.vec) == 0) return(empty)
+
+  # match against data features tolerating phosphosite/isoform suffixes (same stripping as ORA input)
+  feat.ids <- rownames(dataSet$data.norm)
+  base.ids <- sub("_[A-Z]_\\d+$", "", feat.ids)
+  base.ids <- trimws(sub("-\\d+$", "", base.ids))
+  hit.feats <- feat.ids[base.ids %in% acc.vec]
+  if (length(hit.feats) == 0) return(empty)
+
+  GetVolcanoPathwayHeatmapJSON(dataName, paste(hit.feats, collapse = ";"))
 }
 
 GetEnzymeHitsCompartmentsJson <- function(pathwayQuery) {

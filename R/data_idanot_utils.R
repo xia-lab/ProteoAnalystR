@@ -1089,9 +1089,26 @@ queryGeneDB <- function(db.nm, org){
     return(rep(NA_character_, length(entrez.vec)))
   }
   by.gene <- split(as.character(db.map$accession), as.character(db.map$gene_id))
+  # Reviewed (Swiss-Prot) accessions win over the length/prefix heuristic:
+  # entrez_uniprot mixes reviewed and TrEMBL rows with no flag, and 6-char TrEMBL
+  # ids can sort ahead of the reviewed entry (e.g. PLIN2: Q5SYF3 < Q99541).
+  # entrez_swissprot carries the reviewed set; absent (non-human orgs) it is
+  # skipped and the heuristic alone applies. User-uploaded ids (prefer) still win.
+  sp.map <- queryGeneDB("entrez_swissprot", org)
+  by.gene.sp <- if (is.data.frame(sp.map) && nrow(sp.map) > 0 &&
+                    all(c("gene_id", "accession") %in% colnames(sp.map))) {
+    split(as.character(sp.map$accession), as.character(sp.map$gene_id))
+  } else NULL
   vapply(as.character(entrez.vec), function(g) {
     a <- by.gene[[g]]
-    if (is.null(a)) NA_character_ else .paPickCanonicalUniprot(a, prefer)
+    if (is.null(a)) return(NA_character_)
+    if (!is.null(prefer) && any(a %in% prefer)) {
+      a <- a[a %in% prefer]
+    } else if (!is.null(by.gene.sp)) {
+      sp <- a[a %in% by.gene.sp[[g]]]
+      if (length(sp) > 0) a <- sp
+    }
+    .paPickCanonicalUniprot(a, prefer)
   }, character(1), USE.NAMES = FALSE)
 }
 

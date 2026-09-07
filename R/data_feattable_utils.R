@@ -47,7 +47,11 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   current.msg <- "";
   
   if (is.null(resTable) || nrow(resTable) == 0){
-    msgSet$current.msg <- paste(msgSet$current.msg, "No significant features were identified using the given design and cutoff.");
+    # No DE result at all (e.g. DE failed or has not finished) -- return the error
+    # sentinel instead of continuing into de.method dispatch with NULL objects.
+    msgSet$current.msg <- paste(msgSet$current.msg, "No differential analysis result is available; please (re)run differential analysis first.");
+    saveSet(msgSet, "msgSet");
+    return(c("error", "0", "0", "0", "0", "0", "0"));
   }
 
   # Add diagnostic logging

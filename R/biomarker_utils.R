@@ -867,7 +867,7 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
 
 #'Remove covariate effects fold-wise (leakage-free)
 #'@description Estimate covariate-removal coefficients from TRAINING samples only
-#' (least-squares fit of expression on the primary condition + covariates), then
+#' (limma::lmFit of expression on the primary condition + covariates), then
 #' subtract the covariate contribution from both the training and the held-out
 #' test samples. The held-out fold contributes only its covariate *values* (used
 #' to build \code{cov.test}); its expression and outcome are never used to fit the
@@ -892,17 +892,19 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
   cov.train.c <- sweep(cov.train, 2, cov.means, "-");
   cov.test.c  <- sweep(cov.test,  2, cov.means, "-");
 
-  # least-squares fit on TRAINING samples only: expression ~ primary + covariates
+  # linear-model fit on TRAINING samples only: expression ~ primary + covariates,
+  # estimated with limma::lmFit (limma models features x samples, so the training
+  # matrix is transposed for the fit and the coefficients transposed back)
   X <- cbind(primary.train, cov.train.c);         # n.train x (p.primary + p.cov)
-  qrX <- qr(X);
-  if(qrX$rank < ncol(X)){
+  if(qr(X)$rank < ncol(X)){
     stop(paste0(
       "Fold-wise covariate adjustment is not estimable in this training split. ",
       "Ensure every categorical covariate level is represented in training and ",
       "is not perfectly confounded with the outcome, or reduce the adjustment model."
     ));
   }
-  beta <- qr.coef(qrX, x.train);                  # (p.primary + p.cov) x features
+  fit <- limma::lmFit(t(x.train), design = X);
+  beta <- t(fit$coefficients);                    # (p.primary + p.cov) x features
 
   cov.cols <- (ncol(primary.train) + 1):(ncol(primary.train) + ncol(cov.train));
   beta.cov <- beta[cov.cols, , drop=FALSE];       # p.cov x features
@@ -2303,7 +2305,8 @@ PrepareROCDetails <- function(dataName = "", feat.nm){
     "LRN" = (1-roc.res$sensitivities)/roc.res$specificities
   ));
   
-  filename <- paste(dataSet$url.var.nms[feat.nm], "_roc.csv", sep="");
+  # must match the Java-side link: <feature name with "/" -> "_">_roc.csv (RocAnalBean)
+  filename <- paste(gsub("/", "_", feat.nm, fixed = TRUE), "_roc.csv", sep="");
   fast.write.csv(signif(roc.mat,4), file=filename, row.names=F);
   
   analSet$roc.mat <- signif(roc.mat, 6);
