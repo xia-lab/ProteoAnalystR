@@ -6,11 +6,12 @@
 - `DetectPTMOccupancy()`: the per-pair Welch t-test on logit occupancies is
   replaced by a limma-moderated test (lmFit + eBayes robust across all
   mod/unmod pairs; Welch fallback if limma is unavailable). The occupancy
-  estimator is unchanged. On the semi-synthetic occupancy mixture this raises
-  BH-FDR power at |delta occupancy| = 0.1/0.2 from 0.18/0.51 to 0.49/0.95
-  while keeping null FPR (BH 0.011) and abundance-confounded calls (BH 0.018)
-  under the nominal 5%. The parallel total-abundance test is moderated the
-  same way.
+  estimator is unchanged. On the semi-synthetic occupancy mixture, scored
+  through the production end-to-end run reported in Supporting Information
+  Table S11, this raises BH-FDR power at |delta occupancy| = 0.1/0.2 from
+  0.21/0.54 to 0.54/0.93 and discrimination AUC from 0.958 to 0.972, while
+  keeping null FPR (BH 0.014) and abundance-confounded calls (BH 0.019) under
+  the nominal 5%. The parallel total-abundance test is moderated the same way.
 
 ### Reproducibility & examples
 - Bundled two small, self-contained example datasets in the package
