@@ -161,6 +161,7 @@ GetGroupPalette <- function(groups, paletteOpt = "default") {
 }
 
 PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id = "", format = "png", dpi = 96, paletteOpt = "default", plotType = "boxplot", maxPeptides = 35) {
+  protein.id <- .paStripCompartmentSuffix(protein.id)
   require(ggplot2)
   require(Cairo)
 
@@ -438,6 +439,7 @@ PlotProteinPeptideOverview <- function(dataName = "", imageName = "", protein.id
 
 PlotSelectedGene <-function(dataName="",imageName="", gene.id="", type="notvolcano", format="png", dpi=96, fc = T, plotType = "boxplot", dataType = "default", paletteOpt = "default"){
 
+  gene.id <- .paStripCompartmentSuffix(gene.id)
   require(see)
   require(ggplot2)
   require(lattice)

@@ -2299,14 +2299,23 @@ HasPeptideLevelData <- function() {
   if (is.null(design) || is.null(contrast.matrix)) return(0)
   if (!is.fullrank(design)) return(0)
 
-  # Guarantee positional alignment so lmFit group assignments match protein-level
+  # Align design rows to data columns so lmFit group assignments match the
+  # protein-level fit. Protein-level designs are frequently keyed positionally
+  # (rownames "1".."n") while the data columns carry sample names, so a pure
+  # name intersect would wrongly drop every column. Only subset by name when the
+  # two actually share names; otherwise, if the dimensions match, trust the
+  # positional convention already used at the protein level.
   design.rn <- rownames(design)
   data.cn   <- colnames(data.norm)
   if (!is.null(design.rn) && !is.null(data.cn) && !identical(design.rn, data.cn)) {
-    shared    <- intersect(design.rn, data.cn)
-    if (length(shared) == 0) return(0)
-    data.norm <- data.norm[, shared, drop = FALSE]
-    design    <- design[shared, , drop = FALSE]
+    shared <- intersect(design.rn, data.cn)
+    if (length(shared) > 0) {
+      data.norm <- data.norm[, shared, drop = FALSE]
+      design    <- design[shared, , drop = FALSE]
+    } else if (nrow(design) != ncol(data.norm)) {
+      return(0)
+    }
+    # else: no shared names but conformable -> positional alignment
   }
 
   fit <- tryCatch(lmFit(data.norm, design), error = function(e) NULL)
@@ -2359,19 +2368,30 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
   pep.mat <- ov_qs_read("peptide_level_data.qs")
   pep.map <- ov_qs_read("peptide_to_protein_map.qs")
 
+  # The design/contrast were built for the protein matrix; its column order is
+  # the ground truth the (often positional) design rows line up with. Put the
+  # peptide matrix columns into that same order so the peptide fit assigns
+  # samples to groups identically. If the peptide matrix lacks some protein
+  # samples, fall back to its own order (the DE helper then aligns/guards).
+  prot.cols <- colnames(dataSet$data.norm)
+  if (!is.null(prot.cols) && all(prot.cols %in% colnames(pep.mat))) {
+    pep.mat <- pep.mat[, prot.cols, drop = FALSE]
+  }
+
   peptide.dataSet <- dataSet
   peptide.dataSet$data.norm <- pep.mat
 
-  if (dataSet$de.method == "limma") {
-    peptide.dataSet <- .perform_limma_edger(peptide.dataSet, robustTrend = FALSE)
-  } else if (dataSet$de.method == "deqms") {
+  if (dataSet$de.method == "deqms") {
     peptide.dataSet <- .perform_deqms(peptide.dataSet, robustTrend = FALSE)
-  } else if (dataSet$de.method == "edger") {
-    peptide.dataSet <- .perform_limma_edger(peptide.dataSet, robustTrend = FALSE)
   } else {
-    msgSet$current.msg <- paste0("Peptide-level DE analysis: method '", dataSet$de.method, "' not yet supported for peptides.")
-    saveSet(msgSet, "msgSet")
-    return(0)
+    # limma / edger and, as a fallback, every other protein-level method
+    # (msqrob2, msstats, deseq2, wtt, ...). Those engines have no native
+    # peptide-level equivalent here, so we annotate peptides with a moderated
+    # limma fit on the peptide matrix using the same design/contrast the
+    # protein-level analysis already built. .perform_limma_peptide bypasses the
+    # strict df.residual guard and aligns columns positionally, so it is safe
+    # for peptide matrices regardless of the protein engine.
+    peptide.dataSet <- .perform_limma_peptide(peptide.dataSet)
   }
 
   if (!is.list(peptide.dataSet)) {
@@ -2462,6 +2482,17 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
   pep.map$Protein <- as.character(pep.map[[prot.col]])
   pep.map$Protein.norm <- vapply(pep.map$Protein, .paNormalizeProteinId, character(1))
 
+  # Peptide stats live in a separate file that is only written when DE runs.
+  # Sessions analysed before peptide-level DE existed (or with an engine that
+  # historically skipped it) have the peptide matrix but no results file, which
+  # surfaces as "N/A" in the peptide table and neutral-coloured expanded nodes.
+  # Generate it lazily, once, so those sessions recover without re-running DE.
+  if (!file.exists("peptide_de_results.qs") &&
+      file.exists("peptide_level_data.qs") &&
+      exists("PerformPeptideLevelDEAnal", mode = "function")) {
+    try(PerformPeptideLevelDEAnal(dataName), silent = TRUE)
+  }
+
   pep.res <- NULL
   if (file.exists("peptide_de_results.qs")) {
     pep.all <- try(ov_qs_read("peptide_de_results.qs"), silent = TRUE)
@@ -2494,7 +2525,60 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
   cached
 }
 
+# Resolve the set of peptide IDs belonging to a protein.
+#
+# This is the single source of truth shared by the peptide table
+# (GetProteinPeptideMapping) and the network expansion
+# (GetProteinPeptideMappingBatch), so both agree on which peptides a protein
+# has. It resolves through the precomputed cache indices only -- exact.index
+# (keyed by raw protein id), norm.index (keyed by normalized id) and the
+# Entrez<->UniProt cross-map -- all O(1) hash lookups. It takes the UNION of
+# every match (earlier the table stopped at a first-hit fuzzy substring, so it
+# showed far fewer peptides than the box plot).
+#
+# NOTE: this deliberately does NOT resolve against the protein matrix row names
+# (e.g. ResolveFeatureRowId): network viewers request by Entrez while the map is
+# keyed by UniProt, so every id would miss and force an O(nrow) normalization of
+# the whole protein matrix -- per protein. On a 200+ node network that made the
+# peptide preload batch take minutes and the viewer appear to hang. The cross-map
+# already bridges Entrez<->UniProt without that cost.
+.paPeptidesForProtein <- function(cache, proteinID, org = NULL) {
+  if (is.null(cache$pep.map) || nrow(cache$pep.map) == 0) return(character(0))
+  lookup.id <- .paStripCompartmentSuffix(proteinID)
+  if (is.null(lookup.id) || !nzchar(lookup.id)) return(character(0))
+
+  gather <- function(id) {
+    hits <- cache$exact.index[[id]]
+    id.norm <- .paNormalizeProteinId(id)
+    if (!is.na(id.norm)) hits <- c(hits, cache$norm.index[[id.norm]])
+    hits
+  }
+
+  peptides <- gather(lookup.id)
+  # Cross-ID fallback (Entrez <-> UniProt): network viewers request by Entrez
+  # while the map is keyed by the dataset's protein ids (often UniProt).
+  for (aid in tryCatch(.paCrossMapFeatureIds(lookup.id, org = org),
+                       error = function(e) character(0))) {
+    peptides <- c(peptides, gather(aid))
+  }
+  peptides <- unique(as.character(peptides))
+  peptides <- peptides[!is.na(peptides) & nzchar(peptides)]
+
+  # When peptide DE results exist, prefer peptides that actually carry stats
+  # (this is the same data-bearing set the overview box plot draws), so the
+  # table shows real numbers instead of NA rows. Fall back to the full mapped
+  # set if that intersection is empty (e.g. ID-format drift between the map and
+  # the results), so we never regress to showing nothing.
+  pep.res <- cache$pep.res
+  if (!is.null(pep.res) && !is.null(rownames(pep.res))) {
+    keep <- peptides[peptides %in% rownames(pep.res)]
+    if (length(keep) > 0) peptides <- keep
+  }
+  peptides
+}
+
 GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
+  proteinID <- .paStripCompartmentSuffix(proteinID)
   msg("[R DEBUG] GetProteinPeptideMapping called with proteinID: ", proteinID)
 
   # Load protein-level DE results from dataset
@@ -2520,65 +2604,11 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   pep.res <- cache$pep.res
 
   matched.protein.id <- proteinID
-  peptides <- cache$exact.index[[matched.protein.id]]
-  if (is.null(peptides)) peptides <- character(0)
-  if (length(peptides) == 0 && !is.na(protein.id.norm)) {
-    peptides <- cache$norm.index[[protein.id.norm]]
-    if (is.null(peptides)) peptides <- character(0)
-    if (length(peptides) > 0) {
-      matched.protein.id <- cache$protein.by.norm[[protein.id.norm]][1]
-      msg("[R DEBUG] Matched via normalized protein ID: ", protein.id.norm, " -> ", matched.protein.id)
-    }
-  }
+  peptides <- .paPeptidesForProtein(cache, proteinID)
   msg("[R DEBUG] Found ", length(peptides), " peptides for protein ", proteinID)
-
-  # Cross-ID fallback: network viewers pass Entrez IDs while the peptide index
-  # is keyed by the dataset's own protein IDs (often UniProt). Translate and
-  # retry before the fuzzy substring match below (which is unsafe for short
-  # numeric Entrez IDs).
   if (length(peptides) == 0) {
-    for (aid in tryCatch(.paCrossMapFeatureIds(proteinID), error = function(e) character(0))) {
-      cand <- cache$exact.index[[aid]]
-      if (is.null(cand) || length(cand) == 0) {
-        aid.norm <- .paNormalizeProteinId(aid)
-        if (!is.na(aid.norm)) {
-          cand <- cache$norm.index[[aid.norm]]
-          if (!is.null(cand) && length(cand) > 0 &&
-              !is.null(cache$protein.by.norm[[aid.norm]])) {
-            aid <- cache$protein.by.norm[[aid.norm]][1]
-          }
-        }
-      }
-      if (!is.null(cand) && length(cand) > 0) {
-        peptides <- cand
-        matched.protein.id <- aid
-        msg("[R DEBUG] Matched via cross-mapped ID: ", proteinID, " -> ", matched.protein.id)
-        break
-      }
-    }
-  }
-
-  # If no exact match, try to find similar protein IDs
-  if (length(peptides) == 0) {
-    msg("[R DEBUG] No exact match for protein ", proteinID)
-    # Check if protein ID exists with different formatting
-    matching_proteins <- unique(pep.map$Protein[grepl(proteinID, pep.map$Protein, fixed = TRUE)])
-    if (length(matching_proteins) == 0 && !is.na(protein.id.norm)) {
-      matching_proteins <- unique(pep.map$Protein[grepl(protein.id.norm, pep.map$Protein, fixed = TRUE)])
-    }
-    if (length(matching_proteins) > 0) {
-      msg("[R DEBUG] Found similar protein IDs: ", paste(matching_proteins, collapse=", "))
-      msg("[R DEBUG] Using first match: ", matching_proteins[1])
-      matched.protein.id <- matching_proteins[1]
-      peptides <- cache$exact.index[[matched.protein.id]]
-      if (is.null(peptides)) peptides <- character(0)
-      if (matched.protein.id != original.protein.id) {
-        msg("[R DEBUG] Using matched ID for peptides only: ", matched.protein.id, " (input: ", original.protein.id, ")")
-      }
-    } else {
-      msg("[R DEBUG] No similar protein IDs found containing: ", proteinID)
-      return(NULL)
-    }
+    msg("[R DEBUG] No peptides mapped to protein ", proteinID)
+    return(NULL)
   }
 
   # Extract protein DE stats
@@ -2675,31 +2705,11 @@ GetProteinPeptideMappingBatch <- function(dataName = "", proteinIDs = character(
   out <- setNames(vector("list", length(proteinIDs)), as.character(proteinIDs))
 
   for (pid in as.character(proteinIDs)) {
-    pid.norm <- .paNormalizeProteinId(pid)
-    peptides <- cache$exact.index[[pid]]
-    if (is.null(peptides)) peptides <- character(0)
-    if (length(peptides) == 0 && !is.na(pid.norm)) {
-      peptides <- cache$norm.index[[pid.norm]]
-      if (is.null(peptides)) peptides <- character(0)
-    }
-    # Cross-ID fallback (Entrez <-> UniProt), same as GetProteinPeptideMapping:
-    # network viewers request by Entrez while the index uses dataset protein IDs.
-    if (length(peptides) == 0) {
-      for (aid in tryCatch(.paCrossMapFeatureIds(pid, org = cross.org),
-                           error = function(e) character(0))) {
-        cand <- cache$exact.index[[aid]]
-        if (is.null(cand) || length(cand) == 0) {
-          aid.norm <- .paNormalizeProteinId(aid)
-          if (!is.na(aid.norm)) cand <- cache$norm.index[[aid.norm]]
-        }
-        if (!is.null(cand) && length(cand) > 0) {
-          peptides <- cand
-          break
-        }
-      }
-      if (is.null(peptides)) peptides <- character(0)
-    }
-    peptides <- unique(peptides)
+    # data lookups use the bare protein id; the response stays keyed by the
+    # requested id so split-view clients (suffixed ids) resolve their entries.
+    # Shared resolver keeps this in lock-step with the peptide table and the
+    # overview box plot (see .paPeptidesForProtein).
+    peptides <- .paPeptidesForProtein(cache, pid, org = cross.org)
 
     if (length(peptides) == 0) {
       out[[pid]] <- data.frame(

@@ -117,6 +117,16 @@ rescale2NewRange <- function(qvec, a, b){
   unique(vals)
 }
 
+# Strip the "__<Compartment>" suffix carried by split compartment-view node
+# copies (created by the copyId scheme in .paWriteSplitCompartmentNetwork).
+# Only known compartment suffixes are removed so legitimate feature IDs that
+# happen to contain "__" are never truncated.
+.paStripCompartmentSuffix <- function(ids) {
+  sub(paste0("__(Nucleus|Cytosol|Cytoskeleton|Endomembrane|Extracellular|Unknown|",
+             "Cell_surface___adhesion|Mitochondria___metabolic_organelles)$"),
+      "", as.character(ids))
+}
+
 .paPrimaryCompartment <- function(broad.category = NA_character_, main.location = NA_character_,
                                   cat.freq = NULL) {
   raw.locations <- .paSplitCompartmentValues(main.location)
