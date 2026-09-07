@@ -927,6 +927,13 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   if (result == 1) {
     current.net.nm <<- net.nm
+    # Persist the selection: downstream consumers (PrepareLocalizationNetwork,
+    # FindCommunities, module explorer) read paramSet$current.net.nm, not the
+    # loose global. Without this, switching networks in the viewer left the
+    # compartment layout computed on the previously persisted (first) network.
+    paramSet <- readSet(paramSet, "paramSet")
+    paramSet$current.net.nm <- net.nm
+    saveSet(paramSet, "paramSet")
   }
 
   return(result)

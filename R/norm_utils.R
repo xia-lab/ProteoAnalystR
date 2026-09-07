@@ -4166,6 +4166,24 @@ DetectPTMOccupancy <- function(dataName) {
           " unmodified rows: ", sum(!meta$is.bio.mod))
   message("[PTMOccupancy] mod.sig table: ", paste(names(table(meta$mod.sig)), table(meta$mod.sig), sep="=", collapse=", "))
 
+  if (sum(meta$is.bio.mod) == 0L) {
+    # Distinguish "format carries no modification annotations at all" (e.g. FragPipe
+    # combined_peptide.tsv reports stripped sequences only) from "annotated but no
+    # variable mods survived the fixed-mod filter".
+    has.annot <- any(!is.na(meta$Modified.Sequence) & !is.na(meta$Stripped.Sequence) &
+                     meta$Modified.Sequence != meta$Stripped.Sequence)
+    if (!has.annot)
+      return(fail(paste0(
+        "This peptide table reports stripped sequences only - it contains no modification ",
+        "annotations, so PTM occupancy cannot be computed from it. Upload a format that ",
+        "includes modified peptide sequences, e.g. a DIA-NN precursor report (report.tsv or ",
+        "pr_matrix with a Modified.Sequence column) or an equivalent modified-sequence export.")))
+    return(fail(paste0(
+      "Modification annotations were found, but none remained after excluding fixed ",
+      "modifications (e.g. carbamidomethyl). PTM occupancy requires variable modifications ",
+      "(e.g. phosphorylation, oxidation, acetylation) on quantified precursors.")))
+  }
+
   # Vectorized intensity aggregation with rowsum() -- avoids per-sequence matrix operations.
   # 1. Exponentiate the whole matrix once to linear scale.
   # 2. rowsum() group-sums by (Stripped.Sequence + mod.sig) in a single C pass.
