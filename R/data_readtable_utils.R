@@ -1058,10 +1058,11 @@ ReadMetaData <- function(metafilename){
   rownames(dat) <- clean_ids
   
   # Clean Quant Data: Replace 0 with NA (Standard MaxQuant practice)
-  int.mat <- as.matrix(dat[, quant.names, drop = FALSE])
-  for (i in seq_len(ncol(int.mat))) {
-    int.mat[, i] <- suppressWarnings(as.numeric(int.mat[, i]))
-  }
+  # Use .safe_numeric_matrix: proteinGroups LFQ/Intensity columns often exceed
+  # 2^31 and are read as integer64, which as.matrix() bit-reinterprets into
+  # garbage (~1e-313). .safe_numeric_matrix coerces each column by value first.
+  int.mat <- .safe_numeric_matrix(dat[, quant.names, drop = FALSE])
+  rownames(int.mat) <- rownames(dat)
   int.mat[int.mat == 0] <- NA
 
   # --- Step 5: Format Output to Match Original Function ---
