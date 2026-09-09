@@ -2198,7 +2198,33 @@ PrepareROCData <- function(dataName = "", sel.meta="NA", factor1="NA", factor2="
     dataSet$norm.orig <- dataSet$data.norm.transposed
   }
 
-  msgSet$current.msg <- "ROC data prepared successfully.";
+  # Molecular-only matrix is the base; selected metadata predictors (recorded on
+  # the overview page via SetBiomarkerMetaPredictors) are appended here, once the
+  # analysis matrix and outcome actually exist.
+  dataSet$data.norm.transposed.base <- dataSet$data.norm.transposed;
+  extra.msg <- "";
+  if(!is.null(dataSet$meta.predictors) && length(dataSet$meta.predictors) > 0){
+    meta <- .GetBiomarkerMetaSource(dataSet);
+    keep <- dataSet$meta.predictors[!vapply(dataSet$meta.predictors, function(v)
+      tryCatch(.IsOutcomeIdentical(meta, v, dataSet), error = function(e) FALSE), logical(1))];
+    dropped <- setdiff(dataSet$meta.predictors, keep);
+    dataSet$meta.predictors <- if(length(keep) > 0) keep else NULL;
+    aug <- tryCatch(.AugmentWithMetaPredictors(dataSet, dataSet$data.norm.transposed),
+                    error = function(e) conditionMessage(e));
+    if(is.character(aug)){
+      dataSet$meta.predictors <- NULL;
+      extra.msg <- paste0(" Metadata predictors could not be added (", aug, ") and were skipped.");
+    } else {
+      dataSet$data.norm.transposed <- aug;
+      n.cov <- sum(grepl("^COV_", colnames(aug)));
+      if(n.cov > 0) extra.msg <- paste0(" Added ", n.cov, " metadata predictor column(s).");
+    }
+    if(length(dropped) > 0)
+      extra.msg <- paste0(extra.msg, " Excluded (identical to the outcome): ",
+                          paste(dropped, collapse=", "), ".");
+  }
+
+  msgSet$current.msg <- paste0("ROC data prepared successfully.", extra.msg);
   saveSet(msgSet, "msgSet");
   return(RegisterData(dataSet))
 }
@@ -4502,6 +4528,51 @@ Plot.Permutation<-function(dataName = "", imgName, format="png", dpi=default.dpi
 ## rankings and importance outputs.
 ##############################################
 
+# meta.info.original can exist as a 0-column placeholder; fall back to meta.info
+# whenever it carries no variables, otherwise every lookup fails.
+.GetBiomarkerMetaSource <- function(dataSet){
+  meta <- dataSet$meta.info.original;
+  if(is.null(meta) || is.null(ncol(meta)) || ncol(meta) == 0)
+    meta <- dataSet$meta.info;
+  meta;
+}
+
+# TRUE when a metadata column is a relabeling of the outcome grouping (bijective
+# with cls over the samples in the biomarker matrix) -- such a column would let
+# the model read the answer off the design, so it is never offered/accepted.
+.IsOutcomeIdentical <- function(meta, v, dataSet){
+  base <- dataSet$data.norm.transposed.base;
+  if(is.null(base)) base <- dataSet$data.norm.transposed;
+  smpls <- intersect(rownames(base), rownames(meta));
+  if(length(smpls) < 2) return(FALSE);
+  vv <- as.character(meta[smpls, v]);
+  cc <- as.character(dataSet$cls[match(smpls, rownames(base))]);
+  if(any(is.na(vv)) || any(is.na(cc)) || length(unique(vv)) < 2) return(FALSE);
+  all(tapply(cc, vv, function(x) length(unique(x))) == 1) &&
+    all(tapply(vv, cc, function(x) length(unique(x))) == 1);
+}
+
+# Metadata columns that are legal candidate predictors for the current
+# biomarker dataset: excludes the outcome (and any relabeling of it),
+# constant columns, and columns with missing values. Returns character(0)
+# when nothing qualifies (e.g., the only metadata IS the outcome).
+GetBiomarkerMetaPredictorOptions <- function(dataName = ""){
+  tryCatch({
+    dataSet <- readDataset(dataName);
+    meta <- .GetBiomarkerMetaSource(dataSet);
+    if(is.null(meta) || is.null(ncol(meta)) || ncol(meta) == 0) return(character(0));
+    ok <- character(0);
+    for(v in colnames(meta)){
+      vals <- as.character(meta[[v]]);
+      if(any(is.na(vals)) || any(!nzchar(vals))) next;
+      if(length(unique(vals)) < 2) next;
+      if(.IsOutcomeIdentical(meta, v, dataSet)) next;
+      ok <- c(ok, v);
+    }
+    ok;
+  }, error = function(e) character(0));
+}
+
 .EncodeMetaPredictors <- function(meta.info, vars, sample.names){
   if(is.null(meta.info) || is.null(rownames(meta.info)))
     stop("Sample metadata with row names is required for metadata predictors.");
@@ -4541,8 +4612,7 @@ Plot.Permutation<-function(dataName = "", imgName, format="png", dpi=default.dpi
   vars <- dataSet$meta.predictors;
   if(is.null(vars) || length(vars) == 0 || is.null(mat)) return(mat);
   mat <- mat[, !grepl("^COV_", colnames(mat)), drop=FALSE];
-  meta <- dataSet$meta.info.original;
-  if(is.null(meta)) meta <- dataSet$meta.info;
+  meta <- .GetBiomarkerMetaSource(dataSet);
   enc <- .EncodeMetaPredictors(meta, vars, rownames(mat));
   cbind(mat, enc);
 }
@@ -4557,35 +4627,34 @@ SetBiomarkerMetaPredictors <- function(dataName = "", metaVars = ""){
     return(0L);
   }
 
-  if(is.null(dataSet$data.norm.transposed.base))
+  if(is.null(dataSet$data.norm.transposed.base) && !is.null(dataSet$data.norm.transposed))
     dataSet$data.norm.transposed.base <- dataSet$data.norm.transposed;
 
   vars <- trimws(strsplit(metaVars, "[;,]")[[1]]);
-  vars <- vars[nzchar(vars)];
+  vars <- vars[nzchar(vars) & vars != "NA"];   # drop the UI's "Not Available" placeholder
 
-  # never allow the outcome itself in as a predictor
-  meta <- dataSet$meta.info.original;
-  if(is.null(meta)) meta <- dataSet$meta.info;
-  if(length(vars) > 0 && !is.null(meta)){
-    smpls <- intersect(rownames(dataSet$data.norm.transposed.base), rownames(meta));
+  meta <- .GetBiomarkerMetaSource(dataSet);
+  if(length(vars) > 0){
+    if(is.null(meta) || is.null(ncol(meta)) || ncol(meta) == 0)
+      return(fail("No sample metadata is available for this dataset; metadata predictors cannot be added."));
+    unknown <- setdiff(vars, colnames(meta));
+    if(length(unknown) > 0)
+      return(fail(paste0("Metadata variable(s) not found in the sample metadata: ",
+        paste(unknown, collapse=", "), ". Available: ",
+        paste(colnames(meta), collapse=", "), ".")));
+    # never allow the outcome itself (or a relabeling of it) in as a predictor
     for(v in vars){
-      if(v %in% colnames(meta) && length(smpls) > 1){
-        vv <- as.character(meta[smpls, v]);
-        cc <- as.character(dataSet$cls[match(smpls, rownames(dataSet$data.norm.transposed.base))]);
-        if(!any(is.na(vv)) && !any(is.na(cc)) && length(unique(vv)) > 1 &&
-           all(tapply(cc, vv, function(x) length(unique(x))) == 1) &&
-           all(tapply(vv, cc, function(x) length(unique(x))) == 1)){
-          return(fail(paste0("Metadata variable '", v,
-            "' is identical to the outcome grouping and cannot be used as a predictor.")));
-        }
-      }
+      bad <- tryCatch(.IsOutcomeIdentical(meta, v, dataSet), error = function(e) FALSE);
+      if(isTRUE(bad))
+        return(fail(paste0("Metadata variable '", v,
+          "' is identical to the outcome grouping and cannot be used as a predictor.")));
     }
   }
 
   base <- dataSet$data.norm.transposed.base;
   if(length(vars) == 0){
     dataSet$meta.predictors <- NULL;
-    dataSet$data.norm.transposed <- base;
+    if(!is.null(base)) dataSet$data.norm.transposed <- base;
     if(!is.null(dataSet$test.data))
       dataSet$test.data <- dataSet$test.data[, !grepl("^COV_", colnames(dataSet$test.data)), drop=FALSE];
     if(!is.null(dataSet$new.data))
@@ -4596,7 +4665,29 @@ SetBiomarkerMetaPredictors <- function(dataName = "", metaVars = ""){
     return(1L);
   }
 
+  # Validate the encoding against the metadata itself so problems (missing
+  # values, constant columns) surface now, on the overview page.
+  n.cols <- tryCatch({
+    enc <- .EncodeMetaPredictors(meta, vars, rownames(meta));
+    ncol(enc);
+  }, error = function(e) conditionMessage(e));
+  if(is.character(n.cols)) return(fail(paste0("Could not add metadata predictors: ", n.cols)));
+
   dataSet$meta.predictors <- vars;
+
+  if(is.null(base)){
+    # Analysis matrix not built yet (overview page): record the selection;
+    # PrepareROCData appends the COV_ columns when the matrix is created.
+    msgSet$current.msg <- paste0("Recorded ", length(vars), " metadata variable(s) (",
+      paste(vars, collapse=", "), ") as candidate predictors; ", n.cols,
+      " encoded column(s) will be appended to the biomarker feature matrix when the ",
+      "analysis runs, and are then treated exactly like molecular features in ",
+      "cross-validation and permutation testing.");
+    saveSet(msgSet, "msgSet");
+    RegisterData(dataSet);
+    return(as.integer(n.cols));
+  }
+
   res <- tryCatch({
     dataSet$data.norm.transposed <- .AugmentWithMetaPredictors(dataSet, base);
     if(!is.null(dataSet$test.data))
@@ -4609,6 +4700,8 @@ SetBiomarkerMetaPredictors <- function(dataName = "", metaVars = ""){
   if(!isTRUE(res)) return(fail(paste0("Could not add metadata predictors: ", res)));
 
   n.added <- sum(grepl("^COV_", colnames(dataSet$data.norm.transposed)));
+  if(n.added == 0)
+    return(fail("No metadata predictor columns could be constructed from the selected variable(s)."));
   msgSet$current.msg <- paste0("Added ", n.added, " metadata predictor column(s) (",
     paste(vars, collapse=", "), ") to the biomarker feature matrix; they are treated ",
     "exactly like molecular features in cross-validation and permutation testing.");
