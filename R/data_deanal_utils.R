@@ -1009,18 +1009,18 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
   paramSet <- readSet(paramSet, "paramSet")
   msgSet   <- readSet(msgSet,   "msgSet")
 
-  # Advisory for DIA inputs: DEqMS's variance prior assumes peptide/PSM counts
-  # track measurement reliability, which holds for DDA sampling but not for
-  # DIA's systematic window-based quantification. On the LFQbench DIA benchmark
-  # DEqMS slightly degraded error control relative to plain limma
-  # (empirical FDR 0.124 -> 0.138); see REPORT_de_method_experiments.md.
+  # Advisory for DIA inputs: DEqMS is fully supported for DIA and uses the
+  # per-protein precursor/peptide count for its variance model. On both of our
+  # DIA spike-in benchmarks (LFQbench HYE124 and the DEqMS UPS1 spike-in) it was
+  # more anti-conservative (higher empirical FDR) than limma and msqrob2, so
+  # msqrob2 is the DIA default; see REPORT_de_method_experiments.md.
   fmt <- tolower(paste0(paramSet$data.format, ""))
   if (grepl("spectronaut|diann", fmt)) {
     msgSet$current.msg <- c(msgSet$current.msg,
       paste0("Note: this dataset comes from a DIA workflow (", paramSet$data.format,
-             "). DEqMS's peptide-count variance model is tuned for DDA data and ",
-             "slightly weakened false-discovery control on our DIA benchmark; ",
-             "the default limma method is recommended for DIA."))
+             "). DEqMS is fully supported for DIA; on our two DIA spike-in benchmarks ",
+             "it was more anti-conservative (higher empirical FDR) than limma and ",
+             "msqrob2, so msqrob2 is the DIA default. Any method can be selected."))
     saveSet(msgSet, "msgSet")
   }
 
@@ -2588,6 +2588,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     return(NULL)
   }
   dataSet <- cache$dataSet
+  paramSet <- readSet(paramSet, "paramSet")
 
   if (is.null(dataSet$comp.res)) {
     msg("[R DEBUG] dataSet$comp.res is NULL - DE analysis may not have been run")
@@ -2611,27 +2612,17 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
     return(NULL)
   }
 
-  # Extract protein DE stats
+  # Extract protein DE stats. Network viewers pass Entrez while comp.res is keyed
+  # by the dataset's own protein ids (often UniProt), so resolve the id into the
+  # DE rowname space via exact / normalized / Entrez<->UniProt cross-map before
+  # the lookup -- otherwise the protein row shows NA even though stats exist.
   prot.lookup.id <- original.protein.id
   if (!(prot.lookup.id %in% rownames(prot.res)) &&
-      matched.protein.id %in% rownames(prot.res)) {
-    prot.lookup.id <- matched.protein.id
-  }
-  if (!(prot.lookup.id %in% rownames(prot.res))) {
-    rn <- rownames(prot.res)
-    rn.norm <- vapply(rn, .paNormalizeProteinId, character(1))
-    if (!is.na(protein.id.norm) && protein.id.norm %in% rn.norm) {
-      prot.lookup.id <- rn[match(protein.id.norm, rn.norm)]
-      msg("[R DEBUG] Using normalized protein ID match in DE results: ", prot.lookup.id)
-    }
-    similar.prot <- rownames(prot.res)[grepl(prot.lookup.id, rownames(prot.res), fixed = TRUE)]
-    if (length(similar.prot) == 0 && grepl("\\|", prot.lookup.id)) {
-      core.id <- strsplit(prot.lookup.id, "\\|", fixed = FALSE)[[1]][2]
-      similar.prot <- rownames(prot.res)[grepl(core.id, rownames(prot.res), fixed = TRUE)]
-    }
-    if (length(similar.prot) > 0) {
-      prot.lookup.id <- similar.prot[1]
-      msg("[R DEBUG] Using protein ID match in DE results: ", prot.lookup.id)
+      exists("ResolveFeatureRowId", mode = "function")) {
+    resolved <- tryCatch(ResolveFeatureRowId(prot.res, original.protein.id),
+                         error = function(e) original.protein.id)
+    if (length(resolved) == 1 && !is.na(resolved) && nzchar(resolved)) {
+      prot.lookup.id <- resolved
     }
   }
 
@@ -2642,7 +2633,24 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   } else {
     prot.fc <- NA
     prot.pval <- NA
-    msg("[R DEBUG] Protein ", matched.protein.id, " not found in DE results")
+    msg("[R DEBUG] Protein ", original.protein.id, " not found in DE results")
+  }
+
+  # Display the gene symbol rather than the raw (Entrez) id so the summary row
+  # matches the overview box-plot label. Map the resolved id through the dataset's
+  # own id type; fall back to the raw id if mapping is unavailable.
+  protein.display <- original.protein.id
+  sym <- tryCatch({
+    id.type <- paramSet$data.idType
+    m <- if (identical(id.type, "uniprot")) {
+      doUniprot2SymbolMapping(prot.lookup.id, paramSet$data.org, id.type)
+    } else {
+      doEntrez2SymbolMapping(prot.lookup.id, paramSet$data.org, id.type)
+    }
+    as.character(m)[1]
+  }, error = function(e) NA_character_)
+  if (!is.null(sym) && !is.na(sym) && nzchar(sym) && sym != "NA") {
+    protein.display <- sym
   }
 
   # Extract peptide DE stats -- include all peptides; use NA when pep.res is absent
@@ -2667,8 +2675,8 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   # Create combined data frame with protein first, then peptides
   result <- data.frame(
     type = c("Protein", rep("Peptide", nrow(pep.stats))),
-    id = c(original.protein.id, pep.stats$id),
-    name = c(original.protein.id, pep.stats$name),
+    id = c(protein.display, pep.stats$id),
+    name = c(protein.display, pep.stats$name),
     logFC = c(prot.fc, pep.stats$logFC),
     pValue = c(prot.pval, pep.stats$pValue),
     stringsAsFactors = FALSE
