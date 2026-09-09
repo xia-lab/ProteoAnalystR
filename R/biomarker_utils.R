@@ -4492,6 +4492,132 @@ Plot.Permutation<-function(dataName = "", imgName, format="png", dpi=default.dpi
 }
 
 ##############################################
+## Covariates as candidate predictors ("covariates as data", 2026-09-09)
+## Selected metadata variables are ENCODED and APPENDED to the biomarker
+## feature matrix, so they pass through the same fold-contained feature
+## selection, model training, and permutation testing as every other feature.
+## Numeric variables are z-scored (unsupervised, no outcome labels used);
+## categorical variables become 0/1 dummy columns (k-1 per k-level factor).
+## Appended columns are prefixed "COV_" so they are recognizable in feature
+## rankings and importance outputs.
+##############################################
+
+.EncodeMetaPredictors <- function(meta.info, vars, sample.names){
+  if(is.null(meta.info) || is.null(rownames(meta.info)))
+    stop("Sample metadata with row names is required for metadata predictors.");
+  missing.smpls <- setdiff(sample.names, rownames(meta.info));
+  if(length(missing.smpls) > 0)
+    stop(paste0("Metadata rows missing for sample(s): ",
+                paste(utils::head(missing.smpls, 3), collapse=", ")));
+  cols <- list();
+  for(v in vars){
+    if(!v %in% colnames(meta.info))
+      stop(paste0("Metadata variable not found: ", v));
+    vals <- meta.info[sample.names, v];
+    if(any(is.na(vals) | (is.character(vals) & !nzchar(as.character(vals)))))
+      stop(paste0("Metadata variable '", v, "' has missing values; ",
+                  "metadata predictors must be complete."));
+    num <- suppressWarnings(as.numeric(as.character(vals)));
+    if(!any(is.na(num)) && length(unique(num)) > 2){
+      sdv <- stats::sd(num);
+      if(!is.finite(sdv) || sdv == 0)
+        stop(paste0("Metadata variable '", v, "' is constant."));
+      cols[[paste0("COV_", v)]] <- (num - mean(num)) / sdv;
+    } else {
+      f <- factor(as.character(vals));
+      if(nlevels(f) < 2)
+        stop(paste0("Metadata variable '", v, "' is constant."));
+      mm <- stats::model.matrix(~ f)[, -1, drop=FALSE];
+      colnames(mm) <- paste0("COV_", v, "_", make.names(levels(f)[-1]));
+      for(cn in colnames(mm)) cols[[cn]] <- as.numeric(mm[, cn]);
+    }
+  }
+  enc <- do.call(cbind, cols);
+  rownames(enc) <- sample.names;
+  enc;
+}
+
+.AugmentWithMetaPredictors <- function(dataSet, mat){
+  vars <- dataSet$meta.predictors;
+  if(is.null(vars) || length(vars) == 0 || is.null(mat)) return(mat);
+  mat <- mat[, !grepl("^COV_", colnames(mat)), drop=FALSE];
+  meta <- dataSet$meta.info.original;
+  if(is.null(meta)) meta <- dataSet$meta.info;
+  enc <- .EncodeMetaPredictors(meta, vars, rownames(mat));
+  cbind(mat, enc);
+}
+
+SetBiomarkerMetaPredictors <- function(dataName = "", metaVars = ""){
+  msgSet  <- readSet(msgSet, "msgSet");
+  dataSet <- readDataset(dataName);
+
+  fail <- function(msg){
+    msgSet$current.msg <- msg;
+    saveSet(msgSet, "msgSet");
+    return(0L);
+  }
+
+  if(is.null(dataSet$data.norm.transposed.base))
+    dataSet$data.norm.transposed.base <- dataSet$data.norm.transposed;
+
+  vars <- trimws(strsplit(metaVars, "[;,]")[[1]]);
+  vars <- vars[nzchar(vars)];
+
+  # never allow the outcome itself in as a predictor
+  meta <- dataSet$meta.info.original;
+  if(is.null(meta)) meta <- dataSet$meta.info;
+  if(length(vars) > 0 && !is.null(meta)){
+    smpls <- intersect(rownames(dataSet$data.norm.transposed.base), rownames(meta));
+    for(v in vars){
+      if(v %in% colnames(meta) && length(smpls) > 1){
+        vv <- as.character(meta[smpls, v]);
+        cc <- as.character(dataSet$cls[match(smpls, rownames(dataSet$data.norm.transposed.base))]);
+        if(!any(is.na(vv)) && !any(is.na(cc)) && length(unique(vv)) > 1 &&
+           all(tapply(cc, vv, function(x) length(unique(x))) == 1) &&
+           all(tapply(vv, cc, function(x) length(unique(x))) == 1)){
+          return(fail(paste0("Metadata variable '", v,
+            "' is identical to the outcome grouping and cannot be used as a predictor.")));
+        }
+      }
+    }
+  }
+
+  base <- dataSet$data.norm.transposed.base;
+  if(length(vars) == 0){
+    dataSet$meta.predictors <- NULL;
+    dataSet$data.norm.transposed <- base;
+    if(!is.null(dataSet$test.data))
+      dataSet$test.data <- dataSet$test.data[, !grepl("^COV_", colnames(dataSet$test.data)), drop=FALSE];
+    if(!is.null(dataSet$new.data))
+      dataSet$new.data <- dataSet$new.data[, !grepl("^COV_", colnames(dataSet$new.data)), drop=FALSE];
+    msgSet$current.msg <- "Metadata predictors cleared; the feature matrix contains molecular features only.";
+    saveSet(msgSet, "msgSet");
+    RegisterData(dataSet);
+    return(1L);
+  }
+
+  dataSet$meta.predictors <- vars;
+  res <- tryCatch({
+    dataSet$data.norm.transposed <- .AugmentWithMetaPredictors(dataSet, base);
+    if(!is.null(dataSet$test.data))
+      dataSet$test.data <- .AugmentWithMetaPredictors(dataSet, dataSet$test.data);
+    if(!is.null(dataSet$new.data))
+      dataSet$new.data <- tryCatch(.AugmentWithMetaPredictors(dataSet, dataSet$new.data),
+                                   error = function(e) dataSet$new.data);
+    TRUE;
+  }, error = function(e) conditionMessage(e));
+  if(!isTRUE(res)) return(fail(paste0("Could not add metadata predictors: ", res)));
+
+  n.added <- sum(grepl("^COV_", colnames(dataSet$data.norm.transposed)));
+  msgSet$current.msg <- paste0("Added ", n.added, " metadata predictor column(s) (",
+    paste(vars, collapse=", "), ") to the biomarker feature matrix; they are treated ",
+    "exactly like molecular features in cross-validation and permutation testing.");
+  saveSet(msgSet, "msgSet");
+  RegisterData(dataSet);
+  return(as.integer(n.added));
+}
+
+##############################################
 ## Covariate adjustment for biomarker analysis REMOVED (2026-09-08).
 ## The feature was retired: covariates are treated as data (extra feature
 ## columns), not as corrections. Entry points (PerformCovariateAdjustmentForROC,
