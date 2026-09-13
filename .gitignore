@@ -2,3 +2,12 @@
 src/*.so
 src/*.o
 src/*.dll
+
+# testthat runs write their inputs, downloaded libraries and outputs beside the tests
+# (cwd = tests/testthat): a run must not dirty this repo or the superproject that pins it.
+tests/testthat/*.qs
+tests/testthat/*.csv
+tests/testthat/*.arrow
+tests/testthat/*.rds
+tests/testthat/*.png
+tests/testthat/*.json
