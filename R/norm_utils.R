@@ -3097,7 +3097,7 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
       }
     }
     if (is.na(gene.col))
-      return(list(error = "No UniProt isoform suffixes detected and no usable Gene/GN column. Cannot group proteoforms."))
+      return(list(error = "No UniProt isoform suffixes detected and no usable Gene/GN column. Cannot group isoforms."))
     prec.df$group.key <- as.character(prec.df[[gene.col]])
     prec.df <- prec.df[!is.na(prec.df$group.key) & prec.df$group.key != "", , drop = FALSE]
     if (nrow(prec.df) == 0)
@@ -3233,7 +3233,7 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
 
   disc.inx <- .proteoform_disc_inx(dataSet)
   if (is.null(meta.info) || is.null(disc.inx) || sum(disc.inx) == 0)
-    return(list(error = "No differential-analysis design or categorical condition found for proteoform analysis."))
+    return(list(error = "No differential-analysis design or categorical condition found for isoform usage analysis."))
 
   cond.col <- names(which(disc.inx))[1]
   groups <- as.character(meta.info[[cond.col]])
@@ -3245,7 +3245,7 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
   groups <- groups[keep]
   unique.groups <- unique(groups)
   if (length(unique.groups) < 2)
-    return(list(error = "At least two conditions are required for proteoform analysis."))
+    return(list(error = "At least two conditions are required for isoform usage analysis."))
 
   selected.groups <- unique.groups[1:2]
   keep <- groups %in% selected.groups
@@ -3280,8 +3280,8 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
 .proteoform_limma <- function(mat, ctx, robustTrend = FALSE) {
   require(limma)
   mat <- mat[, ctx$samples, drop = FALSE]
-  if (nrow(mat) == 0 || ncol(mat) == 0) stop("Empty proteoform matrix.")
-  if (!is.fullrank(ctx$design)) stop("Proteoform design matrix is not full rank.")
+  if (nrow(mat) == 0 || ncol(mat) == 0) stop("Empty isoform matrix.")
+  if (!is.fullrank(ctx$design)) stop("Isoform design matrix is not full rank.")
 
   fit <- if (is.null(ctx$block)) {
     lmFit(mat, ctx$design)
@@ -3290,7 +3290,7 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
     lmFit(mat, ctx$design, block = ctx$block, correlation = corfit$consensus)
   }
   if (all(fit$df.residual == 0))
-    stop("No residual degrees of freedom in the selected proteoform design.")
+    stop("No residual degrees of freedom in the selected isoform design.")
 
   fit2 <- contrasts.fit(fit, ctx$contrast)
   fit2 <- eBayes(fit2, trend = robustTrend, robust = robustTrend)
@@ -3387,7 +3387,7 @@ DetectProteoformAnalysis <- function(dataName) {
   if (length(multi.groups) == 0) {
     return(fail(paste0(
       "No ", if (group.mode == "uniprot") "canonical proteins" else "genes",
-      " with >=2 distinct proteoforms having proteotypic peptides detected (",
+      " with >=2 distinct isoforms having proteotypic peptides detected (",
       length(group.isoforms), " group(s) with any proteotypic coverage)."
     )))
   }
@@ -3473,9 +3473,9 @@ DetectProteoformAnalysis <- function(dataName) {
           Isoform.Count = length(eligible.isoforms),
           Omnibus.F = omnibus$f.stat,
           Omnibus.Pvalue = omnibus$p.value,
-          Proteoform.A = isoA,
+          Isoform.A = isoA,
           Transcript.A = get.ta(grp, isoA),
-          Proteoform.B = isoB,
+          Isoform.B = isoB,
           Transcript.B = get.ta(grp, isoB),
           Peptides.A = unname(pep.counts[isoA]),
           Peptides.B = unname(pep.counts[isoB]),
@@ -3490,7 +3490,7 @@ DetectProteoformAnalysis <- function(dataName) {
 
   if (length(ratio.rows) == 0)
     return(fail(paste0(
-      "Insufficient data for proteoform analysis after requiring >= ",
+      "Insufficient data for isoform usage analysis after requiring >= ",
       min.peptides.per.isoform, " proteotypic peptides per isoform."
     )))
 
@@ -3502,7 +3502,7 @@ DetectProteoformAnalysis <- function(dataName) {
   ratio.tbl <- tryCatch(.proteoform_limma(ratio.mat, ctx, robustTrend = isTRUE(dataSet$robustTrend)),
                         error = function(e) e)
   if (inherits(ratio.tbl, "error"))
-    return(fail(paste("Proteoform ratio model failed:", ratio.tbl$message)))
+    return(fail(paste("Isoform ratio model failed:", ratio.tbl$message)))
 
   total.tbl <- tryCatch(.proteoform_limma(total.mat, ctx, robustTrend = isTRUE(dataSet$robustTrend)),
                         error = function(e) NULL)
@@ -3520,9 +3520,9 @@ DetectProteoformAnalysis <- function(dataName) {
       Isoform.Count = rec$Isoform.Count,
       Omnibus.F = rec$Omnibus.F,
       Omnibus.Pvalue = rec$Omnibus.Pvalue,
-      Proteoform.A = rec$Proteoform.A,
+      Isoform.A = rec$Isoform.A,
       Transcript.A = rec$Transcript.A,
-      Proteoform.B = rec$Proteoform.B,
+      Isoform.B = rec$Isoform.B,
       Transcript.B = rec$Transcript.B,
       Peptides.A = rec$Peptides.A,
       Peptides.B = rec$Peptides.B,
@@ -3539,7 +3539,7 @@ DetectProteoformAnalysis <- function(dataName) {
 
   results <- results[!is.na(results$Ratio.Pvalue), , drop = FALSE]
   if (nrow(results) == 0)
-    return(fail("Proteoform ratio model produced no valid p-values."))
+    return(fail("Isoform ratio model produced no valid p-values."))
 
   omnibus.p <- tapply(results$Omnibus.Pvalue, results$Isoform.Group, function(x) {
     x <- x[is.finite(x)]
@@ -3574,16 +3574,16 @@ DetectProteoformAnalysis <- function(dataName) {
 
   result.cols <- c("Gene", "Comparison", "Isoform.Group", "Isoform.Count",
                    "Omnibus.F", "Omnibus.Pvalue", "Omnibus.FDR",
-                   "Proteoform.A", "Transcript.A", "Proteoform.B", "Transcript.B",
+                   "Isoform.A", "Transcript.A", "Isoform.B", "Transcript.B",
                    "Peptides.A", "Peptides.B", "LogRatio.Cond1", "LogRatio.Cond2",
                    "Delta.LogRatio", "Ratio.Pvalue", "Ratio.FDR",
                    "Total.LogFC", "Total.Pvalue", "Is.Switch")
   results <- results[, result.cols[result.cols %in% names(results)], drop = FALSE]
 
-  ov_qs_save(results, "proteoform_analysis_results.qs")
+  ov_qs_save(results, "isoform_usage_results.qs")
   ov_qs_save(list(mode = ctx$mode, contrast = ctx$contrast.name, samples = ctx$samples),
-             "proteoform_analysis_context.qs")
-  fast.write(results, "proteoform_analysis_results.csv", row.names = FALSE)
+             "isoform_usage_context.qs")
+  fast.write(results, "isoform_usage_results.csv", row.names = FALSE)
 
   msgSet$current.msg <- paste0(
     "Detected ", nrow(results), " isoform pair(s) across ",
@@ -3661,9 +3661,9 @@ PlotProteoformIntensityProfile <- function(dataName, imageName, isoA, isoB,
     )
   }
 
-  df.intensity <- rbind(make_rows(abd.A, paste0("A: ", trunc_label(isoA, 20)), "Proteoform A/B intensity"),
-                        make_rows(abd.B, paste0("B: ", trunc_label(isoB, 20)), "Proteoform A/B intensity"))
-  df.ratio <- make_rows(log.ratio, "A - B score", "Proteoform A - B")
+  df.intensity <- rbind(make_rows(abd.A, paste0("A: ", trunc_label(isoA, 20)), "Isoform A/B intensity"),
+                        make_rows(abd.B, paste0("B: ", trunc_label(isoB, 20)), "Isoform A/B intensity"))
+  df.ratio <- make_rows(log.ratio, "A - B score", "Isoform A - B")
   df.total <- make_rows(abd.total, "Aggregate signal", "Aggregate signal")
   if (is.null(df.intensity) || is.null(df.ratio) || is.null(df.total)) return(invisible(0))
 
@@ -3778,7 +3778,7 @@ PlotProteoformIntensityProfile <- function(dataName, imageName, isoA, isoB,
 
   legend.grob <- extract_legend(p1)
   p1 <- p1 + theme(legend.position = "none")
-  p2 <- make_group_plot(df.ratio, "A - B abundance score", "Proteoform A - B")
+  p2 <- make_group_plot(df.ratio, "A - B abundance score", "Isoform A - B")
   p3 <- make_group_plot(df.total, "", "Aggregate signal", abundance.ylim)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
