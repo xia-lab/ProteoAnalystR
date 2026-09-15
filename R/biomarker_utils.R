@@ -1074,17 +1074,30 @@ Get.VIP <- function(pls.obj, comp=2){
 #'@param param Use parametric CI?
 GetCIs <- function(data, param=F){
 
-  if(param){
-    ci <- apply(data, 2, function(x){
-      t.test(x)$conf.int
-    })
-  }else{
-    # use bootstrap
-    ci <- apply(data, 2, function(x){
+  # Per-column CI on the CV-run values. A column with zero variance (e.g. a
+  # perfectly separable feature subset whose AUC is 1.0 in every CV run) is a
+  # degenerate case: t.test errors and boot::boot.ci cannot form an interval
+  # ("All values of t are equal to 1"), returning NULL. If ANY column returns
+  # NULL, apply() drops back to a list instead of a 2 x n matrix, and the ROC
+  # legend then shows "N/A" for EVERY model, not just the perfect ones. Return
+  # the point value [v, v] for degenerate columns and always emit a matrix.
+  ci <- apply(data, 2, function(x){
+    x <- x[is.finite(x)];
+    if(length(x) < 2 || stats::sd(x) == 0){
+      v <- if(length(x) == 0) NA_real_ else x[1];
+      return(c(v, v));
+    }
+    if(param){
+      as.numeric(t.test(x)$conf.int);
+    }else{
       boot.obj <- boot::boot(x, function(data, indices){mean(data[indices])}, R=1000);
-      boot::boot.ci(boot.obj, type="perc")$percent[4:5];
-    })
-  }
+      out <- tryCatch(boot::boot.ci(boot.obj, type="perc")$percent[4:5],
+                      error=function(e) NULL);
+      if(is.null(out) || length(out) != 2) out <- c(mean(x), mean(x));
+      as.numeric(out);
+    }
+  });
+  if(!is.matrix(ci)) ci <- matrix(unlist(ci), nrow=2, dimnames=list(NULL, colnames(data)));
   return(ci);
 }
 
