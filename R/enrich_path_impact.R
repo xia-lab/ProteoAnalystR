@@ -491,7 +491,11 @@ CalculateEnzymePathwayGsea <- function(dataName) {
   current.featureset <- setres$current.featureset
   current.setids     <- setres$current.setids
 
-  # Run fgsea
+  # Run fgsea. Seeded to match utils_gsea.R / utils_ridgeline.R: fgsea's
+  # multilevel path samples, so an unseeded call is not reproducible run to run.
+  # NOTE: minSize stays at 3 here (rather than the 5 used elsewhere) because
+  # pathway-impact analysis deliberately keeps small KEGG pathways.
+  set.seed(123)
   gsea.res <- tryCatch(
     fgsea::fgsea(pathways = current.featureset, stats = ranked.vec,
                  minSize = 3, maxSize = 500, scoreType = "std"),

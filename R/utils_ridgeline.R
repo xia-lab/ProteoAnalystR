@@ -241,13 +241,18 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     }
 
 
+    # fgsea is stochastic (permutation for the GO branch, multilevel sampling
+    # otherwise), so seed it exactly as the main GSEA table does in
+    # utils_gsea.R -- the ridgeline plot must not disagree with the table it
+    # visualises, and the deposited bundles must regenerate identically.
+    set.seed(123)
     if(fun.type %in% c("go_bp", "go_mf", "go_cc")){
-      res <- fgsea::fgsea(pathways = current.featureset.symb, 
+      res <- fgsea::fgsea(pathways = current.featureset.symb,
                           stats    = rankedVec,
                           minSize  = 5,
                           maxSize = 500,
                           scoreType = "std",
-                          nperm=10000)    
+                          nperm=1000)
     }else{
       res <- fgsea::fgsea(pathways = current.featureset.symb, 
                           stats    = rankedVec,

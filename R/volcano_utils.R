@@ -697,9 +697,13 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
   names(hits.query) <- names(current.featureset);
   hit.num<-unlist(lapply(hits.query, function(x){length(unique(x))}), use.names=FALSE);
   
-  # total unique gene number
-  #uniq.count <- length(current.universe);
-  uniq.count <- nrow(dataSet$data.norm);
+  # Total unique gene number. This MUST be the same pool the query was drawn
+  # from: ora.vec was cut to current.universe above, so using nrow(data.norm)
+  # (which still counts features that failed UniProt->Entrez mapping) overstates
+  # N, understates the expected overlap, and inflates significance. Matches
+  # enrich_utils.R and honours paramSet$universe.opt, which the hardcoded row
+  # count ignored entirely.
+  uniq.count <- length(current.universe);
   
   # unique gene count in each pathway
   set.size <- unlist(lapply(current.featureset, length));
@@ -714,7 +718,11 @@ PerformVolcanoBatchEnrichment <- function(dataName="", file.nm, fun.type, IDs, i
   raw.pvals[is.nan(raw.pvals)] <- 1
 
   res.mat[,4]<- raw.pvals;
-  res.mat[,5] <- raw.pvals;
+  # A column named FDR must hold adjusted values. current.featureset is
+  # currently two copies of the selected set, for which BH is a no-op, so this
+  # is not a numerical change today -- but it stops the column from silently
+  # becoming wrong if more than one distinct set is ever tested here.
+  res.mat[,5] <- p.adjust(raw.pvals, "fdr");
   
   # now, clean up result, synchronize with hit.query
   res.mat <- res.mat[hit.num>0,,drop = F];
