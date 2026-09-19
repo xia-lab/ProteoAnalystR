@@ -32,6 +32,35 @@ GetLabelOrdering <- function(labels){
   }
 }
 
+##############################################
+## Fold-contained column scaling (leakage-free CV) - shared with MetaboAnalystR
+##############################################
+## When the analysis matrix was column-scaled with statistics of all samples (mean
+## centering, auto / Pareto / range scaling; dataSet$scale.norm), the scaling is re-fit on
+## each training fold and the held-out fold is projected with the training statistics.
+## Inert when dataSet$scale.norm is NULL / "NA" or dataSet$fold.scale.off is TRUE.
+.fold.scale.type <- function(dataSet){
+  sc <- dataSet$scale.norm;
+  if(is.null(sc) || !(sc %in% c("MeanCenter", "AutoNorm", "ParetoNorm", "RangeNorm"))) return(NULL);
+  if(isTRUE(dataSet$fold.scale.off)) return(NULL);
+  sc;
+}
+
+.fold.scale <- function(x.train, x.test, type){
+  if(is.null(type)) return(list(train = x.train, test = x.test));
+  x.train <- as.matrix(x.train); x.test <- as.matrix(x.test);
+  mu <- colMeans(x.train, na.rm = TRUE);
+  den <- switch(type,
+                MeanCenter = rep(1, ncol(x.train)),
+                AutoNorm = apply(x.train, 2, stats::sd, na.rm = TRUE),
+                ParetoNorm = sqrt(apply(x.train, 2, stats::sd, na.rm = TRUE)),
+                RangeNorm = apply(x.train, 2, function(v) diff(range(v, na.rm = TRUE))));
+  den[!is.finite(den) | den == 0] <- 1;
+  tr <- sweep(sweep(x.train, 2, mu), 2, den, "/");
+  te <- if(nrow(x.test)) sweep(sweep(x.test, 2, mu), 2, den, "/") else x.test;
+  list(train = tr, test = te);
+}
+
 #'Numbers for subset selection
 #'@description Return a series of number for subsets selection
 #'@param feat.len Input the feature length
@@ -512,6 +541,8 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
   }
 
   nFeatures <- GetFeatureNumbers(ncol(data));
+  fold.type <- .fold.scale.type(dataSet);
+  analSet$fold.scaling <- if(is.null(fold.type)) "none" else fold.type;
 
   #msg("[PerformCV.explore] DEBUG: nFeatures = ", paste(nFeatures, collapse=", "))
 
@@ -567,6 +598,9 @@ PerformCV.explore <- function(dataName = "", cls.method, rank.method="auroc", lv
       train.fold <- trainingSampleRun.raw;
       test.fold <- testSampleRun.raw;
     }
+    # column scaling re-fit on the training fold only (leakage-free)
+    fs <- .fold.scale(train.fold, test.fold, fold.type);
+    train.fold <- fs$train; test.fold <- fs$test;
     x.in <- train.fold;
 
     if (irun == 1) {
@@ -1217,7 +1251,9 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
   
   feat.outp <- actualCls <- perf.outp <- vector(length = nRuns, mode = "list");
   auc.vec <- accu.vec <- vector(mode="numeric", length=nRuns);
-  
+  fold.type <- .fold.scale.type(dataSet);
+  analSet$fold.scaling <- if(is.null(fold.type)) "none" else fold.type;
+
   for (irun in 1:nRuns){
     if(irun == 1) msg("[PerformCV.test] DEBUG: Starting iteration 1 with method='", method, "'");
     trainingSampleRun <- trainRuns[irun, ]
@@ -1240,6 +1276,8 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
       x.train <- x.train.raw;
       x.test <- x.test.raw;
     }
+    fs <- .fold.scale(x.train, x.test, fold.type);      # training-fold scaling only
+    x.train <- fs$train; x.test <- fs$test;
 
     if(irun == 1) msg("[PerformCV.test] DEBUG: About to call Predict.class");
     res <- Predict.class(x.train, y.train, x.test, method, lvNum, imp.out=T);
@@ -1294,7 +1332,7 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
   if(!is.null(dataSet$test.data)){
     test.input <- adjust.for.prediction(dataSet$test.data, "Hold-out prediction skipped")
     test.res <- if(is.null(test.input)) NULL else
-      Predict.class(data, cls, test.input, method, lvNum)
+      { fs <- .fold.scale(data, test.input[, colnames(data), drop=FALSE], fold.type); Predict.class(fs$train, cls, fs$test, method, lvNum) }
   }else{
     test.res <- NULL;
   }
@@ -1303,7 +1341,7 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
   if(!is.null(dataSet$new.data)){
     new.input <- adjust.for.prediction(dataSet$new.data, "New-sample prediction skipped")
     new.res <<- if(is.null(new.input)) NULL else
-      Predict.class(data, cls, new.input, method, lvNum)
+      { fs <- .fold.scale(data, new.input[, colnames(data), drop=FALSE], fold.type); Predict.class(fs$train, cls, fs$test, method, lvNum) }
   }else{
     new.res <- NULL;
   }
@@ -1401,7 +1439,8 @@ Perform.Permut <- function(dataName = "", perf.measure, perm.num, propTraining =
     datmat <- dataSet$data.norm.transposed;
   }
   original.cls <- cls;
-  
+  fold.type <- .fold.scale.type(dataSet);
+
   if(analSet$mode == "test"){
     clsMethod <- analSet$tester.method;
   }else{
@@ -1432,7 +1471,8 @@ Perform.Permut <- function(dataName = "", perf.measure, perm.num, propTraining =
         x.train <- fold.adj$train;
         x.test <- fold.adj$test;
       }
-      perf.outp[[irun]] <- Get.pred(x.train, y.in, x.test, y.out, clsMethod);
+      fs <- .fold.scale(x.train, x.test, fold.type);
+      perf.outp[[irun]] <- Get.pred(fs$train, y.in, fs$test, y.out, clsMethod);
       irun <- irun + 1;
     }else{
       print("redo....");
@@ -4561,6 +4601,13 @@ Plot.Permutation<-function(dataName = "", imgName, format="png", dpi=default.dpi
   vv <- as.character(meta[smpls, v]);
   cc <- as.character(dataSet$cls[match(smpls, rownames(base))]);
   if(any(is.na(vv)) || any(is.na(cc)) || length(unique(vv)) < 2) return(FALSE);
+  num <- suppressWarnings(as.numeric(vv));
+  if(all(!is.na(num)) && length(unique(cc)) == 2){
+    # a numeric variable whose values separate the two groups with a single threshold
+    # (e.g. the exposure level that defined the groups) is the outcome in disguise
+    lv <- unique(cc); a <- num[cc == lv[1]]; b <- num[cc == lv[2]];
+    return(max(a) < min(b) || max(b) < min(a));
+  }
   all(tapply(cc, vv, function(x) length(unique(x))) == 1) &&
     all(tapply(vv, cc, function(x) length(unique(x))) == 1);
 }
