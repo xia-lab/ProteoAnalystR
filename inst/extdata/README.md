@@ -80,7 +80,8 @@ manifest for manual verification.
 ## Reproducible full benchmarks
 
 The complete benchmark suite (all datasets, scoring runners, and reports that
-reproduce the manuscript numbers) lives in the application repository under
-`reviewer_revision/benchmarks/` (`fetch_benchmarks.sh`, `MANIFEST.tsv`,
-`CHECKSUMS.sha256`, `scoring/`). This package-level manifest is a self-contained
-subset for quick, in-R examples.
+reproduce the manuscript numbers) is distributed in the reproducibility deposit
+as the `benchmark_*` bundles, with `fetch_benchmarks.sh`, `MANIFEST.tsv`,
+`CHECKSUMS.sha256`, and the shared `scoring/` code in
+`benchmark_provenance_and_reports`. This package-level manifest is a
+self-contained subset for quick, in-R examples.

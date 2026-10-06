@@ -86,5 +86,5 @@ suite. A citable Zenodo DOI will be minted for this release at publication.
 
 ### Packaging
 - `Version: 1.0.0`, `License: MIT`, `Depends: R (>= 4.5)`.
-- Pinned dependency environment documented in
-  `reviewer_revision/reproducibility/DEPENDENCIES.md` (R 4.5.3 / Bioconductor 3.22).
+- Pinned dependency environment documented in the reproducibility deposit
+  (`renv.lock`; R 4.5.3 / Bioconductor 3.22).
