@@ -779,11 +779,13 @@ rsclient_isolated_exec <- function(func_body, input_data, packages = character(0
 # write.csv() is ~15x slower than fwrite() on large matrices. With quote=TRUE and na="NA",
 # fwrite of the matrix (row names as an unnamed first column) reproduces write.csv's bytes
 # exactly. Cases where the two differ (no row names but row.names=TRUE -> write.csv writes
-# "1","2",...; zero rows; non-atomic types) keep using write.csv.
+# "1","2",...; NA dimnames -> write.csv quotes them as "NA", fwrite writes bare NA;
+# zero rows; non-atomic types) keep using write.csv.
 .ov_fwrite_matrix_ok <- function(dat, row.names) {
     is.matrix(dat) && nrow(dat) > 0 && ncol(dat) > 0 &&
         (is.double(dat) || is.integer(dat) || is.character(dat) || is.logical(dat)) &&
-        (isFALSE(row.names) || (isTRUE(row.names) && !is.null(rownames(dat))))
+        (isFALSE(row.names) || (isTRUE(row.names) && !is.null(rownames(dat)) && !anyNA(rownames(dat)))) &&
+        !anyNA(colnames(dat))
 }
 
 .ov_fwrite_matrix <- function(dat, file, row.names) {

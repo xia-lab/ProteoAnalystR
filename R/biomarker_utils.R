@@ -2150,11 +2150,15 @@ PrepareROCData <- function(dataName = "", sel.meta="NA", factor1="NA", factor2="
   if (length(which(stt < 10)) == 2) {
     msg.vec <<- paste0("errorLess than 10 samples in both groups ", names(stt)[1], " and ", names(stt)[2], 
                        ". Please select other groups containing more than 10 samples for biomarker analysis.")
-    return
+    msgSet$current.msg <- sub("^error", "", msg.vec);
+    saveSet(msgSet, "msgSet");
+    return(0);
   } else if (length(which(stt < 10)) == 1) {
     msg.vec <<- paste0("errorLess than 10 samples in group ", names(stt)[which(stt < 10)], 
                        ". Please select other groups containing more than 10 samples for biomarker analysis.")
-    return
+    msgSet$current.msg <- sub("^error", "", msg.vec);
+    saveSet(msgSet, "msgSet");
+    return(0);
   } else if (length(which(stt < 20)) == 2) {
     msg.vec <<- paste0("warnBiomarker analysis requires a large sample size. Both groups selected have less than 20 samples.")
   } else if (length(which(stt < 20)) == 1) {
@@ -2669,18 +2673,27 @@ GetFeatureRankingMat <- function(){
   analSet$feat.rank.mat;
 }
 
+# Fisher's exact test per feature on a 2x2 table: feature dichotomized at its
+# median (high = above median) vs. the two classes. Returns -log10(p).
+# With fixed class margins the p-value depends only on (n.high, n.high in class 1),
+# so fisher.test is run once per distinct pair.
 Get.Fisher <- function(x, fac, var.equal=TRUE) {
-  inx1 <- which(y==levels(y)[1]);
-  inx2 <- which(y==levels(y)[2]);
-  p.value <- apply(as.matrix(x), 2,
-                   function(x) {
-                     tmp <- try(fisher.test(x[inx1], x[inx2]));
-                     if(class(tmp) == "try-error") {
-                       return(NA);
-                     }else{
-                       return(tmp$p.value);
-                     }
-                   });
+  x <- as.matrix(x);
+  fac <- droplevels(as.factor(fac));
+  in1 <- fac == levels(fac)[1];
+  high <- sweep(x, 2, apply(x, 2, median, na.rm = TRUE), ">");
+  high[is.na(high)] <- FALSE;
+  n.high <- colSums(high);
+  a <- colSums(high[in1, , drop = FALSE]);
+  n1 <- sum(in1); n <- length(fac);
+  key <- paste(n.high, a);
+  uk <- unique(key);
+  up <- vapply(uk, function(k) {
+    v <- as.integer(strsplit(k, " ")[[1]]);
+    tab <- matrix(c(v[2], n1 - v[2], v[1] - v[2], n - n1 - v[1] + v[2]), 2);
+    fisher.test(tab)$p.value;
+  }, numeric(1));
+  p.value <- unname(up[match(key, uk)]);
   -log10(p.value);
 }
 
@@ -2753,7 +2766,9 @@ GetLassoFreqs <- function(dataName = ""){
 #'@param cls Input class labels
 GetROCLassoFreq <- function(data, cls){
   
-  data <- cbind(cls, data);
+  # data.frame, not cbind(): data.norm.transposed is a matrix, and cbind on a
+  # matrix gives a matrix on which dw.all$cls below fails.
+  data <- data.frame(cls = cls, as.data.frame(data), check.names = FALSE);
   d.headers <- names(data);
   names(data) <- c("cls", paste0("V", 1:(ncol(data)-1)));
   
@@ -2783,8 +2798,8 @@ GetROCLassoFreq <- function(data, cls){
       # resampling if sample size is less than 5 
       CV.inx1 <- sample(inx1, size=length(inx1), replace=TRUE);
       CV.inx2 <- sample(inx2, size=length(inx2), replace=TRUE);
-      dw1 <- data1[as.character(CV.inx1), ]; 
-      dw2 <- data2[as.character(CV.inx2), ]; 
+      dw1 <- data[CV.inx1, ]; 
+      dw2 <- data[CV.inx2, ]; 
     }
     
     dw.all <- rbind(dw1, dw2);   
@@ -2803,24 +2818,22 @@ GetROCLassoFreq <- function(data, cls){
     x <- model.matrix(as.formula(fmla), dw.all)[, -1];
     o <- lars::lars(x, dw.all$cls, type="lasso", trace=FALSE, intercept=TRUE, normalize=FALSE, use.Gram=FALSE);
     
-    cvfit <- NULL;
-    m <- NULL;
-    tryCatch({
+    # Coefficients at the CV-optimal point are taken with coef() in the same
+    # mode as the CV grid (cvfit$index is a fraction or step grid, not rows of
+    # o$beta). Assignments are plain values here, not inside handler closures.
+    m <- tryCatch({
       cvfit <- lars::cv.lars(x, dw.all$cls, type="lasso", mode="fraction", plot.it=FALSE);
-      m <- ( o$beta[which.min(cvfit$cv),] != 0 );
-      varlist10 <- names(m[m==TRUE]);
-    }, error = function(e) {
-      tryCatch ( {
-        cvfit <- lars::cv.lars(x, dw.all$cls, type="lar", mode="step", plot.it=FALSE); 
-        m <- ( o$beta[which.min(cvfit$cv),] != 0 );
-      }, error=function(e) {
-      }, finally = {
-        if(is.null(cvfit)) {
-          m <- ( o$beta[5,] != 0 );
-        }
-      })
-    }, finally = {
-    })
+      coef(o, s=cvfit$index[which.min(cvfit$cv)], mode="fraction") != 0;
+    }, error = function(e) NULL);
+    if (is.null(m)) {
+      m <- tryCatch({
+        cvfit <- lars::cv.lars(x, dw.all$cls, type="lar", mode="step", plot.it=FALSE);
+        coef(o, s=min(cvfit$index[which.min(cvfit$cv)], nrow(o$beta) - 1), mode="step") != 0;
+      }, error = function(e) NULL);
+    }
+    if (is.null(m)) {
+      m <- ( o$beta[min(5, nrow(o$beta)),] != 0 );
+    }
     
     varlist <- c(varlist, names(m[m==TRUE]));
   }

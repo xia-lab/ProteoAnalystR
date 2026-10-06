@@ -1450,12 +1450,16 @@ MapPhosphositeUniprotToSymbol <- function() {
       agg_df$site_id <- site_ids
       
       # Aggregate intensities
-      final_intens <- aggregate(. ~ site_id, data = agg_df, FUN = mean, na.rm = TRUE)
-      
+      # na.pass: the formula default (na.omit) would drop every row with any NA
+      # before averaging; average non-NA values per column instead.
+      final_intens <- aggregate(. ~ site_id, data = agg_df, FUN = mean, na.rm = TRUE,
+                                na.action = na.pass)
+
       rownames(final_intens) <- final_intens$site_id
       final_intens$site_id <- NULL
       int.mat <- as.matrix(final_intens)
-      
+      int.mat[is.nan(int.mat)] <- NA  # all-NA group -> NA, not NaN
+
       # Re-align site_ids after aggregation
       site_ids <- rownames(int.mat)
   } else {

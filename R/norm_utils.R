@@ -234,7 +234,8 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
           if (ncol(data) > 0) {
             df <- as.data.frame(data)
             df$Protein <- rownames(data)
-            df <- stats::aggregate(. ~ Protein, data = df, FUN = function(x) mean(x, na.rm = TRUE))
+            df <- stats::aggregate(. ~ Protein, data = df, na.action = na.pass,
+                                  FUN = function(x) if (all(is.na(x))) x[NA_integer_] else mean(x, na.rm = TRUE))
             rownames(df) <- df$Protein
             df$Protein <- NULL
             data <- as.matrix(df)

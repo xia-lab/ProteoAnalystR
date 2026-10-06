@@ -2620,7 +2620,9 @@ GetAnalysisType <- function(){
       #msg('[DIA-NN] Found ', n.dup, ' duplicate protein IDs after splitting; aggregating by sum')
       intens.df <- as.data.frame(intens)
       intens.df$Protein <- protein.ids
-      intens.agg <- stats::aggregate(. ~ Protein, data = intens.df, FUN = sum, na.rm = TRUE)
+      # na.pass keeps rows with any NA (na.omit dropped them); an all-NA group stays NA
+      intens.agg <- stats::aggregate(. ~ Protein, data = intens.df, na.action = na.pass,
+                                     FUN = function(x) if (all(is.na(x))) x[NA_integer_] else sum(x, na.rm = TRUE))
       rownames(intens.agg) <- intens.agg$Protein
       intens.agg$Protein <- NULL
       intens <- as.matrix(intens.agg)
@@ -2915,7 +2917,8 @@ GetAnalysisType <- function(){
     if (length(parts) == 0) return(NA_character_)
     parts[1]
   })
-  df <- df[!is.na(df$Protein) & !is.na(df$Qty), ]
+  keep <- !is.na(df$Protein) & !is.na(df$Qty)
+  df <- df[keep, ]
   agg <- .fast_aggregate_formula(Qty ~ Protein + Run, data = df, FUN = mean)
   wide <- reshape(agg, idvar = "Protein", timevar = "Run", direction = "wide")
   rownames(wide) <- wide$Protein
@@ -2924,11 +2927,11 @@ GetAnalysisType <- function(){
   intens <- as.matrix(wide)
   diann_meta <- data.frame(Protein.IDs = rownames(intens), stringsAsFactors = FALSE)
   if ("Q.Value" %in% colnames(dat)) {
-    qv <- .fast_aggregate_vec(as.numeric(dat$Q.Value), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
+    qv <- .fast_aggregate_vec(as.numeric(dat$Q.Value[keep]), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
     diann_meta$Q.Value <- qv$x[match(diann_meta$Protein.IDs, qv$Protein)]
   }
   if ("PEP" %in% colnames(dat)) {
-    pepv <- .fast_aggregate_vec(as.numeric(dat$PEP), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
+    pepv <- .fast_aggregate_vec(as.numeric(dat$PEP[keep]), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
     diann_meta$PEP <- pepv$x[match(diann_meta$Protein.IDs, pepv$Protein)]
   }
   count_col <- NULL
@@ -2939,7 +2942,7 @@ GetAnalysisType <- function(){
     }
   }
   if (!is.null(count_col)) {
-    cnt <- .fast_aggregate_vec(as.numeric(dat[[count_col]]), by = list(Protein = df$Protein), FUN = max, na.rm = TRUE)
+    cnt <- .fast_aggregate_vec(as.numeric(dat[[count_col]][keep]), by = list(Protein = df$Protein), FUN = max, na.rm = TRUE)
     diann_meta$Peptide.Count <- cnt$x[match(diann_meta$Protein.IDs, cnt$Protein)]
   }
   ov_qs_save(diann_meta, "diann_metadata.qs")
@@ -3378,6 +3381,8 @@ GetAnalysisType <- function(){
     if (!is.null(msstats.fmt)) {
       # Save msstats input for later use (normalization, imputation, summarization in ProteoAnalyst pipeline)
       ov_qs_save(msstats.fmt, "msstats_input.qs")
+      # MSstatsConvert returns an S4 MSstatsValidated object, which model.frame() rejects
+      msstats.fmt <- as.data.frame(msstats.fmt)
       #msg('[Spectronaut] MSstats format saved with ', length(unique(msstats.fmt$ProteinName)), ' proteins')
 
       # Simple aggregation to protein level (median intensity per protein per run)
@@ -3520,7 +3525,9 @@ GetAnalysisType <- function(){
     #msg('[Spectronaut] Aggregating ', sum(duplicated(proteins)), ' duplicate protein IDs')
     intens <- as.data.frame(intens)
     intens$Protein <- proteins
-    intens <- stats::aggregate(. ~ Protein, data = intens, FUN = function(x) max(x, na.rm = TRUE))
+    # na.pass keeps rows with any NA (na.omit dropped them); an all-NA group stays NA
+    intens <- stats::aggregate(. ~ Protein, data = intens, na.action = na.pass,
+                               FUN = function(x) if (all(is.na(x))) x[NA_integer_] else max(x, na.rm = TRUE))
     proteins <- intens$Protein
     intens$Protein <- NULL
     intens <- as.matrix(intens)
