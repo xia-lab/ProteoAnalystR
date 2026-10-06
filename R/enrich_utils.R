@@ -693,6 +693,135 @@ PerformDefaultEnrichment <- function(dataName="", file.nm, fun.type){
   return(1);
 }
 
+# ---------------------------------------------------------------------------- #
+# ORA on proteins carrying nominally-changed PTM-occupancy sites, tested        #
+# against the measured proteome. Mirrors PerformDefaultEnrichment but takes the #
+# query from the PTM-occupancy result (Occ.Pvalue < cutoff) instead of the      #
+# DE-significant set, and appends a HitIDs column (data feature ids per term)   #
+# so the results table can open the protein-set intensity heatmap per term.     #
+# ---------------------------------------------------------------------------- #
+PerformOccupancyEnrichment <- function(dataName="", file.nm, fun.type, pval.cutoff=0.05, mod.type=""){
+  paramSet <- readSet(paramSet, "paramSet");
+  dataSet  <- readDataset(dataName);
+
+  occ <- tryCatch(ov_qs_read("ptm_occupancy_results.qs"), error=function(e) NULL);
+  if (is.null(occ) && file.exists("ptm_occupancy_results.csv"))
+    occ <- utils::read.csv("ptm_occupancy_results.csv", check.names=FALSE, stringsAsFactors=FALSE);
+  if (is.null(occ) || nrow(occ) == 0) {
+    AddErrMsg("No PTM-occupancy results found. Run the occupancy analysis first.");
+    return(0);
+  }
+  if (!all(c("Gene","Occ.Pvalue") %in% colnames(occ))) {
+    AddErrMsg("Occupancy result is missing the Gene / Occ.Pvalue columns.");
+    return(0);
+  }
+
+  sel <- suppressWarnings(as.numeric(occ$Occ.Pvalue)) < as.numeric(pval.cutoff);
+  sel[is.na(sel)] <- FALSE;
+  if (nzchar(mod.type) && "Modification" %in% colnames(occ))
+    sel <- sel & (occ$Modification == mod.type);
+  genes <- unique(as.character(occ$Gene[sel]));
+  genes <- genes[!is.na(genes) & nzchar(genes)];
+  if (length(genes) == 0) {
+    AddErrMsg(paste0("No proteins with nominally-changed occupancy sites (Occ.Pvalue < ", pval.cutoff,
+                     if (nzchar(mod.type)) paste0(", ", mod.type) else "", ") were found to enrich."));
+    return(0);
+  }
+
+  # The occupancy result carries only gene symbols, and the dataset may be
+  # peptide-level (data.norm rownames are peptides, not proteins). Map the
+  # symbols directly to Entrez, the id space .performEnrichAnalysis expects.
+  entrez.db <- queryGeneDB("entrez", paramSet$data.org);
+  entrez.db[] <- lapply(entrez.db, as.character);
+  ent <- entrez.db[match(genes, entrez.db[, "symbol"]), "gene_id"];
+  ok  <- !is.na(ent) & nzchar(ent);
+  gene.vec <- ent[ok];
+  names(gene.vec) <- genes[ok];
+  if (length(gene.vec) == 0) {
+    AddErrMsg("None of the occupancy-changed genes could be mapped to Entrez IDs for enrichment.");
+    return(0);
+  }
+
+  # The occupancy page bypasses the normal enrichment setup; ensure a background
+  # is defined so .performEnrichAnalysis uses the measured proteome (any value
+  # other than "library"), and never dereferences a NULL universe.opt.
+  if (is.null(paramSet$universe.opt) || is.na(paramSet$universe.opt)) {
+    paramSet$universe.opt <- "data";
+    saveSet(paramSet, "paramSet");
+  }
+
+  .performEnrichAnalysis(dataSet, file.nm, fun.type, gene.vec, "occupancy");
+
+  # Append per-term member gene symbols (HitIDs) for the protein-set heatmap
+  # link; GetVolcanoPathwayHeatmapJSON resolves symbols against the data.
+  csv.nm <- paste0(file.nm, ".csv");
+  if (file.exists(csv.nm)) {
+    res <- utils::read.csv(csv.nm, check.names=FALSE, stringsAsFactors=FALSE);
+    if ("features" %in% colnames(res)) {
+      res$HitIDs <- vapply(res$features, function(f){
+        syms <- trimws(unlist(strsplit(as.character(f), ",", fixed=TRUE)));
+        paste(syms[nzchar(syms)], collapse=";");
+      }, character(1));
+      utils::write.csv(res, csv.nm, row.names=FALSE);
+    }
+  }
+  return(1);
+}
+
+# Server-side PNG heatmap of a term's member proteins across samples (Fig-4B
+# style), for the occupancy-enrichment results table. IDs are data feature ids
+# (the HitIDs stored by PerformOccupancyEnrichment). Writes to the getNewImage
+# naming so SessionBean1.getCurrentImage() can serve it.
+PlotOccEnrichHeatmap <- function(dataName="", imgName, IDs, format="png", dpi=150){
+  paramSet <- readSet(paramSet, "paramSet");
+  dataSet  <- readDataset(dataName);
+  ids <- trimws(unlist(strsplit(as.character(IDs), ";", fixed=TRUE)));
+  ids <- ids[ids != "" & !is.na(ids)];
+  dat <- dataSet$data.norm;
+  if (is.null(dat) || nrow(dat) == 0 || length(ids) == 0) return(0);
+
+  # HitIDs from the occupancy-enrichment table are gene symbols, whereas the
+  # expression matrix is keyed by feature ids (e.g. UniProt accessions for a
+  # protein-level dataset). Map every row to its symbol and match on either the
+  # symbol or the raw feature id, so a term's proteins are found regardless of
+  # the dataset's id space.
+  row.symbols <- doEntrez2SymbolMapping(rownames(dat), paramSet$data.org, paramSet$data.idType);
+  sel <- (rownames(dat) %in% ids) | (row.symbols %in% ids);
+  if (!any(sel)) return(0);
+  mat  <- as.matrix(dat[sel, , drop=FALSE]);
+  labs <- row.symbols[sel];
+  bad  <- is.na(labs) | labs == "" | labs == "NA";
+  labs[bad] <- rownames(mat)[bad];
+  rownames(mat) <- make.unique(labs);
+
+  # Row z-scores for visual contrast; drop rows with no variance.
+  matz <- t(scale(t(mat)));
+  keep <- apply(matz, 1, function(r) any(is.finite(r)));
+  matz <- matz[keep, , drop=FALSE];
+  matz[!is.finite(matz)] <- 0;
+  if (nrow(matz) == 0) return(0);
+
+  df <- data.frame(
+    gene   = factor(rep(rownames(matz), times=ncol(matz)), levels=rev(rownames(matz))),
+    sample = factor(rep(colnames(matz), each=nrow(matz)), levels=colnames(matz)),
+    value  = as.vector(matz),
+    stringsAsFactors = FALSE);
+
+  suppressMessages(require(ggplot2));
+  p <- ggplot2::ggplot(df, ggplot2::aes(x=sample, y=gene, fill=value)) +
+    ggplot2::geom_tile(color="white", linewidth=0.15) +
+    ggplot2::scale_fill_gradient2(low="#2c7bb6", mid="#f7f7f7", high="#d7191c",
+                                  midpoint=0, name="Row z-score") +
+    ggplot2::theme_minimal(base_size=11) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle=45, hjust=1),
+                   axis.title  = ggplot2::element_blank(),
+                   panel.grid  = ggplot2::element_blank());
+  h <- max(3, 0.22 * nrow(matz) + 1.6);
+  ggplot2::ggsave(paste0(imgName, "dpi", dpi, ".", format), plot=p,
+                  dpi=as.numeric(dpi), width=7, height=h, limitsize=FALSE, bg="white");
+  return(1);
+}
+
 GetSigSetCount <- function(enrType, type, pval=0.05){
   pval <- as.numeric(pval);
   imgSet <- readSet(imgSet, "imgSet");
