@@ -157,21 +157,13 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
   }
 
   set.seed(123)
-  if(fun.type %in% c("go_bp", "go_mf", "go_cc")){
-      fgseaRes <- fgsea::fgsea(pathways = current.featureset, 
-                          stats    = rankedVec,
-                          minSize  = 5,
-                          maxSize = 500,
-                          scoreType = "std",
-                          nperm=1000)    
-    }else{
-      fgseaRes <- fgsea::fgsea(pathways = current.featureset, 
-                          stats    = rankedVec,
-                          minSize  = 5,
-                          maxSize = 500,
-                          scoreType = "std")   
-     
-    }
+  # All libraries (including Gene Ontology) are scored with fgsea's multilevel
+  # estimator (no nperm) rather than the simple fixed-permutation path.
+  fgseaRes <- fgsea::fgsea(pathways = current.featureset,
+                      stats    = rankedVec,
+                      minSize  = 5,
+                      maxSize = 500,
+                      scoreType = "std")
   
   fgseaRes <- fgseaRes[!duplicated(fgseaRes$pathway),]
   
