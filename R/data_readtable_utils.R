@@ -21,6 +21,115 @@
   as.matrix(out)
 }
 
+# Drop-in replica of stats::aggregate.data.frame(x, by, FUN, ...) (drop = TRUE,
+# simplify = TRUE) that forms groups from integer factor codes instead of
+# pasting/sorting "code.code" strings. Same rows (complete.cases(by)), same
+# group order (last `by` variable slowest, levels as as.factor() orders them),
+# same per-group values in original order, same output data.frame. Unusual
+# inputs (see .agg_fast_ok) go to the original implementation via the wrappers.
+.agg_fast_ok <- function(x, by) {
+  is.data.frame(x) && NROW(x) > 0L && NCOL(x) > 0L && is.list(by) && length(by) > 0L &&
+    !any(lengths(by) != NROW(x)) &&
+    all(vapply(by, function(e) is.atomic(e) && is.null(dim(e)), logical(1)))
+}
+.fast_aggregate_df <- function(x, by, FUN, ...) {
+  FUN <- match.fun(FUN)
+  x0 <- x; by0 <- by
+  if (is.null(names(by)) && length(by)) {
+    names(by) <- paste0("Group.", seq_along(by))
+  } else {
+    nam <- names(by)
+    ind <- which(!nzchar(nam))
+    names(by)[ind] <- paste0("Group.", ind)
+  }
+  y <- as.data.frame(by, stringsAsFactors = FALSE)
+  keep <- complete.cases(by)
+  y <- y[keep, , drop = FALSE]
+  x <- x[keep, , drop = FALSE]
+  fs <- lapply(y, as.factor)
+  nl <- vapply(fs, nlevels, integer(1))
+  if (prod(as.numeric(nl)) > 2^52) {
+    return(aggregate.data.frame(x0, by0, FUN = FUN, ...))
+  }
+  g <- numeric(NROW(x)); mult <- 1
+  for (i in seq_along(fs)) {
+    g <- g + (as.integer(fs[[i]]) - 1) * mult
+    mult <- mult * nl[[i]]
+  }
+  ug <- sort(unique(g))
+  gi <- match(g, ug)
+  y <- y[match(seq_along(ug), gi), , drop = FALSE]
+  grp <- structure(gi, levels = as.character(seq_along(ug)), class = "factor")
+  dots <- list(...)
+  med.fast <- identical(FUN, stats::median) &&
+    (length(dots) == 0L || (identical(names(dots), "na.rm") && isTRUE(dots$na.rm)))
+  z <- lapply(x, function(e) {
+    if (med.fast && is.double(e) && is.null(attributes(e)) && !anyNA(e)) {
+      # median() of a single non-NA double is that value; only groups with
+      # >= 2 values need the median() call
+      sz <- tabulate(gi, nbins = length(ug))
+      ans <- numeric(length(ug))
+      one <- sz == 1L
+      ans[one] <- e[match(which(one), gi)]
+      if (any(!one)) {
+        sel <- !one[gi]
+        ans[!one] <- vapply(unname(split(e[sel], factor(gi[sel], levels = which(!one)))),
+                            function(v) FUN(v, ...), numeric(1))
+      }
+      return(ans)
+    }
+    ans <- lapply(X = unname(split(e, grp)), FUN = FUN, ...)
+    if (length(len <- unique(lengths(ans))) == 1L) {
+      if (len == 1L) {
+        cl <- lapply(ans, oldClass)
+        cl1 <- cl[[1L]]
+        ans <- if (!is.null(cl1) && all(vapply(cl, identical, NA, y = cl1)))
+          do.call(c, ans)
+        else unlist(ans, recursive = FALSE, use.names = FALSE)
+      } else if (len > 1L) {
+        ans <- matrix(unlist(ans, recursive = FALSE, use.names = FALSE),
+                      ncol = len, byrow = TRUE,
+                      dimnames = if (!is.null(nms <- names(ans[[1L]]))) list(NULL, nms))
+      }
+    }
+    ans
+  })
+  len <- length(y)
+  for (i in seq_along(z)) y[[len + i]] <- z[[i]]
+  names(y) <- c(names(by), names(x))
+  row.names(y) <- NULL
+  y
+}
+
+# Replica of stats::aggregate(<vector>, by = <list>, FUN = <fn>, ...); `by` must be named
+.fast_aggregate_vec <- function(x, ...) {
+  xd <- as.data.frame(x)
+  if (!.agg_fast_ok(xd, list(...)[["by"]])) return(aggregate.data.frame(as.data.frame(x), ...))
+  .fast_aggregate_df(xd, ...)
+}
+
+# Replica of stats::aggregate(<lhs> ~ <rhs>, data, FUN, ...) (na.action = na.omit)
+.fast_aggregate_formula <- function(formula, data, FUN, ...) {
+  # na.action as in aggregate.formula: not passed, so getOption("na.action") (na.omit)
+  mf <- stats::model.frame(formula, data = data)
+  lhs <- if (is.matrix(mf[[1L]])) as.data.frame(mf[[1L]]) else mf[1L]
+  if (!.agg_fast_ok(lhs, mf[-1L])) return(aggregate.data.frame(lhs, mf[-1L], FUN = FUN, ...))
+  .fast_aggregate_df(lhs, mf[-1L], FUN = FUN, ...)
+}
+
+# sapply(X, FUN) for a character vector X, evaluating FUN once per unique value.
+# FUN must return a length-1 result; the result keeps sapply's names (= X).
+.sapply_unique <- function(X, FUN) {
+  u <- unique(X)
+  ans <- sapply(u, FUN, USE.NAMES = FALSE)
+  if (!is.atomic(ans) || !is.null(dim(ans)) || length(ans) != length(u)) {
+    return(sapply(X, FUN))
+  }
+  ans <- ans[match(X, u)]
+  names(ans) <- X
+  ans
+}
+
 #' Read Tabular Expression Data and Metadata
 #'
 #' This function reads tabular expression data along with metadata and processes the data.
@@ -2293,7 +2402,7 @@ GetAnalysisType <- function(){
     rownames(intens) <- precursor.ids
 
     # Remove all-NA rows
-    all.na.rows <- apply(intens, 1, function(x) all(is.na(x)))
+    all.na.rows <- rowSums(!is.na(intens)) == 0
     if (any(all.na.rows)) {
       intens <- intens[!all.na.rows, , drop = FALSE]
       dat <- dat[!all.na.rows, , drop = FALSE]
@@ -2303,11 +2412,14 @@ GetAnalysisType <- function(){
     # Build peptide-to-protein map
     prot.map <- NULL
     if ("Protein.Ids" %in% cols) {
-      clean.prots <- vapply(strsplit(as.character(dat$Protein.Ids), "[;|,]"), function(x) {
+      # parse each distinct Protein.Ids string once, expand back by match()
+      pid.all <- as.character(dat$Protein.Ids)
+      pid.u <- unique(pid.all)
+      clean.prots <- vapply(strsplit(pid.u, "[;|,]"), function(x) {
         x <- x[nchar(trimws(x)) > 0]
         if (length(x) == 0) return(NA_character_)
         trimws(x[1])
-      }, character(1))
+      }, character(1))[match(pid.all, pid.u)]
       prot.map <- data.frame(
         Peptide = rownames(intens),
         Protein = clean.prots,
@@ -2483,7 +2595,7 @@ GetAnalysisType <- function(){
 
     # Split Protein.Ids/Protein.Group and take first protein (leading protein)
     # This is consistent with the workflow assumption of one protein per row
-    protein.ids <- sapply(as.character(dat[[id.col]]), function(x) {
+    protein.ids <- .sapply_unique(as.character(dat[[id.col]]), function(x) {
       parts <- strsplit(x, "[;|,]", perl = TRUE)[[1]]
       if (length(parts) == 0) return(NA_character_)
       parts[1]  # Take first/leading protein
@@ -2642,13 +2754,15 @@ GetAnalysisType <- function(){
           # If there were duplicates, sum the counts for aggregated proteins
           count.df <- data.frame(Protein = rownames(intens), stringsAsFactors = FALSE)
           count.df$Count <- 0  # Initialize
-          # Match back to original protein IDs and sum
-          for (i in seq_along(protein.ids)) {
-            idx <- which(rownames(intens) == protein.ids[i])
-            if (length(idx) > 0) {
-              count.df$Count[idx] <- count.df$Count[idx] + count.vals[i]
-            }
+          # Match back to original protein IDs and sum (rownames(intens) are
+          # unique after the aggregation above, so match() == which(); same
+          # left-to-right accumulation order as before)
+          cnt.sum <- count.df$Count
+          hit <- match(protein.ids, rownames(intens))
+          for (i in which(!is.na(hit))) {
+            cnt.sum[hit[i]] <- cnt.sum[hit[i]] + count.vals[i]
           }
+          count.df$Count <- cnt.sum
           pepcount <- count.df$Count
           names(pepcount) <- count.df$Protein
         } else {
@@ -2720,7 +2834,7 @@ GetAnalysisType <- function(){
     diann.df <- as.data.frame(fmt, stringsAsFactors = FALSE)
     diann.df$Intensity <- as.numeric(diann.df$Intensity)
     diann.df <- diann.df[!is.na(diann.df$Intensity), ]
-    agg <- aggregate(Intensity ~ ProteinName + Run, data = diann.df, FUN = mean)
+    agg <- .fast_aggregate_formula(Intensity ~ ProteinName + Run, data = diann.df, FUN = mean)
     wide <- reshape(agg, idvar = "ProteinName", timevar = "Run", direction = "wide")
     if (nrow(wide) == 0) {
       #msg("[DIA-NN][ERROR] MSstats returned empty data after filtering")
@@ -2739,12 +2853,18 @@ GetAnalysisType <- function(){
       cont.inx <- setNames(rep(FALSE, ncol(meta.df)), colnames(meta.df))
 
       diann_meta <- data.frame(Protein.IDs = rownames(intens), stringsAsFactors = FALSE)
+      # leading protein per report row, computed once (was recomputed per aggregate)
+      lead.prot <- NULL
+      get.lead.prot <- function() {
+        if (is.null(lead.prot)) lead.prot <<- .sapply_unique(as.character(dat$Protein.Ids), function(x) strsplit(x, "[;|,]", perl = TRUE)[[1]][1])
+        lead.prot
+      }
       if ("Q.Value" %in% colnames(dat)) {
-        qv <- stats::aggregate(as.numeric(dat$Q.Value), by = list(Protein = sapply(as.character(dat$Protein.Ids), function(x) strsplit(x, "[;|,]", perl = TRUE)[[1]][1])), FUN = min, na.rm = TRUE)
+        qv <- .fast_aggregate_vec(as.numeric(dat$Q.Value), by = list(Protein = get.lead.prot()), FUN = min, na.rm = TRUE)
         diann_meta$Q.Value <- qv$x[match(diann_meta$Protein.IDs, qv$Protein)]
       }
       if ("PEP" %in% colnames(dat)) {
-        pepv <- stats::aggregate(as.numeric(dat$PEP), by = list(Protein = sapply(as.character(dat$Protein.Ids), function(x) strsplit(x, "[;|,]", perl = TRUE)[[1]][1])), FUN = min, na.rm = TRUE)
+        pepv <- .fast_aggregate_vec(as.numeric(dat$PEP), by = list(Protein = get.lead.prot()), FUN = min, na.rm = TRUE)
         diann_meta$PEP <- pepv$x[match(diann_meta$Protein.IDs, pepv$Protein)]
       }
       count_col <- NULL
@@ -2755,7 +2875,7 @@ GetAnalysisType <- function(){
         }
       }
       if (!is.null(count_col)) {
-        cnt <- stats::aggregate(as.numeric(dat[[count_col]]), by = list(Protein = sapply(as.character(dat$Protein.Ids), function(x) strsplit(x, "[;|,]", perl = TRUE)[[1]][1])), FUN = max, na.rm = TRUE)
+        cnt <- .fast_aggregate_vec(as.numeric(dat[[count_col]]), by = list(Protein = get.lead.prot()), FUN = max, na.rm = TRUE)
         diann_meta$Peptide.Count <- cnt$x[match(diann_meta$Protein.IDs, cnt$Protein)]
       }
       ov_qs_save(diann_meta, "diann_metadata.qs")
@@ -2790,13 +2910,13 @@ GetAnalysisType <- function(){
     return(NULL)
   }
   df <- data.frame(Protein = dat$Protein.Ids, Run = run.vec, Qty = as.numeric(dat[[qty_col]]), stringsAsFactors = FALSE)
-  df$Protein <- sapply(as.character(df$Protein), function(x) {
+  df$Protein <- .sapply_unique(as.character(df$Protein), function(x) {
     parts <- strsplit(x, "[;|,]", perl = TRUE)[[1]]
     if (length(parts) == 0) return(NA_character_)
     parts[1]
   })
   df <- df[!is.na(df$Protein) & !is.na(df$Qty), ]
-  agg <- stats::aggregate(Qty ~ Protein + Run, data = df, FUN = mean)
+  agg <- .fast_aggregate_formula(Qty ~ Protein + Run, data = df, FUN = mean)
   wide <- reshape(agg, idvar = "Protein", timevar = "Run", direction = "wide")
   rownames(wide) <- wide$Protein
   wide$Protein <- NULL
@@ -2804,11 +2924,11 @@ GetAnalysisType <- function(){
   intens <- as.matrix(wide)
   diann_meta <- data.frame(Protein.IDs = rownames(intens), stringsAsFactors = FALSE)
   if ("Q.Value" %in% colnames(dat)) {
-    qv <- stats::aggregate(as.numeric(dat$Q.Value), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
+    qv <- .fast_aggregate_vec(as.numeric(dat$Q.Value), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
     diann_meta$Q.Value <- qv$x[match(diann_meta$Protein.IDs, qv$Protein)]
   }
   if ("PEP" %in% colnames(dat)) {
-    pepv <- stats::aggregate(as.numeric(dat$PEP), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
+    pepv <- .fast_aggregate_vec(as.numeric(dat$PEP), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
     diann_meta$PEP <- pepv$x[match(diann_meta$Protein.IDs, pepv$Protein)]
   }
   count_col <- NULL
@@ -2819,7 +2939,7 @@ GetAnalysisType <- function(){
     }
   }
   if (!is.null(count_col)) {
-    cnt <- stats::aggregate(as.numeric(dat[[count_col]]), by = list(Protein = df$Protein), FUN = max, na.rm = TRUE)
+    cnt <- .fast_aggregate_vec(as.numeric(dat[[count_col]]), by = list(Protein = df$Protein), FUN = max, na.rm = TRUE)
     diann_meta$Peptide.Count <- cnt$x[match(diann_meta$Protein.IDs, cnt$Protein)]
   }
   ov_qs_save(diann_meta, "diann_metadata.qs")
@@ -2858,6 +2978,9 @@ GetAnalysisType <- function(){
                              'Accession', 'Protein.Group', 'ProteinName')
   get.spectronaut.protein.ids <- function(x, protein.col) {
     proteins <- as.character(x[[protein.col]])
+    # parse each distinct ID string once, then expand back by match()
+    proteins.all <- proteins
+    proteins <- proteins.u <- unique(proteins.all)
     # Semicolon/comma delimit protein groups, whereas pipes are part of UniProt
     # identifiers (for example 1/sp|P37108|SRP14_HUMAN). Splitting on `|`
     # previously reduced thousands of proteins to a handful of FASTA prefixes.
@@ -2870,7 +2993,7 @@ GetAnalysisType <- function(){
       }
       id
     }, character(1))
-    proteins
+    proteins[match(proteins.all, proteins.u)]
   }
 
   build.spectronaut.metadata <- function(raw.dat, protein.col, protein.ids, keep.ids, pepcount = NULL) {
@@ -2891,7 +3014,7 @@ GetAnalysisType <- function(){
     raw.sub <- raw.dat[valid, , drop = FALSE]
 
     if ("PG.IsContaminant" %in% colnames(raw.sub)) {
-      cont.df <- stats::aggregate(as.logical(raw.sub$PG.IsContaminant), by = list(Protein = protein.ids), FUN = function(x) any(isTRUE(x), na.rm = TRUE))
+      cont.df <- .fast_aggregate_vec(as.logical(raw.sub$PG.IsContaminant), by = list(Protein = protein.ids), FUN = function(x) any(isTRUE(x), na.rm = TRUE))
       spec_metadata$PG.IsContaminant <- cont.df$x[match(keep.ids, cont.df$Protein)]
       spec_metadata$PG.IsContaminant[is.na(spec_metadata$PG.IsContaminant)] <- FALSE
     }
@@ -2907,7 +3030,7 @@ GetAnalysisType <- function(){
     }
     if (!is.null(qval.col)) {
       qvals <- suppressWarnings(as.numeric(raw.sub[[qval.col]]))
-      qval.df <- stats::aggregate(qvals, by = list(Protein = protein.ids), FUN = function(x) suppressWarnings(min(x, na.rm = TRUE)))
+      qval.df <- .fast_aggregate_vec(qvals, by = list(Protein = protein.ids), FUN = function(x) suppressWarnings(min(x, na.rm = TRUE)))
       spec_metadata$PG.Qvalue <- qval.df$x[match(keep.ids, qval.df$Protein)]
       spec_metadata$PG.Qvalue[!is.finite(spec_metadata$PG.Qvalue)] <- NA_real_
     }
@@ -2933,10 +3056,10 @@ GetAnalysisType <- function(){
       if (!is.null(pep.col)) {
         if (pep.col %in% c("Stripped.Sequence", "Sequence", "EG.ModifiedSequence", "ModifiedSequence")) {
           pepvals <- as.character(raw.sub[[pep.col]])
-          pep.df <- stats::aggregate(pepvals, by = list(Protein = protein.ids), FUN = function(x) length(unique(stats::na.omit(x))))
+          pep.df <- .fast_aggregate_vec(pepvals, by = list(Protein = protein.ids), FUN = function(x) length(unique(stats::na.omit(x))))
         } else {
           pepvals <- suppressWarnings(as.numeric(raw.sub[[pep.col]]))
-          pep.df <- stats::aggregate(pepvals, by = list(Protein = protein.ids), FUN = function(x) suppressWarnings(max(x, na.rm = TRUE)))
+          pep.df <- .fast_aggregate_vec(pepvals, by = list(Protein = protein.ids), FUN = function(x) suppressWarnings(max(x, na.rm = TRUE)))
         }
         spec_metadata$Peptide.Count <- pep.df$x[match(keep.ids, pep.df$Protein)]
         spec_metadata$Peptide.Count[!is.finite(spec_metadata$Peptide.Count)] <- NA_real_
@@ -3045,7 +3168,7 @@ GetAnalysisType <- function(){
       # names unmatched in prot.map. Preserve peptide/protein identity through
       # the reshape and expose unique peptide feature IDs afterwards.
       long.df$FeatureKey <- paste(long.df$Peptide, long.df$Protein, sep = "\u241F")
-      agg <- stats::aggregate(Intensity ~ FeatureKey + Run, data = long.df,
+      agg <- .fast_aggregate_formula(Intensity ~ FeatureKey + Run, data = long.df,
                               FUN = median, na.rm = TRUE)
       if (!requireNamespace("reshape2", quietly = TRUE)) {
         return(NULL)
@@ -3261,7 +3384,7 @@ GetAnalysisType <- function(){
       # Full MSstats processing (normalization, TMP summarization) will be done later
       if (requireNamespace("reshape2", quietly = TRUE)) {
         # Aggregate peptide intensities to protein level using median
-        agg <- stats::aggregate(Intensity ~ ProteinName + Run, data = msstats.fmt, FUN = median, na.rm = TRUE)
+        agg <- .fast_aggregate_formula(Intensity ~ ProteinName + Run, data = msstats.fmt, FUN = median, na.rm = TRUE)
         wide <- reshape2::dcast(agg, ProteinName ~ Run, value.var = "Intensity")
         intens <- as.matrix(wide[, -1, drop = FALSE])
         rownames(intens) <- wide$ProteinName
@@ -3287,7 +3410,7 @@ GetAnalysisType <- function(){
         pepcount <- NULL
         if ("PeptideSequence" %in% colnames(msstats.fmt) || "FullPeptideName" %in% colnames(msstats.fmt)) {
           pep.col <- if ("PeptideSequence" %in% colnames(msstats.fmt)) "PeptideSequence" else "FullPeptideName"
-          pep.counts <- stats::aggregate(as.formula(paste(pep.col, "~ ProteinName")),
+          pep.counts <- .fast_aggregate_formula(as.formula(paste(pep.col, "~ ProteinName")),
                                         data = msstats.fmt,
                                         FUN = function(x) length(unique(x)))
           colnames(pep.counts)[2] <- "Count"

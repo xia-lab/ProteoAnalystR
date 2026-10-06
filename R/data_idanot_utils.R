@@ -1099,13 +1099,20 @@ queryGeneDB <- function(db.nm, org){
                     all(c("gene_id", "accession") %in% colnames(sp.map))) {
     split(as.character(sp.map$accession), as.character(sp.map$gene_id))
   } else NULL
-  vapply(as.character(entrez.vec), function(g) {
-    a <- by.gene[[g]]
-    if (is.null(a)) return(NA_character_)
+  # Name lookups via match() instead of per-ID list[[name]] scans; "" never
+  # matches a name with [[ (returns NULL), so it is excluded here too.
+  ent <- as.character(entrez.vec)
+  no.name <- !is.na(ent) & ent == ""
+  gi <- match(ent, names(by.gene)); gi[no.name] <- NA_integer_
+  si <- if (!is.null(by.gene.sp)) match(ent, names(by.gene.sp)) else rep(NA_integer_, length(ent))
+  si[no.name] <- NA_integer_
+  vapply(seq_along(ent), function(k) {
+    if (is.na(gi[k])) return(NA_character_)
+    a <- by.gene[[gi[k]]]
     if (!is.null(prefer) && any(a %in% prefer)) {
       a <- a[a %in% prefer]
     } else if (!is.null(by.gene.sp)) {
-      sp <- a[a %in% by.gene.sp[[g]]]
+      sp <- a[a %in% (if (is.na(si[k])) NULL else by.gene.sp[[si[k]]])]
       if (length(sp) > 0) a <- sp
     }
     .paPickCanonicalUniprot(a, prefer)

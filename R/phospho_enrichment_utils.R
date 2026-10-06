@@ -105,9 +105,10 @@
   cat(sprintf("[Phospho Enrichment] Collapsed to %d unique Entrez IDs\n", length(unique.entrez)))
 
   # Create reverse mapping: entrez -> list of phosphosites
-  entrez.to.phospho <- lapply(unique.entrez, function(eid) {
-    phosphosite.ids[which(phospho.to.entrez == eid & !is.na(phospho.to.entrez))]
-  })
+  # One split() pass instead of a full scan per Entrez ID; every entry equal to
+  # some unique.entrez value is non-NA and non-empty, i.e. inside mapped.inx.
+  entrez.to.phospho <- split(phosphosite.ids[mapped.inx],
+                             factor(entrez.ids[mapped.inx], levels = unique.entrez))
   names(entrez.to.phospho) <- unique.entrez
 
   return(list(

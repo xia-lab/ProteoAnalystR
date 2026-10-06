@@ -776,6 +776,21 @@ rsclient_isolated_exec <- function(func_body, input_data, packages = character(0
     }, error = function(e) dat);
 }
 
+# write.csv() is ~15x slower than fwrite() on large matrices. With quote=TRUE and na="NA",
+# fwrite of the matrix (row names as an unnamed first column) reproduces write.csv's bytes
+# exactly. Cases where the two differ (no row names but row.names=TRUE -> write.csv writes
+# "1","2",...; zero rows; non-atomic types) keep using write.csv.
+.ov_fwrite_matrix_ok <- function(dat, row.names) {
+    is.matrix(dat) && nrow(dat) > 0 && ncol(dat) > 0 &&
+        (is.double(dat) || is.integer(dat) || is.character(dat) || is.logical(dat)) &&
+        (isFALSE(row.names) || (isTRUE(row.names) && !is.null(rownames(dat))))
+}
+
+.ov_fwrite_matrix <- function(dat, file, row.names) {
+    dt <- data.table::as.data.table(dat, keep.rownames = if (isTRUE(row.names)) "" else FALSE);
+    data.table::fwrite(dt, file, quote = TRUE, na = "NA", scipen = 0);
+}
+
 fast.write <- function(dat, file, row.names=TRUE){
     dat <- .ov_signif_cols(dat);
     tryCatch(
@@ -783,6 +798,8 @@ fast.write <- function(dat, file, row.names=TRUE){
            if(is.data.frame(dat)){
                 # there is a rare bug in data.table (R 3.6) which kill the R process in some cases 
                 data.table::fwrite(dat, file, row.names=row.names);
+           }else if(.ov_fwrite_matrix_ok(dat, row.names)){
+                .ov_fwrite_matrix(dat, file, row.names);
            }else{
                 write.csv(dat, file, row.names=row.names);  
            }

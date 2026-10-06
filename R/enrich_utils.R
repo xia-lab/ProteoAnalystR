@@ -241,12 +241,16 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     res.mat.all <- as.data.frame(res.mat);
     res.mat.all$Pathway <- rownames(res.mat);
     res.mat.all$features <- rep("NA",nrow(res.mat))
-    # Iterate through the list and add comma-separated values to the data frame
-    for (name in names(hits.query)) {
-      if (name %in% res.mat.all$Pathway) {
-        res.mat.all[which(res.mat.all$Pathway == name), "features"] <- paste(hits.query[[name]], collapse = ",")
-      }
-    }
+    # Add comma-separated values to the data frame (vectorized form of the
+    # per-name loop: each matching row gets hits.query[[name]], i.e. the first
+    # list element with that name; "" never matches by name so it gives "").
+    feat.pw <- res.mat.all$Pathway
+    feat.rows <- which(!is.na(feat.pw) & feat.pw %in% names(hits.query))
+    feat.pos <- match(feat.pw[feat.rows], names(hits.query))
+    feat.pos[feat.pw[feat.rows] == ""] <- NA
+    res.mat.all[feat.rows, "features"] <- vapply(feat.pos, function(k) {
+      if (is.na(k)) "" else paste(hits.query[[k]], collapse = ",")
+    }, character(1))
     
     res.mat.all <- res.mat.all[which(res.mat.all$features != "NA"), ];
     res.mat.all$Pathway <- NULL;

@@ -394,15 +394,14 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
       hit.ids <- intersect(rn_comp_res, rownames(phospho.map))
       if (length(hit.ids) > 0) {
         map.syms <- as.character(phospho.map[hit.ids, "symbol", drop = TRUE])
-        for (ii in seq_along(rn_comp_res)) {
-          pid <- rn_comp_res[ii]
-          if (!(pid %in% hit.ids)) next
-          sym <- map.syms[which(hit.ids == pid)[1]]
-          if (is.na(sym) || sym == "" || sym == "NA" || sym == pid) next
-          # Use symbol directly - it already contains the full display name
-          # with isoform and site suffix (e.g., "DOCK10-2_S_12")
-          phospho_labels[ii] <- sym
-        }
+        # Use symbol directly - it already contains the full display name
+        # with isoform and site suffix (e.g., "DOCK10-2_S_12").
+        # Vectorized lookup (was a per-id which() scan, O(n^2)).
+        hit.pos <- match(rn_comp_res, hit.ids)
+        hit.pos[is.na(rn_comp_res)] <- NA_integer_
+        sym <- map.syms[hit.pos]
+        use <- !is.na(hit.pos) & !is.na(sym) & sym != "" & sym != "NA" & sym != rn_comp_res
+        phospho_labels[use] <- sym[use]
       }
     }
     analSet$comp.features.symbols <- phospho_labels

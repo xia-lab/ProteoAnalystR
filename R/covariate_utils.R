@@ -220,7 +220,10 @@ CovariateScatter.Anal <- function(dataName,
   rownames(sig.mat) <- gsub("^X(?=[0-9])", "", rownames(sig.mat), perl = TRUE)
 
   dataSet$sig.mat <- sig.mat;
-  sig.mat$label <- resolve_feature_labels(sig.mat$ids)
+  # resolve_feature_labels() maps each id independently and sig.mat$ids is a
+  # subset of rest$ids (just resolved above), so reuse those labels instead of
+  # a third lookup.
+  sig.mat$label <- rest$label[match(as.character(sig.mat$ids), as.character(rest$ids))]
 
 
   if(sig.num> 0){

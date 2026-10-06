@@ -765,11 +765,27 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
 
   loc.entrez <- as.character(loc.data$EntrezID)
   hits <- which(!is.na(entrez.ids) & entrez.ids %in% loc.entrez)
-  for (i in hits) {
-    loc.rows <- loc.data[loc.entrez == as.character(entrez.ids[i]), , drop = FALSE]
-    broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
-    main <- if ("Main.location" %in% colnames(loc.rows)) paste(unique(as.character(loc.rows$Main.location)), collapse = "; ") else NA_character_
-    comp.vec[i] <- .paPrimaryCompartment(broad, main)$primary
+  if (length(hits) > 0 && !anyNA(loc.entrez)) {
+    # Row groups per EntrezID computed once (same rows, same order as the
+    # loc.entrez == id scan) and one resolve per distinct ID.
+    hit.eid <- as.character(entrez.ids[hits])
+    uniq.eid <- unique(hit.eid)
+    loc.groups <- split(seq_along(loc.entrez), factor(loc.entrez, levels = unique(loc.entrez)))
+    grp.pos <- match(uniq.eid, names(loc.groups))
+    uniq.comp <- vapply(seq_along(uniq.eid), function(k) {
+      loc.rows <- loc.data[loc.groups[[grp.pos[k]]], , drop = FALSE]
+      broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
+      main <- if ("Main.location" %in% colnames(loc.rows)) paste(unique(as.character(loc.rows$Main.location)), collapse = "; ") else NA_character_
+      .paPrimaryCompartment(broad, main)$primary
+    }, character(1))
+    comp.vec[hits] <- uniq.comp[match(hit.eid, uniq.eid)]
+  } else {
+    for (i in hits) {
+      loc.rows <- loc.data[loc.entrez == as.character(entrez.ids[i]), , drop = FALSE]
+      broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
+      main <- if ("Main.location" %in% colnames(loc.rows)) paste(unique(as.character(loc.rows$Main.location)), collapse = "; ") else NA_character_
+      comp.vec[i] <- .paPrimaryCompartment(broad, main)$primary
+    }
   }
   comp.vec
 }

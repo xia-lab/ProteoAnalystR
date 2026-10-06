@@ -809,21 +809,42 @@ combinePvals <- function(pvalonesided,nrep,BHth=0.05, method) {
   }
   
   if(method=="stouffer"){
-    statpvalc=-unlist(lapply(rep(1:length(as.vector(pvalonesided[[1]])), 1), function(x) fstatmeta(x)));
+    n.genes <- length(as.vector(pvalonesided[[1]]));
+    all.atomic <- all(vapply(pvalonesided, function(x) is.atomic(x) && (is.numeric(x) || is.logical(x)), logical(1)));
+    if (n.genes >= 1 && all.atomic) {
+      # Vectorized fstatmeta(): column k holds weight[k] * qnorm(1 - p_k[g]).
+      # rowSums(na.rm=TRUE) accumulates left to right in long double exactly
+      # like sum(na.rm=TRUE), so the result is bit-identical to the per-gene loop.
+      g.idx <- seq_len(n.genes);
+      wq <- matrix(0, nrow = n.genes, ncol = length(pvalonesided));
+      for (k in seq_along(pvalonesided)) {
+        wq[, k] <- weight[k] * qnorm(1 - pvalonesided[[k]][g.idx]);
+      }
+      statpvalc=-rowSums(wq, na.rm = TRUE);
+    } else {
+      statpvalc=-unlist(lapply(rep(1:length(as.vector(pvalonesided[[1]])), 1), function(x) fstatmeta(x)));
+    }
     rpvalpvalc=2*(1-pnorm(abs(statpvalc)));
   }else{ # fisher
     data <- data.frame(pvalonesided);
     #data[data == 0] <- 1*10^-10;
     
+    # rowSums() over the same as.matrix() that apply() builds; it accumulates in
+    # the same order and precision as sum(), so the result is bit-identical.
+    fishersum.rows <- function(df) {
+      if (nrow(df) == 0) return(apply(df, 1, fishersum));
+      rowSums(-2*log(as.matrix(df)));
+    }
+
     #note, p value are calculated for one side
     # pt (lower.tail=T by default) which tests if group A < group B
     # for one side
-    fsum1 <- apply(data, 1, fishersum);
+    fsum1 <- fishersum.rows(data);
     rpvalpvalc1 <- 1-pchisq(fsum1, df=(ncol(data)*2));
     
     # for the other side
     data <- 1-data;
-    fsum2 <- apply(data, 1, fishersum);
+    fsum2 <- fishersum.rows(data);
     rpvalpvalc2 <- 1-pchisq(fsum2, df=(ncol(data)*2));
     
     # report the min of two direction calculation

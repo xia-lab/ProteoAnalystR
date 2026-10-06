@@ -150,15 +150,8 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
   #        " norm.opt=", paramSet$norm.opt)
   #msg("[DE] data.norm head IDs=", paste(utils::head(rownames(dataSet$data.norm), 5), collapse=", "),
   #        " cols=", paste(utils::head(colnames(dataSet$data.norm), 5), collapse=", "))
-  if (file.exists("data.anot.qs")) {
-    da <- try(ov_qs_read("data.anot.qs"), silent = TRUE)
-    if (!inherits(da, "try-error")) {
-      #msg("[DE] data.anot.qs head IDs=", paste(utils::head(rownames(da), 5), collapse=", "))
-      if (any(duplicated(rownames(da)))) {
-        #msg("[DE] WARNING: data.anot.qs has duplicate rownames!")
-      }
-    }
-  }
+  # (A debug-only read of data.anot.qs used to sit here; its result fed only
+  # commented-out msg() calls, so the read was removed.)
   if (dataSet$de.method == "deseq2") {
     dataSet <- prepareContrast(dataSet, anal.type, par1, par2, nested.opt);
     dataSet <- .run.deseq(dataSet, anal.type, par1, par2, nested.opt);
@@ -2518,6 +2511,21 @@ PerformPeptideLevelDEAnal <- function(dataName = "") {
     norm.index = split(pep.map$Peptide, pep.map$Protein.norm),
     protein.by.norm = split(pep.map$Protein, pep.map$Protein.norm)
   )
+  # Evict superseded entries for this same session dir/dataset/comparison
+  # (their file stamps changed, so they are never hit again); otherwise every
+  # DE re-run left another full peptide map in memory. Keys stamped "missing"
+  # are kept: a file could in principle go missing again and re-hit them.
+  key.prefix <- paste(
+    normalizePath(getwd(), winslash = "/", mustWork = FALSE),
+    dataName,
+    ifelse(is.null(active.nm), "", active.nm),
+    "",
+    sep = "||"
+  )
+  old.keys <- ls(cache.env, all.names = TRUE)
+  old.keys <- old.keys[startsWith(old.keys, key.prefix) & old.keys != key &
+                       !grepl("||missing", old.keys, fixed = TRUE)]
+  if (length(old.keys) > 0) rm(list = old.keys, envir = cache.env)
   assign(key, cached, envir = cache.env)
   msg("[R DEBUG] Cached peptide_to_protein_map.qs with ", nrow(pep.map), " rows")
   msg("[R DEBUG] Peptide map column names: ", paste(colnames(pep.map), collapse=", "))

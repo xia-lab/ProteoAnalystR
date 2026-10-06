@@ -172,15 +172,18 @@ ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
         # MinDet: deterministic minimum value imputation (MNAR/left-censored)
         # MinProb: stochastic minimum value imputation (MNAR/left-censored)
         # QRILC: Quantile Regression Imputation of Left-Censored data (MNAR)
+        # imputeLCMD expects features x samples and estimates the censoring
+        # distribution per sample column, so int.mat is passed untransposed (as in
+        # .impute_peptide_matrix). Transposing it made these estimates per protein.
         if (requireNamespace("imputeLCMD", quietly = TRUE)) {
           if (method == "mindet") {
-            new.mat <- t(imputeLCMD::impute.MinDet(t(int.mat)))
+            new.mat <- imputeLCMD::impute.MinDet(as.matrix(int.mat))
             current.msg <- c(current.msg, "Missing variables were imputed using MinDet (deterministic minimum)");
           } else if (method == "minprob") {
-            new.mat <- t(imputeLCMD::impute.MinProb(t(int.mat)))
+            new.mat <- imputeLCMD::impute.MinProb(as.matrix(int.mat))
             current.msg <- c(current.msg, "Missing variables were imputed using MinProb (stochastic minimum)");
           } else if (method == "qrilc") {
-            new.mat <- t(imputeLCMD::impute.QRILC(t(int.mat))[[1]])
+            new.mat <- imputeLCMD::impute.QRILC(as.matrix(int.mat))[[1]]
             current.msg <- c(current.msg, "Missing variables were imputed using QRILC (quantile regression for left-censored data)");
           }
         } else {
@@ -499,15 +502,16 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min", min.obs.per.g
       "Missing values imputed by a group-aware hybrid (censored/insufficient group -> LoD floor; ",
       "sporadic within-group gap -> N(group mean, group SD); seed=", impute.seed, ")."));
   }else if(method %in% c("mindet","minprob","qrilc")){
+    # Features x samples, untransposed: imputeLCMD estimates per sample column.
     if (requireNamespace("imputeLCMD", quietly = TRUE)) {
       if (method == "mindet") {
-        new.mat <- t(imputeLCMD::impute.MinDet(t(int.mat)))
+        new.mat <- imputeLCMD::impute.MinDet(as.matrix(int.mat))
         current.msg <- c(current.msg, "Missing variables were imputed using MinDet (deterministic minimum).");
       } else if (method == "minprob") {
-        new.mat <- t(imputeLCMD::impute.MinProb(t(int.mat)))
+        new.mat <- imputeLCMD::impute.MinProb(as.matrix(int.mat))
         current.msg <- c(current.msg, "Missing variables were imputed using MinProb (stochastic minimum).");
       } else if (method == "qrilc") {
-        new.mat <- t(imputeLCMD::impute.QRILC(t(int.mat))[[1]])
+        new.mat <- imputeLCMD::impute.QRILC(as.matrix(int.mat))[[1]]
         current.msg <- c(current.msg, "Missing variables were imputed using QRILC (quantile regression for left-censored data).");
       }
     } else {

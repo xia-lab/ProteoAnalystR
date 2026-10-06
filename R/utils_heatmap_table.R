@@ -79,7 +79,8 @@ my.prepare.heatmap.json <- function(dataSet, displayOpt="sig"){
   dat <- t(scale(t(data.stat[all.ids, , drop=F])));
   
   # now pearson and euclidean will be the same after scaling
-  dat.dist <- dist(dat); 
+  # (a dist(dat) computed here was always discarded: it is recomputed below
+  # when nrow(dat) > 1 and unused otherwise)
   
   orig.smpl.nms <- colnames(dat);
   orig.gene.nms <- rownames(dat);
