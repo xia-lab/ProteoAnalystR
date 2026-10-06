@@ -427,49 +427,23 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
     is.seed <- all.nodes %in% seeds
 
     # PASS 1: Intra-compartment expansion (add neighbors in same compartment)
-    # OPTIMIZED: Use list to collect edges, then combine once (10-100x faster)
-    intra.edges.list <- vector("list", nrow(edges))
-    intra.count <- 0
-    network.nodes <- seeds  # Start with seeds
+    # Vectorized: keep an edge if at least one end is a seed and either both ends
+    # share a compartment or both ends are seeds. Same rows/order as the per-row loop.
+    e.id1 <- as.character(edges$id1)
+    e.id2 <- as.character(edges$id2)
+    comp1 <- unname(comp.map[e.id1])
+    comp2 <- unname(comp.map[e.id2])
+    comp1[is.na(comp1)] <- "Unknown"
+    comp2[is.na(comp2)] <- "Unknown"
+    id1.is.seed <- e.id1 %in% seeds
+    id2.is.seed <- e.id2 %in% seeds
+    keep.idx <- which((id1.is.seed | id2.is.seed) &
+                      (comp1 == comp2 | (id1.is.seed & id2.is.seed)))
+    intra.count <- length(keep.idx)
+    network.nodes <- unique(c(seeds, as.vector(rbind(e.id1[keep.idx], e.id2[keep.idx]))))
 
-    for (i in 1:nrow(edges)) {
-      id1 <- as.character(edges$id1[i])
-      id2 <- as.character(edges$id2[i])
-
-      # Get compartments
-      comp1 <- comp.map[id1]
-      comp2 <- comp.map[id2]
-      if (is.na(comp1)) comp1 <- "Unknown"
-      if (is.na(comp2)) comp2 <- "Unknown"
-
-      # Check if at least one node is a seed
-      id1.is.seed <- id1 %in% seeds
-      id2.is.seed <- id2 %in% seeds
-
-      if (!id1.is.seed && !id2.is.seed) {
-        # Neither is a seed, skip for now
-        next
-      }
-
-      # Check compartment compatibility
-      if (comp1 == comp2) {
-        # Same compartment: always add (first-order expansion)
-        intra.count <- intra.count + 1
-        intra.edges.list[[intra.count]] <- edges[i, , drop = FALSE]
-        network.nodes <- unique(c(network.nodes, id1, id2))
-      } else {
-        # Different compartments: only add if both are already in network (seeds)
-        if (id1.is.seed && id2.is.seed) {
-          intra.count <- intra.count + 1
-          intra.edges.list[[intra.count]] <- edges[i, , drop = FALSE]
-          network.nodes <- unique(c(network.nodes, id1, id2))
-        }
-      }
-    }
-
-    # Combine all edges at once (much faster than growing with rbind)
     if (intra.count > 0) {
-      intra.edges <- do.call(rbind, intra.edges.list[1:intra.count])
+      intra.edges <- edges[keep.idx, , drop = FALSE]
     } else {
       intra.edges <- data.frame()
     }
@@ -483,11 +457,11 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
       all.edge.nodes <- unique(c(as.character(edges$id1), as.character(edges$id2)))
       non.seeds <- setdiff(all.edge.nodes, seeds)
       if (length(non.seeds) > 0) {
-        seed.conn <- vapply(non.seeds, function(nd) {
-          partners <- c(as.character(edges$id2[as.character(edges$id1) == nd]),
-                        as.character(edges$id1[as.character(edges$id2) == nd]))
-          sum(partners %in% seeds)
-        }, integer(1))
+        # Per non-seed count of seed partners (both edge directions), vectorized
+        l.id1 <- as.character(edges$id1)
+        l.id2 <- as.character(edges$id2)
+        seed.conn <- tabulate(match(l.id1[l.id2 %in% seeds], non.seeds), length(non.seeds)) +
+                     tabulate(match(l.id2[l.id1 %in% seeds], non.seeds), length(non.seeds))
         keep.nodes <- c(seeds, non.seeds[seed.conn >= 2])
         edges <- edges[as.character(edges$id1) %in% keep.nodes &
                        as.character(edges$id2) %in% keep.nodes, , drop = FALSE]
@@ -1133,6 +1107,11 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   category.colors <- .paCompartmentColors()
 
+  # Hoisted out of the per-node loop (V(g)$attr fetches the whole vector each call)
+  is.query.attr <- igraph::V(g)$is_query
+  has.is.query <- !is.null(is.query.attr)
+  phospho.names <- names(phosphosite.map)
+
   gene.nodes <- lapply(seq_along(nms), function(i) {
     node.id <- as.character(nms[i])
     entrez.id <- if (!is.na(graph.ids$entrez[i]) && nzchar(graph.ids$entrez[i])) {
@@ -1154,10 +1133,10 @@ PrepareNetwork <- function(net.nm, json.nm) {
       ""
     }
 
-    is.query <- if (!is.null(igraph::V(g)$is_query)) igraph::V(g)$is_query[i] else FALSE
+    is.query <- if (has.is.query) is.query.attr[i] else FALSE
 
     phosphosites <- NULL
-    if (length(phosphosite.map) > 0 && nzchar(entrez.id) && entrez.id %in% names(phosphosite.map)) {
+    if (length(phosphosite.map) > 0 && nzchar(entrez.id) && entrez.id %in% phospho.names) {
       phosphosites <- phosphosite.map[[entrez.id]]
       if (length(phosphosites) > 0) {
         phosphosites <- paste(phosphosites, collapse = ";")
@@ -1206,27 +1185,49 @@ PrepareNetwork <- function(net.nm, json.nm) {
     node.data
   })
 
+  node.comp.ids <- gsub("[^A-Za-z0-9_]", "_", node.categories)
   compartment.map <- list()
-  for (i in seq_along(nms)) {
-    category <- node.categories[i]
-    comp.id <- gsub("[^A-Za-z0-9_]", "_", category)
-
-    if (is.null(compartment.map[[comp.id]])) {
+  if (!anyNA(node.comp.ids) && all(nzchar(node.comp.ids))) {
+    # Grouped build: compartments in first-appearance order, members in node order
+    # (same structure as the incremental loop below, without per-node vector growth).
+    nms.chr <- as.character(nms)
+    comp.first <- which(!duplicated(node.comp.ids))
+    comp.members <- split(nms.chr, factor(node.comp.ids, levels = node.comp.ids[comp.first]))
+    for (k in seq_along(comp.first)) {
+      category <- node.categories[comp.first[k]]
+      comp.id <- node.comp.ids[comp.first[k]]
       comp.color <- category.colors[[category]]
       if (is.null(comp.color)) comp.color <- "#999999"
       compartment.map[[comp.id]] <- list(
         id = comp.id,
         label = category,
         color = comp.color,
-        node_ids = c()
+        node_ids = unname(comp.members[[k]])
       )
     }
-    compartment.map[[comp.id]]$node_ids <- c(compartment.map[[comp.id]]$node_ids, as.character(nms[i]))
+  } else {
+    for (i in seq_along(nms)) {
+      category <- node.categories[i]
+      comp.id <- gsub("[^A-Za-z0-9_]", "_", category)
+
+      if (is.null(compartment.map[[comp.id]])) {
+        comp.color <- category.colors[[category]]
+        if (is.null(comp.color)) comp.color <- "#999999"
+        compartment.map[[comp.id]] <- list(
+          id = comp.id,
+          label = category,
+          color = comp.color,
+          node_ids = c()
+        )
+      }
+      compartment.map[[comp.id]]$node_ids <- c(compartment.map[[comp.id]]$node_ids, as.character(nms[i]))
+    }
   }
 
   comp.nodes <- lapply(names(compartment.map), function(comp.id) {
     comp.info <- compartment.map[[comp.id]]
-    node.indices <- which(sapply(gene.nodes, function(n) n$compartment == comp.id))
+    # gene.nodes[[i]]$compartment is node.comp.ids[i]
+    node.indices <- which(node.comp.ids == comp.id)
     if (length(node.indices) > 0) {
       comp.x <- mean(pos.x[node.indices])
       comp.y <- mean(pos.y[node.indices])

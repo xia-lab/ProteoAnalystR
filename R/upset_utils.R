@@ -242,12 +242,26 @@ PrepareUpsetDataFromComparisons <- function(fileNm, dataName = ""){
 
   json.list <- list()
   unmapped_count <- 0
+  # Symbol lookup done once for all rows (was a full gene.map scan per row), and
+  # per-row set membership read from a character matrix instead of two
+  # one-row data.frame subsets. dcast() yields character columns here; any
+  # other column type falls back to the original data.frame indexing.
+  row.ids <- rownames(new.df)
+  sym.all <- gene.map[match(row.ids, gene.map[, "gene_id"]), "symbol"]
+  fast.sets <- ncol(new.df) > 0 && all(vapply(new.df, is.character, logical(1)))
+  if (fast.sets) {
+    set.mat <- as.matrix(new.df)
+  }
   for(i in 1:nrow(new.df)){
     json.list[[i]] <- list()
-    json.list[[i]][["sets"]] <- new.df[i,][new.df[i,] != 0]
-    entrez.vec <- rownames(new.df)[i]
-    hit.inx <- match(entrez.vec, gene.map[, "gene_id"])
-    symbols <- gene.map[hit.inx, "symbol"]
+    if (fast.sets) {
+      row.vals <- set.mat[i, , drop = TRUE]
+      json.list[[i]][["sets"]] <- unname(row.vals[row.vals != 0])
+    } else {
+      json.list[[i]][["sets"]] <- new.df[i,][new.df[i,] != 0]
+    }
+    entrez.vec <- row.ids[i]
+    symbols <- sym.all[i]
 
     na.inx <- is.na(symbols)
     if (na.inx) {

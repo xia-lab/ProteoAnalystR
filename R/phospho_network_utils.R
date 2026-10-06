@@ -142,7 +142,10 @@ InitKinaseSubstrateNetwork <- function(dataName, database = "phosphositeplus", f
   # Convert site IDs to substrate format for matching
   # User data: "Q80XQ2_S_578" -> need to match with database format
   site_info <- .parsePhosphositeIDs(sig_sites)
-  all_site_info <- .parsePhosphositeIDs(all_sites)
+  # all_site_info is not used by .matchSubstrateIDsToSites; parsing it is only
+  # kept for non-character input, where it raised the original error.
+  all_site_info <- NULL
+  if (!is.character(all_sites)) all_site_info <- .parsePhosphositeIDs(all_sites)
 
   # Load phospho_symbol_map if available for gene symbols
   phospho_map <- NULL
@@ -158,6 +161,8 @@ InitKinaseSubstrateNetwork <- function(dataName, database = "phosphositeplus", f
 
   # Store kinase-to-substrates mapping (like hits.query in enrichment network)
   kinase_substrates_map <- list()
+  # Substrate ids in first-seen order; their nodes are built after the loop.
+  new_substrates <- character(0)
 
   # For each significant kinase
   for (i in 1:nrow(sig_kinases)) {
@@ -215,40 +220,7 @@ InitKinaseSubstrateNetwork <- function(dataName, database = "phosphositeplus", f
     # Add substrate nodes and edges
     for (substrate_id in matched_substrates) {
       # Check if substrate already added
-      substrate_exists <- any(sapply(substrate_nodes, function(n) n$id == substrate_id))
-
-      if (!substrate_exists) {
-        # Get substrate data
-        substrate_fc <- NA
-        substrate_pval <- NA
-        substrate_symbol <- substrate_id
-
-        if (substrate_id %in% rownames(dataSet$sig.mat)) {
-          if ("logFC" %in% colnames(dataSet$sig.mat)) {
-            substrate_fc <- dataSet$sig.mat[substrate_id, "logFC"]
-          }
-          if ("adj.P.Val" %in% colnames(dataSet$sig.mat)) {
-            substrate_pval <- dataSet$sig.mat[substrate_id, "adj.P.Val"]
-          }
-        }
-
-        # Get gene symbol from phospho_map if available
-        if (!is.null(phospho_map) && substrate_id %in% rownames(phospho_map)) {
-          substrate_symbol <- phospho_map[substrate_id, "symbol"]
-        }
-
-        substrate_node <- list(
-          id = substrate_id,
-          label = substrate_symbol,
-          type = "substrate",
-          phosphosite = substrate_id,
-          logFC = substrate_fc,
-          pval = substrate_pval,
-          score = substrate_fc,  # Use log2FC for color scale
-          significant = !is.na(substrate_pval) && substrate_pval <= 0.05
-        )
-        substrate_nodes[[length(substrate_nodes) + 1]] <- substrate_node
-      }
+      if (!(substrate_id %in% new_substrates)) new_substrates <- c(new_substrates, substrate_id)
 
       # Add edge from kinase to substrate
       edge <- list(
@@ -260,6 +232,39 @@ InitKinaseSubstrateNetwork <- function(dataName, database = "phosphositeplus", f
       edges[[length(edges) + 1]] <- edge
       edge_id <- edge_id + 1
     }
+  }
+
+  # Build substrate nodes (first-seen order) with one vectorized lookup each
+  if (length(new_substrates) > 0) {
+    sm <- dataSet$sig.mat
+    sm.idx <- match(new_substrates, rownames(sm))
+    fc.vals <- if ("logFC" %in% colnames(sm)) unname(sm[sm.idx, "logFC"]) else NULL
+    pv.vals <- if ("adj.P.Val" %in% colnames(sm)) unname(sm[sm.idx, "adj.P.Val"]) else NULL
+    pm.idx <- if (!is.null(phospho_map)) match(new_substrates, rownames(phospho_map)) else NULL
+    sym.vals <- if (!is.null(phospho_map)) phospho_map[pm.idx, "symbol"] else NULL
+    substrate_nodes <- lapply(seq_along(new_substrates), function(k) {
+      substrate_id <- new_substrates[k]
+      substrate_fc <- NA
+      substrate_pval <- NA
+      substrate_symbol <- substrate_id
+      if (!is.na(sm.idx[k])) {
+        if (!is.null(fc.vals)) substrate_fc <- fc.vals[k]
+        if (!is.null(pv.vals)) substrate_pval <- pv.vals[k]
+      }
+      if (!is.null(phospho_map) && !is.na(pm.idx[k])) {
+        substrate_symbol <- sym.vals[k]
+      }
+      list(
+        id = substrate_id,
+        label = substrate_symbol,
+        type = "substrate",
+        phosphosite = substrate_id,
+        logFC = substrate_fc,
+        pval = substrate_pval,
+        score = substrate_fc,  # Use log2FC for color scale
+        significant = !is.na(substrate_pval) && substrate_pval <= 0.05
+      )
+    })
   }
 
   # Combine all nodes
@@ -591,10 +596,11 @@ PerformKinaseSubstrateNetworkView <- function(dataName = "", netNm = "kinase_sub
     expvals <- rep(0, length(substrate_ids))
     names(expvals) <- substrate_ids
 
-    for (sub_node in substrate_nodes) {
-      if (sub_node$id %in% substrate_ids && !is.na(sub_node$logFC)) {
-        expvals[sub_node$id] <- sub_node$logFC
-      }
+    sn.keep <- vapply(substrate_nodes, function(sub_node) sub_node$id %in% substrate_ids && !is.na(sub_node$logFC), logical(1))
+    if (any(sn.keep)) {
+      # sequential-assignment order preserved (later duplicates win)
+      expvals[vapply(substrate_nodes[sn.keep], function(n) n$id, character(1))] <-
+        unlist(lapply(substrate_nodes[sn.keep], function(n) n$logFC))
     }
 
     V(bg)$color[!V(bg)$name %in% kinase_names] <- ComputeColorGradient(unname(expvals), "black", T, T)
@@ -627,7 +633,10 @@ PerformKinaseSubstrateNetworkView <- function(dataName = "", netNm = "kinase_sub
   }
 
   # Create labels with gene symbol and site info (e.g., "Smarca4;pS695")
-  node.lbls <- sapply(bg.node.nms, function(nm) {
+  pm.rn <- if (!is.null(phospho_map)) rownames(phospho_map) else NULL
+  bg.pm.idx <- match(bg.node.nms, pm.rn)
+  node.lbls <- sapply(seq_along(bg.node.nms), function(k) {
+    nm <- bg.node.nms[k]
     if (nm %in% kinase_names) {
       return(nm)  # Kinases use their name
     } else {
@@ -640,8 +649,8 @@ PerformKinaseSubstrateNetworkView <- function(dataName = "", netNm = "kinase_sub
         position <- parts[3]
         site_str <- paste0("p", residue, position)  # e.g., "pS695"
 
-        if (!is.null(phospho_map) && nm %in% rownames(phospho_map)) {
-          symbol <- phospho_map[nm, "symbol"]
+        if (!is.null(phospho_map) && !is.na(bg.pm.idx[k])) {
+          symbol <- phospho_map[bg.pm.idx[k], "symbol"]
           return(paste0(symbol, ";", site_str))  # e.g., "Smarca4;pS695"
         } else {
           return(site_str)  # Fallback to just site if no symbol
@@ -656,10 +665,10 @@ PerformKinaseSubstrateNetworkView <- function(dataName = "", netNm = "kinase_sub
   expvals.bg <- rep(0, length(bg.node.nms))
   names(expvals.bg) <- bg.node.nms
   if (!is.null(analSet$kinase.network$substrate_nodes)) {
-    for (sub_node in substrate_nodes) {
-      if (sub_node$id %in% bg.node.nms && !is.na(sub_node$logFC)) {
-        expvals.bg[sub_node$id] <- sub_node$logFC
-      }
+    sn.keep <- vapply(substrate_nodes, function(sub_node) sub_node$id %in% bg.node.nms && !is.na(sub_node$logFC), logical(1))
+    if (any(sn.keep)) {
+      expvals.bg[vapply(substrate_nodes[sn.keep], function(n) n$id, character(1))] <-
+        unlist(lapply(substrate_nodes[sn.keep], function(n) n$logFC))
     }
   }
 
@@ -686,12 +695,12 @@ PerformKinaseSubstrateNetworkView <- function(dataName = "", netNm = "kinase_sub
   proteinlist <- rep(NA, length(sig_sites))
   names(proteinlist) <- sig_sites
   if (!is.null(phospho_map)) {
-    for (site_id in sig_sites) {
-      if (site_id %in% rownames(phospho_map)) {
-        proteinlist[site_id] <- phospho_map[site_id, "symbol"]
-      } else {
-        proteinlist[site_id] <- site_id
-      }
+    if (length(sig_sites) > 0) {
+      # one name-indexed assignment == the former per-site loop (later dups win)
+      pl.idx <- match(sig_sites, rownames(phospho_map))
+      pl.vals <- sig_sites
+      pl.vals[!is.na(pl.idx)] <- phospho_map[pl.idx[!is.na(pl.idx)], "symbol"]
+      proteinlist[sig_sites] <- pl.vals
     }
   } else {
     proteinlist <- sig_sites

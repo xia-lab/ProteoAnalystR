@@ -370,6 +370,24 @@ GetSelectedKinaseDb <- function() {
     return(NULL)
   }
   db_file <- candidates[1]
+  # Session memo of the normalized result keyed by path + mtime + size, held in
+  # an option (not .GlobalEnv) so save.image()/Rload.RData never serializes it.
+  ks.cache <- getOption("pa.ksea.db.cache")
+  if (is.null(ks.cache)) {
+    ks.cache <- new.env(parent = emptyenv())
+    options(pa.ksea.db.cache = ks.cache)
+  }
+  finfo <- file.info(db_file)
+  cache.key <- paste(normalizePath(db_file, mustWork = FALSE),
+                     format(as.numeric(finfo$mtime), digits = 17), finfo$size, sep = "|")
+  if (exists(cache.key, envir = ks.cache, inherits = FALSE))
+    return(get(cache.key, envir = ks.cache, inherits = FALSE))
+  db.res <- .loadSingleKseaDBFile(db_file)
+  assign(cache.key, db.res, envir = ks.cache)
+  db.res
+}
+
+.loadSingleKseaDBFile <- function(db_file) {
   #msg("[.loadSingleKseaDB] Loading ", basename(db_file))
   db_obj <- ov_qs_read(db_file)
 
@@ -936,36 +954,48 @@ GetSelectedKinaseDb <- function() {
   gene.col <- first_col(c("Gene names", "Gene", "Genes", "Symbol"))
   protein.col <- first_col(c("Proteins", "Protein", "ProteinID", "UniProt"))
 
-  rows <- lapply(seq_len(nrow(fi)), function(i) {
-    residue <- if (!is.na(residue.col)) fi[[residue.col]][i] else NA_character_
+  # Per-site context parsing stays per row; the output frame is assembled
+  # column-wise once instead of rbind-ing one data.frame per site.
+  n.fi <- nrow(fi)
+  ctxs <- vector("list", n.fi)
+  srcs <- rep(NA_character_, n.fi)
+  res.vals <- if (!is.na(residue.col)) fi[[residue.col]] else NULL
+  seq.vals <- if (!is.na(seq.col)) fi[[seq.col]] else NULL
+  mod.vals <- if (!is.na(mod.col)) fi[[mod.col]] else NULL
+  strip.vals <- if (!is.na(strip.col)) fi[[strip.col]] else NULL
+  for (i in seq_len(n.fi)) {
+    residue <- if (!is.na(residue.col)) res.vals[i] else NA_character_
     ctx <- NULL
     source <- NA_character_
     if (!is.na(seq.col)) {
-      ctx <- .phosphoContextFromWindow(fi[[seq.col]][i], residue)
+      ctx <- .phosphoContextFromWindow(seq.vals[i], residue)
       if (!is.null(ctx)) source <- seq.col
     }
     if (is.null(ctx) && !is.na(mod.col)) {
-      stripped <- if (!is.na(strip.col)) fi[[strip.col]][i] else NA_character_
-      ctx <- .phosphoContextFromModifiedPeptide(fi[[mod.col]][i], stripped)
+      stripped <- if (!is.na(strip.col)) strip.vals[i] else NA_character_
+      ctx <- .phosphoContextFromModifiedPeptide(mod.vals[i], stripped)
       if (!is.null(ctx)) source <- mod.col
     }
-    if (is.null(ctx)) return(NULL)
+    if (!is.null(ctx)) {
+      ctxs[[i]] <- ctx
+      srcs[i] <- source
+    }
+  }
+  keep <- which(!vapply(ctxs, is.null, logical(1)))
+  if (length(keep) == 0) return(data.frame())
+  ctxs <- ctxs[keep]
 
-    data.frame(
-      Site = rownames(fi)[i],
-      Protein = if (!is.na(protein.col)) as.character(fi[[protein.col]][i]) else NA_character_,
-      Gene = if (!is.na(gene.col)) as.character(fi[[gene.col]][i]) else NA_character_,
-      Residue = ctx$residue,
-      Position = if (!is.na(position.col)) as.character(fi[[position.col]][i]) else NA_character_,
-      SequenceContext = ctx$sequence,
-      Center = ctx$center,
-      ContextSource = source,
-      stringsAsFactors = FALSE
-    )
-  })
-  rows <- rows[!vapply(rows, is.null, logical(1))]
-  if (length(rows) == 0) return(data.frame())
-  do.call(rbind, rows)
+  data.frame(
+    Site = rownames(fi)[keep],
+    Protein = if (!is.na(protein.col)) as.character(fi[[protein.col]][keep]) else NA_character_,
+    Gene = if (!is.na(gene.col)) as.character(fi[[gene.col]][keep]) else NA_character_,
+    Residue = unlist(lapply(ctxs, `[[`, "residue")),
+    Position = if (!is.na(position.col)) as.character(fi[[position.col]][keep]) else NA_character_,
+    SequenceContext = unlist(lapply(ctxs, `[[`, "sequence")),
+    Center = unlist(lapply(ctxs, `[[`, "center")),
+    ContextSource = srcs[keep],
+    stringsAsFactors = FALSE
+  )
 }
 
 .classifyPhosphoMotifs <- function(contexts) {
@@ -989,11 +1019,31 @@ GetSelectedKinaseDb <- function() {
          Match = function(seq, cen, res) res == "Y")
   )
 
-  motif.mat <- do.call(cbind, lapply(motif.defs, function(def) {
-    vapply(seq_len(nrow(contexts)), function(i) {
-      isTRUE(def$Match(contexts$SequenceContext[i], contexts$Center[i], contexts$Residue[i]))
-    }, logical(1))
-  }))
+  # Vectorized equivalent of applying each def$Match row by row (kept in
+  # motif.defs above for the returned object); .relAA mirrors .getRelativeAA.
+  seqs <- contexts$SequenceContext
+  cens <- contexts$Center
+  ress <- contexts$Residue
+  seq.len <- nchar(seqs)
+  .relAA <- function(offset) {
+    pos <- cens + offset
+    out <- substr(seqs, pos, pos)
+    out[pos < 1 | pos > seq.len] <- NA_character_
+    out
+  }
+  st <- ress %in% c("S", "T")
+  p1 <- .relAA(1); m1 <- .relAA(-1); m2 <- .relAA(-2); m3 <- .relAA(-3)
+  a2 <- .relAA(2); a3 <- .relAA(3)
+  motif.mat <- cbind(
+    st & p1 %in% "P",
+    ress %in% "S" & p1 %in% "P",
+    ress %in% "T" & p1 %in% "P",
+    st & (m3 %in% c("R", "K") | m2 %in% c("R", "K") | m1 %in% c("R", "K")),
+    st & m3 %in% "R",
+    st & (p1 %in% c("D", "E") | a2 %in% c("D", "E") | a3 %in% c("D", "E")),
+    st & a3 %in% c("D", "E"),
+    ress %in% "Y"
+  )
   colnames(motif.mat) <- vapply(motif.defs, `[[`, character(1), "Name")
 
   long <- do.call(rbind, lapply(seq_along(motif.defs), function(j) {
@@ -1009,10 +1059,14 @@ GetSelectedKinaseDb <- function() {
   }))
   if (is.null(long)) long <- data.frame(Site = character(), Motif = character(), MotifFamily = character(), Pattern = character())
 
-  contexts$Motifs <- vapply(seq_len(nrow(contexts)), function(i) {
-    hits <- colnames(motif.mat)[motif.mat[i, ]]
-    if (length(hits) == 0) "Unclassified" else paste(hits, collapse = "; ")
-  }, character(1))
+  motif.lab <- rep("", nrow(contexts))
+  for (j in seq_len(ncol(motif.mat))) {
+    hit <- motif.mat[, j]
+    nm <- colnames(motif.mat)[j]
+    motif.lab[hit] <- ifelse(motif.lab[hit] == "", nm, paste(motif.lab[hit], nm, sep = "; "))
+  }
+  motif.lab[motif.lab == ""] <- "Unclassified"
+  contexts$Motifs <- motif.lab
 
   list(contexts = contexts, long = long, motif.defs = motif.defs)
 }
@@ -1285,20 +1339,29 @@ GetMotifEnrichmentJSON <- function(jsonNm) {
     site.gene <- if (!is.null(ctx) && "Gene" %in% colnames(ctx))
       setNames(as.character(ctx$Gene), as.character(ctx$Site)) else character(0)
 
+    # Per-site named lookups precomputed once; x[sites][i] is the same named
+    # element as x[sites[i]].
+    p.site  <- as.character(ml.primary$Site)
+    p.motif <- ml.primary$Motif
+    p.fam   <- ml.primary$MotifFamily
+    p.sig   <- site.sig[p.site]
+    p.gene  <- site.gene[p.site]
+    p.comp  <- site.comp[p.site]
+    has.comp <- length(site.comp) > 0
     sites.list <- lapply(seq_len(nrow(ml.primary)), function(i) {
-      s    <- as.character(ml.primary$Site[i])
+      s    <- p.site[i]
       fdr  <- site.fdr[i]
       nlp  <- if (!is.na(fdr) && fdr > 0) round(-log10(fdr), 4) else NA_real_
       list(
         Site        = s,
-        Motif       = ml.primary$Motif[i],
-        Family      = ml.primary$MotifFamily[i],
+        Motif       = p.motif[i],
+        Family      = p.fam[i],
         NegLogFDR   = nlp,
         logFC       = if (!is.na(site.fc[i])) round(site.fc[i], 3) else NA_real_,
         FDR         = if (!is.na(fdr)) signif(fdr, 3) else NA_real_,
-        Significant = isTRUE(site.sig[s]),
-        Gene        = if (!is.na(site.gene[s])) site.gene[s] else "",
-        Compartment = if (length(site.comp) > 0 && !is.na(site.comp[s])) site.comp[s] else ""
+        Significant = isTRUE(p.sig[i]),
+        Gene        = if (!is.na(p.gene[i])) p.gene[i] else "",
+        Compartment = if (has.comp && !is.na(p.comp[i])) p.comp[i] else ""
       )
     })
   }
@@ -1356,18 +1419,17 @@ GetMotifEnrichmentJSON <- function(jsonNm) {
     sub("_[A-Z]+$", "", x)
   }
 
-  for (i in seq_along(protein.ids)) {
-    pid <- as.character(protein.ids[i])
-    if (is.na(pid) || !nzchar(pid)) next
-    ent <- NA_character_
-    if (!is.null(up2ent)) {
-      ent <- up2ent[pid]
-      if (is.na(ent)) ent <- up2ent[clean_id(pid)]
-    }
-    if (!is.na(ent) && nzchar(ent)) {
-      comp <- comp.map[ent]
-      if (!is.na(comp)) result[i] <- comp
-    }
+  # Vectorized form of the former per-ID loop (same name-subscript semantics).
+  pids <- as.character(protein.ids)
+  ok <- which(!is.na(pids) & nzchar(pids))
+  if (length(ok) > 0 && !is.null(up2ent)) {
+    ent <- up2ent[pids[ok]]
+    na.e <- which(is.na(ent))
+    if (length(na.e) > 0) ent[na.e] <- up2ent[clean_id(pids[ok][na.e])]
+    hit <- which(!is.na(ent) & nzchar(ent))
+    comp <- comp.map[ent[hit]]
+    sel <- which(!is.na(comp))
+    result[ok[hit][sel]] <- comp[sel]
   }
   result
 }
@@ -2113,13 +2175,18 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
     if (subj.valid) subj <- as.character(subjects[runs])                   # real design (paired/blocked)
     else            subj <- as.character(ave(seq_along(runs), grp[runs], FUN = seq_along))  # unpaired fallback
     names(subj) <- runs
-    long <- do.call(rbind, lapply(rownames(mat), function(p) {
-      v <- mat[p, ]; ok <- is.finite(v); if (!any(ok)) return(NULL)
-      data.frame(RUN = ri[runs][ok], Protein = p, LogIntensities = as.numeric(v[ok]),
-                 originalRUN = runs[ok], GROUP = grp[runs][ok], SUBJECT = subj[ok],
-                 stringsAsFactors = FALSE)
-    }))
-    if (is.null(long)) return(NULL)
+    # Row-major (protein, then run) finite cells; equivalent to rbind-ing one
+    # frame per rownames(mat) entry (mat[p, ] picks the first row named p).
+    rn <- rownames(mat)
+    if (length(rn) == 0) return(NULL)
+    ok.mat <- is.finite(mat[match(rn, rn), , drop = FALSE])
+    cell <- which(t(ok.mat)) - 1L
+    if (length(cell) == 0) return(NULL)
+    ci <- cell %/% length(runs) + 1L; cj <- cell %% length(runs) + 1L
+    long <- data.frame(RUN = unname(ri[runs][cj]), Protein = rn[ci],
+                       LogIntensities = as.numeric(mat[cbind(match(rn, rn)[ci], cj)]),
+                       originalRUN = runs[cj], GROUP = unname(grp[runs][cj]), SUBJECT = unname(subj[cj]),
+                       stringsAsFactors = FALSE)
     # feature-count metadata columns the object carries (unused when moderated=FALSE)
     long$TotalGroupMeasurements <- ave(long$RUN, long$GROUP, FUN = length)
     long$NumMeasuredFeature <- 1L; long$MissingPercentage <- 0
@@ -2179,47 +2246,59 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
 
   rn.prot <- rownames(prot.ref)
   grp.chr <- as.character(groups); names(grp.chr) <- colnames(phospho.mat)
-  rows <- lapply(seq_len(nrow(adj)), function(k) {
-    sid <- as.character(adj$Protein[k])
-    if (!(sid %in% rownames(phospho.mat))) return(NULL)
-    i   <- match(sid, site.ids); if (is.na(i)) return(NULL)
-    pid <- prot.ids[i]; res <- residues[i]
-    adj.lfc <- adj$log2FC[k]; p.occ <- adj$pvalue[k]
-    fdr <- if ("adj.pvalue" %in% colnames(adj)) adj$adj.pvalue[k] else NA_real_
-    # contrast groups parsed from the MSstatsPTM label "grpB vs grpA" (grpB - grpA)
-    lab <- as.character(adj$Label[k]); pr <- strsplit(lab, " vs ", fixed = TRUE)[[1]]
-    if (length(pr) != 2) return(NULL)
-    grpB <- trimws(pr[1]); grpA <- trimws(pr[2])
-    pidx <- which(rn.prot == pid)
-    if (length(pidx) == 0) pidx <- which(grepl(pid, rn.prot, fixed = TRUE))
-    if (length(pidx) == 0) return(NULL)
-    # display occupancy means per condition: log2(phospho) - log2(protein)
-    phos.vec <- as.numeric(phospho.mat[sid, ])
-    prot.vec <- as.numeric(prot.ref[pidx[1], ])
-    occ.vec  <- phos.vec - prot.vec
-    occ.gA <- mean(occ.vec[grp.chr == grpA], na.rm = TRUE)
-    occ.gB <- mean(occ.vec[grp.chr == grpB], na.rm = TRUE)
-    mod.name <- if (identical(res, "K")) "KGG(K)" else if (nchar(res) > 0) paste0("Phospho(", res, ")") else "PTM"
-    sp <- if (!is.null(site.p)) site.p[[paste(sid, lab, sep = "\r")]] else NULL
-    data.frame(
-      Gene             = gene.lookup[[sid]],
-      Peptide          = sid,
-      Modification     = mod.name,
-      Mod.Sig          = tolower(paste0("phospho_", res)),
+  # Vectorized row filters/lookups; the per-row loop below only computes the
+  # display means and the PTM.Model p-value (formerly one data.frame per row).
+  sid.a  <- as.character(adj$Protein)
+  i.a    <- match(sid.a, site.ids)
+  lab.a  <- as.character(adj$Label)
+  pr.a   <- strsplit(lab.a, " vs ", fixed = TRUE)
+  keep.a <- sid.a %in% rownames(phospho.mat) & !is.na(i.a) & lengths(pr.a) == 2
+  pid.a  <- prot.ids[i.a]
+  pidx.a <- rep(NA_integer_, length(sid.a))
+  pidx.a[keep.a] <- match(pid.a[keep.a], rn.prot)
+  miss.a <- which(keep.a & is.na(pidx.a))
+  for (up in unique(pid.a[miss.a])) {
+    hit <- which(grepl(up, rn.prot, fixed = TRUE))
+    if (length(hit)) pidx.a[miss.a[pid.a[miss.a] %in% up]] <- hit[1]
+  }
+  ks <- which(keep.a & !is.na(pidx.a))
+  out <- NULL
+  if (length(ks) > 0) {
+    sid.k <- sid.a[ks]; lab.k <- lab.a[ks]; res.k <- residues[i.a[ks]]
+    grpB <- trimws(vapply(pr.a[ks], `[`, character(1), 1))
+    grpA <- trimws(vapply(pr.a[ks], `[`, character(1), 2))
+    fdr <- if ("adj.pvalue" %in% colnames(adj)) adj$adj.pvalue[ks] else rep(NA_real_, length(ks))
+    occ.gA <- occ.gB <- numeric(length(ks)); n.mod <- integer(length(ks))
+    tot.p <- rep(NA_real_, length(ks))
+    for (k in seq_along(ks)) {
+      # display occupancy means per condition: log2(phospho) - log2(protein)
+      phos.vec <- as.numeric(phospho.mat[sid.k[k], ])
+      prot.vec <- as.numeric(prot.ref[pidx.a[ks[k]], ])
+      occ.vec  <- phos.vec - prot.vec
+      occ.gA[k] <- mean(occ.vec[grp.chr == grpA[k]], na.rm = TRUE)
+      occ.gB[k] <- mean(occ.vec[grp.chr == grpB[k]], na.rm = TRUE)
+      n.mod[k]  <- as.integer(sum(!is.na(phos.vec)))
+      sp <- if (!is.null(site.p)) site.p[[paste(sid.k[k], lab.k[k], sep = "\r")]] else NULL
+      if (!is.null(sp) && length(sp) == 1 && is.finite(sp)) tot.p[k] <- signif(sp, 3)
+    }
+    out <- data.frame(
+      Gene             = unname(gene.lookup[match(sid.k, names(gene.lookup))]),
+      Peptide          = sid.k,
+      Modification     = ifelse(res.k == "K", "KGG(K)", ifelse(nchar(res.k) > 0, paste0("Phospho(", res.k, ")"), "PTM")),
+      Mod.Sig          = tolower(paste0("phospho_", res.k)),
       Precursors.Unmod = 0L,
-      Precursors.Mod   = as.integer(sum(!is.na(phos.vec))),
+      Precursors.Mod   = n.mod,
       Occupancy.Cond1  = round(occ.gA, 3),
       Occupancy.Cond2  = round(occ.gB, 3),
-      Delta.Occupancy  = round(adj.lfc, 3),
-      Occ.Pvalue       = signif(p.occ, 3),
-      Occ.FDR          = if (is.finite(fdr)) signif(fdr, 3) else NA_real_,
-      Total.Pvalue     = if (!is.null(sp) && length(sp) == 1 && is.finite(sp)) signif(sp, 3) else NA_real_,
+      Delta.Occupancy  = round(adj$log2FC[ks], 3),
+      Occ.Pvalue       = signif(adj$pvalue[ks], 3),
+      Occ.FDR          = ifelse(is.finite(fdr), signif(fdr, 3), NA_real_),
+      Total.Pvalue     = tot.p,
       Cond1.Label      = grpA,
       Cond2.Label      = grpB,
-      Contrast         = lab,
+      Contrast         = lab.k,
       stringsAsFactors = FALSE)
-  })
-  out <- do.call(rbind, Filter(Negate(is.null), rows))
+  }
   if (is.null(out) || nrow(out) == 0) return(NULL)
   out$Analysis.Engine <- "MSstatsPTM"
   out$MSstatsPTM.Input.Path <- input.path
@@ -2480,7 +2559,7 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
   )
 
   .fitLimma <- function(mat, des, cmat, block = NULL, count = NULL) {
-    keep <- apply(mat, 1, function(x) sum(!is.na(x)) >= 2)
+    keep <- rowSums(!is.na(mat)) >= 2   # exact integer count, same as the per-row apply
     mat  <- mat[keep, , drop = FALSE]
     # Random-effect blocking: estimate the consensus within-block correlation and
     # feed it to lmFit so correlated replicates are down-weighted instead of
@@ -2584,7 +2663,10 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
   if (identical(adjust.mode, "ratio")) {
     ridx <- match(prot.ids, prot.ref.ids)                       # parent row per site
     na.r <- which(is.na(ridx))
-    for (k in na.r) { hit <- which(grepl(prot.ids[k], prot.ref.ids, fixed = TRUE)); if (length(hit)) ridx[k] <- hit[1] }
+    for (up in unique(prot.ids[na.r])) {
+      hit <- which(grepl(up, prot.ref.ids, fixed = TRUE))
+      if (length(hit)) ridx[na.r[prot.ids[na.r] %in% up]] <- hit[1]
+    }
     keep.r <- which(!is.na(ridx))
     if (length(keep.r)) {
       ratio.mat <- phospho.mat[keep.r, , drop = FALSE] - prot.ref[ridx[keep.r], , drop = FALSE]
@@ -2598,69 +2680,84 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
     }
   }
 
-  results.list <- lapply(seq_len(nrow(phospho.mat)), function(i) {
-    pid <- prot.ids[i]
-    sid <- site.ids[i]
-    res <- residues[i]
+  # Vectorized per-site assembly (formerly one data.frame per site + rbind).
+  # Parent lookup: first exact id match, else first fixed-substring match.
+  pidx.all <- match(prot.ids, prot.ref.ids)
+  pidx.all[is.na(prot.ids)] <- NA_integer_
+  cand <- which(site.ids %in% names(ss$lfc))
+  miss <- cand[is.na(pidx.all[cand]) & !is.na(prot.ids[cand])]
+  for (up in unique(prot.ids[miss])) {
+    hit <- which(grepl(up, prot.ref.ids, fixed = TRUE))
+    if (length(hit)) pidx.all[miss[prot.ids[miss] == up]] <- hit[1]
+  }
+  cand <- cand[!is.na(pidx.all[cand])]
+  cand <- cand[prot.ref.ids[pidx.all[cand]] %in% names(ps$lfc)]
+  sid.c   <- site.ids[cand]
+  pname.c <- prot.ref.ids[pidx.all[cand]]
+  # same as unname(v[nm]): first exact name match; "" and NA never match
+  .byName <- function(v, nm) {
+    i <- match(nm, names(v))
+    i[is.na(nm) | nm == ""] <- NA_integer_
+    unname(v[i])
+  }
+  site.lfc <- .byName(ss$lfc, sid.c);  site.se <- .byName(ss$se, sid.c);  site.df <- .byName(ss$df, sid.c)
+  prot.lfc <- .byName(ps$lfc, pname.c); prot.se <- .byName(ps$se, pname.c); prot.df <- .byName(ps$df, pname.c)
+  ok <- !(is.na(site.lfc) | is.na(site.se) | is.na(prot.lfc) | is.na(prot.se))
+  cand <- cand[ok]; sid.c <- sid.c[ok]
+  site.lfc <- site.lfc[ok]; site.se <- site.se[ok]; site.df <- site.df[ok]
+  prot.lfc <- prot.lfc[ok]; prot.se <- prot.se[ok]; prot.df <- prot.df[ok]
 
-    # skip sites not present in the limma fit (filtered for low coverage)
-    if (!(sid %in% names(ss$lfc))) return(NULL)
-
-    # find matching protein
-    pidx <- which(prot.ref.ids == pid)
-    if (length(pidx) == 0) pidx <- which(grepl(pid, prot.ref.ids, fixed = TRUE))
-    if (length(pidx) == 0) return(NULL)
-    pname <- prot.ref.ids[pidx[1]]
-    if (!(pname %in% names(ps$lfc))) return(NULL)
-
-    site.lfc <- ss$lfc[sid];  site.se <- ss$se[sid];  site.df <- ss$df[sid]
-    prot.lfc <- ps$lfc[pname]; prot.se <- ps$se[pname]; prot.df <- ps$df[pname]
-    if (any(is.na(c(site.lfc, site.se, prot.lfc, prot.se)))) return(NULL)
-
-    if (!is.null(rs) && sid %in% names(rs$lfc) && all(is.finite(c(rs$lfc[sid], rs$se[sid])))) {
+  if (length(cand) > 0) {
+    # MSstatsPTM delta-method correction (subtract two group fits, add variances)
+    adj.lfc <- site.lfc - prot.lfc
+    adj.se  <- sqrt(site.se^2 + prot.se^2)
+    # Satterthwaite df approximation
+    adj.df  <- (site.se^2 + prot.se^2)^2 /
+               (site.se^4 / site.df + prot.se^4 / prot.df)
+    if (!is.null(rs)) {
       # per-sample ratio adjustment: adjusted stats come directly from the single
       # moderated fit on the site-parent ratios (covariance handled by pairing).
-      adj.lfc <- rs$lfc[sid]; adj.se <- rs$se[sid]; adj.df <- rs$df[sid]
-      t.stat  <- adj.lfc / adj.se
-      p.occ   <- 2 * pt(-abs(t.stat), df = adj.df)
-    } else {
-      # MSstatsPTM delta-method correction (subtract two group fits, add variances)
-      adj.lfc <- site.lfc - prot.lfc
-      adj.se  <- sqrt(site.se^2 + prot.se^2)
-      t.stat  <- adj.lfc / adj.se
-      # Satterthwaite df approximation
-      adj.df  <- (site.se^2 + prot.se^2)^2 /
-                 (site.se^4 / site.df + prot.se^4 / prot.df)
-      p.occ   <- 2 * pt(-abs(t.stat), df = adj.df)
+      r.lfc <- .byName(rs$lfc, sid.c); r.se <- .byName(rs$se, sid.c); r.df <- .byName(rs$df, sid.c)
+      use.r <- sid.c %in% names(rs$lfc) & is.finite(r.lfc) & is.finite(r.se)
+      adj.lfc[use.r] <- r.lfc[use.r]; adj.se[use.r] <- r.se[use.r]; adj.df[use.r] <- r.df[use.r]
     }
-    p.site  <- 2 * pt(-abs(site.lfc / site.se), df = site.df)
+    t.stat <- adj.lfc / adj.se
+    p.occ  <- 2 * pt(-abs(t.stat), df = adj.df)
+    p.site <- 2 * pt(-abs(site.lfc / site.se), df = site.df)
 
     # mean log2(phospho/protein) per condition for display
-    phos.vec <- as.numeric(phospho.mat[i, ])
-    prot.vec <- as.numeric(prot.ref[pidx[1], ])
-    occ.vec  <- phos.vec - prot.vec
-    occ.g1   <- mean(occ.vec[g1.idx], na.rm = TRUE)
-    occ.g2   <- mean(occ.vec[g2.idx], na.rm = TRUE)
+    n.c <- length(cand)
+    occ.g1 <- occ.g2 <- numeric(n.c); n.mod <- integer(n.c)
+    for (k in seq_len(n.c)) {
+      phos.vec <- as.numeric(phospho.mat[cand[k], ])
+      prot.vec <- as.numeric(prot.ref[pidx.all[cand[k]], ])
+      occ.vec  <- phos.vec - prot.vec
+      occ.g1[k] <- mean(occ.vec[g1.idx], na.rm = TRUE)
+      occ.g2[k] <- mean(occ.vec[g2.idx], na.rm = TRUE)
+      n.mod[k]  <- as.integer(sum(!is.na(phos.vec)))
+    }
+    res.c <- residues[cand]
+    mod.name <- ifelse(res.c == "K", "KGG(K)", ifelse(nchar(res.c) > 0, paste0("Phospho(", res.c, ")"), "PTM"))
 
-    mod.name <- if (identical(res, "K")) "KGG(K)" else if (nchar(res) > 0) paste0("Phospho(", res, ")") else "PTM"
-
-    data.frame(
-      Gene             = gene.lookup[[sid]],
-      Peptide          = sid,
+    # row names = site ids, as the former rbind of per-site frames produced
+    results <- data.frame(
+      Gene             = unname(gene.lookup[match(sid.c, names(gene.lookup))]),
+      Peptide          = sid.c,
       Modification     = mod.name,
-      Mod.Sig          = tolower(paste0("phospho_", res)),
+      Mod.Sig          = tolower(paste0("phospho_", res.c)),
       Precursors.Unmod = 0L,
-      Precursors.Mod   = as.integer(sum(!is.na(phos.vec))),
+      Precursors.Mod   = n.mod,
       Occupancy.Cond1  = round(occ.g1, 3),
       Occupancy.Cond2  = round(occ.g2, 3),
       Delta.Occupancy  = round(adj.lfc, 3),
       Occ.Pvalue       = signif(p.occ, 3),
       Total.Pvalue     = signif(p.site, 3),
+      row.names        = if (anyDuplicated(sid.c)) make.unique(sid.c, sep = "") else sid.c,
       stringsAsFactors = FALSE
     )
-  })
-
-  results <- do.call(rbind, Filter(Negate(is.null), results.list))
+  } else {
+    results <- NULL
+  }
   if (is.null(results) || nrow(results) == 0)
     return(fail(paste0(
       "No phosphosites could be matched to the protein reference. ",

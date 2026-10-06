@@ -73,15 +73,44 @@ BuildIgraphFromCEM <- function(thresh    = 0.05,
   }
 
   ## -- 3 - build edge list above threshold -------------------------
-  edge.df <- melt(adj)
-  # Convert factors to characters to preserve names correctly
-  edge.df$Var1 <- as.character(edge.df$Var1)
-  edge.df$Var2 <- as.character(edge.df$Var2)
+  if (is.matrix(adj) && is.null(names(dimnames(adj))) && !is.null(rownames(adj)) &&
+      !is.null(colnames(adj)) && length(thresh) == 1) {
+    # Same rows as melt(adj) + subset(value > thresh & Var1 != Var2), without
+    # materialising the full n x n long table: reshape2's dimname conversion
+    # (type.convert / factor) is applied, rows stay in column-major order and
+    # keep melt's row names.
+    melt.var.convert <- function(x) {
+      if (!is.character(x)) return(x)
+      x <- type.convert(x, as.is = TRUE)
+      if (!is.character(x)) return(x)
+      factor(x, levels = unique(x))
+    }
+    var1.all <- as.character(melt.var.convert(rownames(adj)))
+    var2.all <- as.character(melt.var.convert(colnames(adj)))
 
-  cat(sprintf("[BuildIgraphFromCEM] After melt, sample edge names: %s <-> %s\n",
-              edge.df$Var1[1], edge.df$Var2[1]))
+    cat(sprintf("[BuildIgraphFromCEM] After melt, sample edge names: %s <-> %s\n",
+                var1.all[1], var2.all[1]))
 
-  edge.df <- subset(edge.df, value > thresh & Var1 != Var2)
+    hit.lin <- which(as.vector(adj) > thresh)
+    hit.r <- (hit.lin - 1L) %% nrow(adj) + 1L
+    hit.c <- (hit.lin - 1L) %/% nrow(adj) + 1L
+    keep <- var1.all[hit.r] != var2.all[hit.c]
+    keep <- !is.na(keep) & keep
+    hit.lin <- hit.lin[keep]
+    edge.df <- data.frame(Var1 = var1.all[hit.r[keep]], Var2 = var2.all[hit.c[keep]],
+                          value = as.vector(adj)[hit.lin], stringsAsFactors = FALSE)
+    row.names(edge.df) <- hit.lin
+  } else {
+    edge.df <- melt(adj)
+    # Convert factors to characters to preserve names correctly
+    edge.df$Var1 <- as.character(edge.df$Var1)
+    edge.df$Var2 <- as.character(edge.df$Var2)
+
+    cat(sprintf("[BuildIgraphFromCEM] After melt, sample edge names: %s <-> %s\n",
+                edge.df$Var1[1], edge.df$Var2[1]))
+
+    edge.df <- subset(edge.df, value > thresh & Var1 != Var2)
+  }
 
   ## Check if we have any edges
   if (nrow(edge.df) == 0) {
@@ -680,6 +709,37 @@ CorrIgraph2SigmaJS <- function(g,
   # Log edge matching details for first few edges (debugging)
   debug.edge.count <- min(5, total.edges)
 
+  # PPI support for all edges in one keyed lookup instead of scanning every PPI
+  # edge per co-expression edge. Only used when it is provably the same as the
+  # == comparisons below (character IDs, no NA, separator absent); otherwise
+  # ppi.hit.vec stays NULL and the per-edge scan runs as before.
+  ppi.hit.vec <- NULL
+  if (!is.null(ppi.edges) && nrow(ppi.edges) > 0 &&
+      is.character(ppi.edges$id1) && is.character(ppi.edges$id2) &&
+      !anyNA(ppi.edges$id1) && !anyNA(ppi.edges$id2)) {
+    id.map0 <- ppi.edges$id.mapping[[1]]
+    src.all <- as.character(el$from)
+    tgt.all <- as.character(el$to)
+    if (!is.null(id.map0)) {
+      if (is.character(id.map0)) {
+        src.all <- unname(id.map0[src.all])
+        tgt.all <- unname(id.map0[tgt.all])
+      } else {
+        src.all <- NULL
+      }
+    } else if (anyNA(src.all) || anyNA(tgt.all)) {
+      src.all <- NULL
+    }
+    if (!is.null(src.all)) {
+      all.ids <- c(ppi.edges$id1, ppi.edges$id2, src.all, tgt.all)
+      if (!any(grepl("\001", all.ids[!is.na(all.ids)], fixed = TRUE))) {
+        ppi.keys <- c(paste0(ppi.edges$id1, "\001", ppi.edges$id2),
+                      paste0(ppi.edges$id2, "\001", ppi.edges$id1))
+        ppi.hit.vec <- paste0(src.all, "\001", tgt.all) %in% ppi.keys
+      }
+    }
+  }
+
   edges <- lapply(seq_len(nrow(el)), function(i) {
     w <- as.numeric(el$weight[i])
     src.orig <- as.character(el$from[i])
@@ -712,8 +772,9 @@ CorrIgraph2SigmaJS <- function(g,
         # Skip if either ID couldn't be mapped
         if (!is.na(src.entrez) && !is.na(tgt.entrez)) {
           # Check both directions (undirected network)
-          has.ppi <- any((ppi.edges$id1 == src.entrez & ppi.edges$id2 == tgt.entrez) |
-                         (ppi.edges$id1 == tgt.entrez & ppi.edges$id2 == src.entrez))
+          has.ppi <- if (!is.null(ppi.hit.vec)) ppi.hit.vec[i] else
+            any((ppi.edges$id1 == src.entrez & ppi.edges$id2 == tgt.entrez) |
+                (ppi.edges$id1 == tgt.entrez & ppi.edges$id2 == src.entrez))
 
           if (i <= debug.edge.count) {
             msg("  Checking PPI: ", has.ppi)
@@ -728,8 +789,9 @@ CorrIgraph2SigmaJS <- function(g,
         }
       } else {
         # IDs are already Entrez, direct comparison
-        has.ppi <- any((ppi.edges$id1 == src.orig & ppi.edges$id2 == tgt.orig) |
-                       (ppi.edges$id1 == tgt.orig & ppi.edges$id2 == src.orig))
+        has.ppi <- if (!is.null(ppi.hit.vec)) ppi.hit.vec[i] else
+          any((ppi.edges$id1 == src.orig & ppi.edges$id2 == tgt.orig) |
+              (ppi.edges$id1 == tgt.orig & ppi.edges$id2 == src.orig))
 
         if (i <= debug.edge.count) {
           msg("[CorrIgraph2SigmaJS] Edge ", i, " (Entrez): ", src.orig, " -> ", tgt.orig, " PPI=", has.ppi)

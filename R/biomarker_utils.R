@@ -3072,6 +3072,29 @@ PlotDetailROC <- function(dataName = "", imgName, thresh, sp, se, dpi=72, format
 #'@param measure Parameter to limit pROC
 #'@param cutoff Threshold for pROC
 #'@export
+# In-session cache for peptide_level_data.qs, which the univariate ROC curve and
+# box plot used to re-read on every feature click. Keyed by the normalized path
+# plus file mtime and size, so any rewrite of the file forces a fresh read; only
+# the latest entry is kept. Callers check file.exists() first, as before.
+# Held in an option (not .GlobalEnv) so save.image()/Rload.RData never sees it.
+.bmReadPeptideLevelData <- function(file = "peptide_level_data.qs") {
+  info <- file.info(file)
+  key <- paste(normalizePath(file, winslash = "/", mustWork = FALSE),
+               as.numeric(info$mtime), info$size, sep = "|")
+  cache <- getOption("ov.bm.peplevel.cache")
+  if (is.null(cache)) {
+    cache <- new.env(parent = emptyenv())
+    options(ov.bm.peplevel.cache = cache)
+  }
+  if (identical(cache$key, key)) {
+    return(cache$obj)
+  }
+  obj <- ov_qs_read(file)
+  cache$key <- key
+  cache$obj <- obj
+  obj
+}
+
 Perform.UnivROC <- function(dataName = "", feat.nm,
                             version, format="png",
                             dpi=72, isAUC, isOpt,
@@ -3114,7 +3137,7 @@ Perform.UnivROC <- function(dataName = "", feat.nm,
       # print("[R DEBUG ROC] peptide_level_data.qs not found")
       return(0)
     }
-    pep.mat <- ov_qs_read("peptide_level_data.qs")
+    pep.mat <- .bmReadPeptideLevelData("peptide_level_data.qs")
     if (!(feat.nm %in% rownames(pep.mat))) {
       # print(paste0("[R DEBUG ROC] feat.nm not found in peptide matrix rows"))
       return(0)
@@ -3298,7 +3321,7 @@ PlotRocUnivBoxPlot <- function(dataName = "", feat.nm, version, format="png", dp
     if (!file.exists("peptide_level_data.qs")) {
       return(0)
     }
-    pep.mat <- ov_qs_read("peptide_level_data.qs")
+    pep.mat <- .bmReadPeptideLevelData("peptide_level_data.qs")
     if (!(feat.nm %in% rownames(pep.mat))) {
       return(0)
     }
@@ -3938,7 +3961,9 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
   #msg("[PlotROC] DEBUG: Closing graphics device and saving")
   dev.off();
   #msg("[PlotROC] DEBUG: Graphics device closed, file should be at: ", imgName)
-  saveSet(analSet, "analSet");
+  # analSet is only read on this path; re-saving the unchanged object just
+  # rewrote analSet.qs (readSet already left it in the in-memory cache).
+  if (!file.exists("analSet.qs")) saveSet(analSet, "analSet");
   saveSet(imgSet, "imgSet");
   #msg("[PlotROC] DEBUG: PlotROC completed successfully")
   return(imgName);
@@ -4130,7 +4155,9 @@ PlotROCTest<-function(dataName = "", imgName, format="png", dpi=default.dpi, mdl
     }
   }
   dev.off();
-  saveSet(analSet, "analSet");
+  # analSet is only read on this path; re-saving the unchanged object just
+  # rewrote analSet.qs (readSet already left it in the in-memory cache).
+  if (!file.exists("analSet.qs")) saveSet(analSet, "analSet");
   saveSet(imgSet, "imgSet");
   return(imgName);
 }
@@ -4565,7 +4592,9 @@ Plot.Permutation<-function(dataName = "", imgName, format="png", dpi=default.dpi
     par(op);
   }
   dev.off();
-  saveSet(analSet, "analSet");
+  # analSet is only read on this path; re-saving the unchanged object just
+  # rewrote analSet.qs (readSet already left it in the in-memory cache).
+  if (!file.exists("analSet.qs")) saveSet(analSet, "analSet");
   saveSet(imgSet, "imgSet");
   return(imgName);
 }

@@ -81,15 +81,14 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
       hit.ids <- intersect(row_ids, rownames(phospho.map))
       if (length(hit.ids) > 0) {
         map.syms <- as.character(phospho.map[hit.ids, "symbol", drop = TRUE])
-        for (ii in seq_along(row_ids)) {
-          pid <- row_ids[ii]
-          if (!(pid %in% hit.ids)) next
-          sym <- map.syms[which(hit.ids == pid)[1]]
-          if (is.na(sym) || sym == "" || sym == "NA" || sym == pid) next
-          # Use symbol directly - it already contains the full display name
-          # with isoform and site suffix (e.g., "DOCK10-2_S_12")
-          disp_labels[ii] <- sym
-        }
+        # Use symbol directly - it already contains the full display name
+        # with isoform and site suffix (e.g., "DOCK10-2_S_12").
+        # Vectorized lookup (was a per-id which() scan, O(N*H)).
+        hit.pos <- match(row_ids, hit.ids)
+        hit.pos[is.na(row_ids)] <- NA_integer_
+        sym <- map.syms[hit.pos]
+        use <- !is.na(hit.pos) & !is.na(sym) & sym != "" & sym != "NA" & sym != row_ids
+        disp_labels[use] <- sym[use]
         # Keep same semantics as other modules: symbol/name are display labels.
         if ("symbol" %in% colnames(gene.anot) && length(gene.anot$symbol) == length(disp_labels)) {
           gene.anot$symbol <- disp_labels
@@ -245,20 +244,11 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
            y = "-Log10 P-value") +
       theme_minimal()
 
-    # Convert to ggplotly for interactive plot, including tooltips
-    pwidget <- ggplotly(gg_volcano, tooltip = "text")
-
-    # Customize the layout to optimize hover interaction
-    pwidget <- pwidget %>% plotly::layout(hovermode = 'closest')
-
-    # Print the plot
-    pwidget
+  # The ggplotly widget (saved as <fileNm>.rda, imgSet$volcanoPlotly) was
+  # removed: nothing in R/Java/XHTML/JS read it and downloads skip .rda files.
+  # library(plotly) above is kept so the attached search path is unchanged.
 
   imgSet <- readSet(imgSet, "imgSet");
-  widgetNm <- paste0(fileNm, ".rda");
-  imgSet$volcanoPlotly <- widgetNm;
-
-  save(pwidget, file = widgetNm);
 
   imgSet$volcanoPlot <- paste0(fileNm, ".png");
 
@@ -429,11 +419,34 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
            "; still missing=", length(raw.ids) - length(hits),
            "; hit sample=", paste(head(raw.ids[hits], 5), collapse = ","))
   if (length(hits) > 0) {
+    # Index loc.data rows by EntrezID once (was a full-table scan per feature)
+    # and resolve each distinct Entrez ID once. Row order within a group is
+    # preserved, so unique()/paste() see the same sequence as the old scan.
+    # The old logical-subset form also produced all-NA rows for NA EntrezIDs;
+    # keep that exact path when the table has any NA keys.
+    loc.key <- as.character(loc.data$EntrezID)
+    use.index <- !anyNA(loc.key)
+    if (use.index) {
+      key.lvls <- unique(loc.key)
+      key.rows <- split(seq_along(loc.key), factor(loc.key, levels = key.lvls))
+    }
+    resolved.cache <- new.env(hash = TRUE, parent = emptyenv())
     for (i in hits) {
-      loc.rows <- loc.data[as.character(loc.data$EntrezID) == as.character(entrez.ids[i]), , drop = FALSE]
-      broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
-      main <- if ("Main.location" %in% colnames(loc.rows)) paste(unique(as.character(loc.rows$Main.location)), collapse = "; ") else NA_character_
-      resolved <- .paPrimaryCompartment(broad, main)
+      e <- as.character(entrez.ids[i])
+      cache.key <- paste0("k", e)
+      if (exists(cache.key, envir = resolved.cache, inherits = FALSE)) {
+        resolved <- get(cache.key, envir = resolved.cache, inherits = FALSE)
+      } else {
+        if (use.index) {
+          loc.rows <- loc.data[key.rows[[match(e, key.lvls)]], , drop = FALSE]
+        } else {
+          loc.rows <- loc.data[loc.key == e, , drop = FALSE]
+        }
+        broad <- paste(unique(as.character(loc.rows$Broad.category)), collapse = "; ")
+        main <- if ("Main.location" %in% colnames(loc.rows)) paste(unique(as.character(loc.rows$Main.location)), collapse = "; ") else NA_character_
+        resolved <- .paPrimaryCompartment(broad, main)
+        assign(cache.key, resolved, envir = resolved.cache)
+      }
       comp.map[i] <- resolved$primary
       raw.map[i] <- resolved$all_categories
     }

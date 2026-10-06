@@ -418,15 +418,16 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
       hit.ids <- intersect(gene.ids, rownames(phospho.map))
       if(length(hit.ids) > 0) {
         map.syms <- as.character(phospho.map[hit.ids, "symbol", drop = TRUE])
-        for(j in seq_along(gene.ids)) {
-          gid <- gene.ids[j]
-          if(!(gid %in% hit.ids)) next
-          sym <- map.syms[which(hit.ids == gid)[1]]
-          if(is.na(sym) || sym == "" || sym == "NA" || sym == gid) next
-          # Use symbol directly - it already contains the full display name
-          # with isoform and site suffix (e.g., "DOCK10-2_S_12")
-          phospho.display.labels[j] <- sym
-        }
+        # Vectorized lookup (first hit per id, as which(hit.ids == gid)[1]);
+        # == never matches an NA id, so NA ids get no symbol.
+        sym.pos <- match(gene.ids, hit.ids)
+        sym.pos[is.na(gene.ids)] <- NA
+        sym.all <- map.syms[sym.pos]
+        # Use symbol directly - it already contains the full display name
+        # with isoform and site suffix (e.g., "DOCK10-2_S_12")
+        use.sym <- !is.na(sym.pos) & !is.na(sym.all) & sym.all != "" &
+          sym.all != "NA" & sym.all != gene.ids
+        phospho.display.labels[use.sym] <- sym.all[use.sym]
       }
     }
   }

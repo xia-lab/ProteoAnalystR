@@ -209,15 +209,25 @@ rescale2NewRange <- function(qvec, a, b){
   # by a Main.location term across all proteins in this call. Feeds the
   # inverse-frequency tie-break in .paPrimaryCompartment so tied placements go
   # to the less common (more informative) compartment.
-  cat.freq <- table(unlist(lapply(seq_len(n), function(i) {
-    cc <- .normalizeBroadCategory(.paSplitCompartmentValues(main.locations[i]))
+  # Both per-element computations are pure functions of their inputs, so they are
+  # evaluated once per distinct value / (category, location) pair and expanded
+  # back to element order (match() keeps NA distinct from the string "NA").
+  loc.uniq <- unique(main.locations)
+  loc.cats <- lapply(seq_along(loc.uniq), function(k) {
+    cc <- .normalizeBroadCategory(.paSplitCompartmentValues(loc.uniq[k]))
     cc[!is.na(cc) & cc != "Unknown"]
-  }), use.names = FALSE))
+  })
+  loc.code <- match(main.locations, loc.uniq)
+  cat.freq <- table(unlist(loc.cats[loc.code], use.names = FALSE))
   if (length(cat.freq) == 0) cat.freq <- NULL
 
-  resolved <- lapply(seq_len(n), function(i) {
+  pair.code <- (as.numeric(match(broad.categories, unique(broad.categories))) - 1) *
+    length(loc.uniq) + loc.code
+  pair.first <- which(!duplicated(pair.code))
+  resolved.uniq <- lapply(pair.first, function(i) {
     .paPrimaryCompartment(broad.categories[i], main.locations[i], cat.freq = cat.freq)
   })
+  resolved <- resolved.uniq[match(pair.code, pair.code[pair.first])]
 
   data.frame(
     primary = vapply(resolved, `[[`, character(1), "primary"),
@@ -963,12 +973,8 @@ GetNetsQueryNum <- function(){
   copyId <- function(entrez, comp) paste0(entrez, "__", sanitize(comp))
 
   # ---- Copy nodes: one per (protein, compartment) ----
-  copy.j <- integer(0); copy.comp <- character(0)
-  for (j in seq_len(nP)) {
-    cs <- prot.comps[[j]]
-    copy.j    <- c(copy.j, rep(j, length(cs)))
-    copy.comp <- c(copy.comp, cs)
-  }
+  copy.j    <- rep(seq_len(nP), lengths(prot.comps))
+  copy.comp <- c(character(0), unlist(prot.comps))
   ncopy       <- length(copy.j)
   copy.comp.id <- sanitize(copy.comp)
   copy.id     <- paste0(prot.entrez[copy.j], "__", copy.comp.id)
@@ -983,36 +989,37 @@ GetNetsQueryNum <- function(){
   }
 
   # ---- Build split edges ----
-  e.from <- character(0); e.to <- character(0)
-  e.inter <- logical(0); e.identity <- logical(0)
+  # Pieces are collected per interaction / per protein and flattened once
+  # (same order as appending edge by edge).
+  split.parts <- list()
   if (nrow(ef) > 0) {
-    for (r in seq_len(nrow(ef))) {
+    split.parts <- lapply(seq_len(nrow(ef)), function(r) {
       pa <- ef$from[r]; pb <- ef$to[r]
       ja <- entrez2pj[[pa]]; jb <- entrez2pj[[pb]]
       shared <- intersect(prot.comps[[ja]], prot.comps[[jb]])
       if (length(shared) > 0) {
-        for (c in shared) {
-          e.from <- c(e.from, copyId(pa, c)); e.to <- c(e.to, copyId(pb, c))
-          e.inter <- c(e.inter, FALSE); e.identity <- c(e.identity, FALSE)
-        }
+        list(f = copyId(pa, shared), t = copyId(pb, shared), inter = rep(FALSE, length(shared)))
       } else {
-        e.from <- c(e.from, copyId(pa, prot.primary[ja]))
-        e.to   <- c(e.to,   copyId(pb, prot.primary[jb]))
-        e.inter <- c(e.inter, TRUE); e.identity <- c(e.identity, FALSE)
+        list(f = copyId(pa, prot.primary[ja]), t = copyId(pb, prot.primary[jb]), inter = TRUE)
       }
-    }
+    })
   }
   # Identity (same-protein) links: star from primary copy to the protein's other copies.
-  for (j in seq_len(nP)) {
+  ident.parts <- lapply(seq_len(nP), function(j) {
     cs <- prot.comps[[j]]
-    if (length(cs) < 2) next
+    if (length(cs) < 2) return(NULL)
     prim <- prot.primary[j]
-    for (c in setdiff(cs, prim)) {
-      e.from <- c(e.from, copyId(prot.entrez[j], prim))
-      e.to   <- c(e.to,   copyId(prot.entrez[j], c))
-      e.inter <- c(e.inter, TRUE); e.identity <- c(e.identity, TRUE)
-    }
-  }
+    others <- setdiff(cs, prim)
+    list(f = rep(copyId(prot.entrez[j], prim), length(others)),
+         t = copyId(prot.entrez[j], others))
+  })
+  ident.f <- c(character(0), unlist(lapply(ident.parts, `[[`, "f")))
+  e.from <- c(character(0), unlist(lapply(split.parts, `[[`, "f")), ident.f)
+  e.to   <- c(character(0), unlist(lapply(split.parts, `[[`, "t")),
+              unlist(lapply(ident.parts, `[[`, "t")))
+  n.split <- length(e.from) - length(ident.f)
+  e.inter <- c(logical(0), unlist(lapply(split.parts, `[[`, "inter")), rep(TRUE, length(ident.f)))
+  e.identity <- c(rep(FALSE, n.split), rep(TRUE, length(ident.f)))
 
   # ---- Copy-level layout (compartment-clustered FR) ----
   x.coords <- rep(0, ncopy); y.coords <- rep(0, ncopy)
@@ -1369,16 +1376,34 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     temp.edges.list <- vector("list", length(nodes))  # Overestimate size
     temp.edge.count <- 0
 
+    # Precomputed lookups replacing per-node full edge scans. Edge endpoints are
+    # non-NA here (invalid edges dropped above); NA node IDs fall back to the
+    # original scalar expressions so behaviour is unchanged for them.
+    e.from.chr <- edges.df$from
+    e.to.chr <- edges.df$to
+    deg.keys <- unique(c(e.from.chr, e.to.chr))
+    deg.cnt <- tabulate(match(e.from.chr, deg.keys), length(deg.keys)) +
+      tabulate(match(e.to.chr, deg.keys), length(deg.keys)) -
+      tabulate(match(e.from.chr[e.from.chr == e.to.chr], deg.keys), length(deg.keys))
+    edge.pair.keys <- c(paste0(e.from.chr, "\001", e.to.chr), paste0(e.to.chr, "\001", e.from.chr))
+    .edgeExists <- function(a, b) {
+      if (is.na(a) || is.na(b)) {
+        return(any((edges.df$from == a & edges.df$to == b) |
+                     (edges.df$from == b & edges.df$to == a)))
+      }
+      paste0(a, "\001", b) %in% edge.pair.keys
+    }
+
     # For each compartment, find hub node and connect all others to it
     for (cat in names(category.counts)) {
       comp.nodes <- nodes[loc.map$Broad.category == cat & !is.na(loc.map$Broad.category)]
       if (length(comp.nodes) <= 1) next
 
       # Find the node with highest degree in this compartment
-      comp.degrees <- numeric(length(comp.nodes))
-      for (i in seq_along(comp.nodes)) {
+      comp.degrees <- as.numeric(deg.cnt[match(comp.nodes, deg.keys)])
+      comp.degrees[is.na(comp.degrees)] <- 0
+      for (i in which(is.na(comp.nodes))) {
         node <- comp.nodes[i]
-        # Count edges connected to this node
         comp.degrees[i] <- sum(edges.df$from == node | edges.df$to == node)
       }
       hub.idx <- which.max(comp.degrees)
@@ -1391,8 +1416,7 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
         target.node <- comp.nodes[i]
 
         # Check if edge already exists in original edges
-        exists <- any((edges.df$from == hub.node & edges.df$to == target.node) |
-                        (edges.df$from == target.node & edges.df$to == hub.node))
+        exists <- .edgeExists(hub.node, target.node)
 
         if (!exists) {
           temp.edge.count <- temp.edge.count + 1
@@ -1423,17 +1447,19 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     w.orig.intra <- 15      # original PPI edges within a compartment
     w.inter <- 1            # edges between compartments
 
+    # Endpoints of all edges at once (same as ends(layout.graph, es = i) per edge)
+    all.ends <- igraph::ends(layout.graph, es = igraph::E(layout.graph), names = TRUE)
     for (i in 1:ecount(layout.graph)) {
       # get.edge() is defunct in igraph >= 2.1.0; ends() returns the edge endpoints
-      edge <- as.vector(igraph::ends(layout.graph, es = i, names = TRUE))
+      edge <- if (i >= 1 && i <= nrow(all.ends)) as.vector(all.ends[i, ]) else
+        as.vector(igraph::ends(layout.graph, es = i, names = TRUE))
       from.idx <- match(edge[1], nodes)
       to.idx <- match(edge[2], nodes)
       from.comp <- loc.map$Broad.category[from.idx]
       to.comp <- loc.map$Broad.category[to.idx]
 
       # Check if this is a temporary edge (same compartment, added for clustering)
-      is.original <- any((edges.df$from == edge[1] & edges.df$to == edge[2]) |
-                           (edges.df$from == edge[2] & edges.df$to == edge[1]))
+      is.original <- .edgeExists(edge[1], edge[2])
 
       if (!is.na(from.comp) && !is.na(to.comp) && from.comp == to.comp && !is.original) {
         edge.weights[i] <- w.temp.intra
@@ -1553,12 +1579,14 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
     entrez_to_uniprot <- names(analSet$uniprot_to_entrez_map)
     names(entrez_to_uniprot) <- as.character(analSet$uniprot_to_entrez_map)
 
-    # Map nodes (Entrez IDs) back to UniProt
-    for (i in seq_along(nodes)) {
-      entrez.id <- as.character(nodes[i])
-      if (entrez.id %in% names(entrez_to_uniprot)) {
-        uniprot.vec[i] <- entrez_to_uniprot[entrez.id]
-      }
+    # Map nodes (Entrez IDs) back to UniProt (vectorized; first name match as
+    # in name indexing, which never matches NA or "" names)
+    node.chr <- as.character(nodes)
+    e2u.hit <- match(node.chr, names(entrez_to_uniprot))
+    e2u.hit[is.na(node.chr) | node.chr == ""] <- NA
+    e2u.ok <- which(!is.na(e2u.hit))
+    if (length(e2u.ok) > 0) {
+      uniprot.vec[e2u.ok] <- entrez_to_uniprot[e2u.hit[e2u.ok]]
     }
 
     mapped_count <- sum(!is.na(uniprot.vec))
@@ -1579,11 +1607,11 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
       if (!is.null(uniprot.map) && is.data.frame(uniprot.map) &&
           "gene_id" %in% colnames(uniprot.map) && "accession" %in% colnames(uniprot.map)) {
         # Only map unmapped nodes
-        for (i in which(is.na(uniprot.vec))) {
-          hit.inx <- match(as.character(nodes[i]), as.character(uniprot.map$gene_id))
-          if (!is.na(hit.inx)) {
-            uniprot.vec[i] <- uniprot.map$accession[hit.inx]
-          }
+        na.idx <- which(is.na(uniprot.vec))
+        hit.inx <- match(as.character(nodes[na.idx]), as.character(uniprot.map$gene_id))
+        hit.ok <- !is.na(hit.inx)
+        if (any(hit.ok)) {
+          uniprot.vec[na.idx[hit.ok]] <- uniprot.map$accession[hit.inx[hit.ok]]
         }
 
         # cat(sprintf("[Localization] Total mapped: %d/%d nodes\n",

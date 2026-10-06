@@ -774,7 +774,14 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
   # Constant features come out ALWAYS, independently of the variance threshold. A feature with
   # one distinct value has nothing for VSN's mean-variance fit, no correlation and no model to
   # estimate, and disabling the percentile cut must not silently disable this too.
-  const.inx <- apply(data, 1, function(x) { u <- unique(x[!is.na(x)]); length(u) <= 1L })
+  if (is.matrix(data) && (is.double(data) || is.integer(data)) && nrow(data) > 0L) {
+    # vectorized: <= 1 distinct non-NA value  <=>  <= 1 non-NA value or row min == row max
+    const.inx <- rowSums(!is.na(data)) <= 1L |
+      suppressWarnings(matrixStats::rowMins(data, na.rm = TRUE) == matrixStats::rowMaxs(data, na.rm = TRUE))
+    names(const.inx) <- rownames(data)
+  } else {
+    const.inx <- apply(data, 1, function(x) { u <- unique(x[!is.na(x)]); length(u) <= 1L })
+  }
   const.inx[is.na(const.inx)] <- TRUE
   if (any(const.inx) && sum(!const.inx) >= 2) {
     data <- data[!const.inx, , drop = FALSE]
@@ -1887,21 +1894,53 @@ library(tibble)
     # effect. Slower than the median_polish approximation above; provided for a
     # like-for-like comparison with MSstats rather than as the default.
     samples_all <- sort(unique(as.character(filtered_data$Sample)))
-    prot_list <- split(filtered_data[, c("Peptide","Sample","Intensity")],
-                       filtered_data$Protein)
-    est_rows <- lapply(prot_list, function(df) {
-      m <- reshape2::acast(df, Peptide ~ Sample, value.var = "Intensity",
-                           fun.aggregate = function(x) median(x, na.rm = TRUE))
-      miss <- setdiff(samples_all, colnames(m))
-      if (length(miss)) {
-        m <- cbind(m, matrix(NA_real_, nrow(m), length(miss),
-                             dimnames = list(rownames(m), miss)))
+    # Per-protein Peptide x Sample matrix built directly from row indices
+    # (replaces a per-protein reshape2::acast; same layout: rows ordered by
+    # sort(unique(Peptide)) within the protein, columns = samples_all, cells
+    # with duplicate entries aggregated by median(na.rm = TRUE), NaN -> NA).
+    pep_v <- as.character(filtered_data$Peptide)
+    smp_i <- match(as.character(filtered_data$Sample), samples_all)
+    int_v <- filtered_data$Intensity
+    n_s <- length(samples_all)
+    idx_list <- split(seq_len(nrow(filtered_data)), filtered_data$Protein)
+    if (any(lengths(idx_list) == 0L)) {
+      # Empty groups (unused factor levels): keep the original acast path so
+      # behaviour (including the error text) is unchanged.
+      prot_list <- split(filtered_data[, c("Peptide","Sample","Intensity")],
+                         filtered_data$Protein)
+      est_rows <- lapply(prot_list, function(df) {
+        m <- reshape2::acast(df, Peptide ~ Sample, value.var = "Intensity",
+                             fun.aggregate = function(x) median(x, na.rm = TRUE))
+        miss <- setdiff(samples_all, colnames(m))
+        if (length(miss)) {
+          m <- cbind(m, matrix(NA_real_, nrow(m), length(miss),
+                               dimnames = list(rownames(m), miss)))
+        }
+        m <- m[, samples_all, drop = FALSE]
+        mp <- suppressWarnings(stats::medpolish(m, na.rm = TRUE,
+                                                trace.iter = FALSE, maxiter = 10))
+        as.numeric(mp$overall + mp$col)
+      })
+    } else {
+    est_rows <- lapply(idx_list, function(i) {
+      pp <- pep_v[i]
+      lv <- sort(unique(pp), na.last = TRUE)
+      cell <- match(pp, lv) + (smp_i[i] - 1L) * length(lv)
+      v <- int_v[i]
+      m <- matrix(NA_real_, length(lv), n_s, dimnames = list(lv, samples_all))
+      if (anyDuplicated(cell)) {
+        u <- unique(cell)
+        g <- split(v, factor(match(cell, u), levels = seq_along(u)))
+        m[u] <- vapply(g, function(x) median(x, na.rm = TRUE), numeric(1))
+      } else {
+        v[is.na(v)] <- NA_real_
+        m[cell] <- v
       }
-      m <- m[, samples_all, drop = FALSE]
       mp <- suppressWarnings(stats::medpolish(m, na.rm = TRUE,
                                               trace.iter = FALSE, maxiter = 10))
       as.numeric(mp$overall + mp$col)
     })
+    }
     final_matrix0 <- do.call(rbind, est_rows)
     colnames(final_matrix0) <- samples_all
     final_df <- tibble::as_tibble(final_matrix0, rownames = "Protein")

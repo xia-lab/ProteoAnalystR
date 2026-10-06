@@ -602,10 +602,12 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
     agg_df$site_id <- site_ids
 
     # Use split/lapply instead of aggregate(. ~ site_id, ...).
+    # Split row indices of the numeric matrix rather than the data.frame;
+    # colMeans(<data.frame>) runs on as.matrix() of the same values.
+    agg_num <- as.matrix(agg_df[, colnames(agg_df) != "site_id", drop = FALSE])
     final_intens <- do.call(rbind, lapply(
-      split(agg_df[, colnames(agg_df) != "site_id", drop = FALSE],
-            agg_df$site_id),
-      function(g) colMeans(g, na.rm = TRUE)
+      split(seq_len(nrow(agg_num)), agg_df$site_id),
+      function(ix) colMeans(agg_num[ix, , drop = FALSE], na.rm = TRUE)
     ))
     final_intens <- as.data.frame(final_intens)
     agg_intens <- as.matrix(final_intens)
@@ -1928,79 +1930,56 @@ MapPhosphositeUniprotToSymbol <- function() {
 #'
 .parseDIANNModifiedSequence <- function(mod_seq, protein_ids, stripped_seq) {
 
-  results <- list()
+  # Sites depend only on the sequence, so parse each distinct sequence once and
+  # expand back to input rows (same row order and per-row site order as the
+  # former per-row loop that rbind-ed one data.frame per site).
+  # Supported notations: S/T/Y(Phospho ...) and S/T/Y(UniMod:21).
+  phospho_pattern1 <- "([STY])\\(Phospho[^)]*\\)"
+  phospho_pattern2 <- "([STY])\\(UniMod:21\\)"
 
-  for (i in seq_along(mod_seq)) {
-    seq <- mod_seq[i]
-    prot <- as.character(protein_ids[i])
-
-    # Take first protein if semicolon-separated list
-    prot <- strsplit(prot, ";")[[1]][1]
-
-    # Find all phosphorylation sites
-    # Support two notation styles:
-    # 1. Named format: S(Phospho (STY)), T(Phospho (STY)), Y(Phospho (STY))
-    # 2. UniMod format: S(UniMod:21), T(UniMod:21), Y(UniMod:21)
-    #    UniMod:21 = Phosphorylation
-
-    # Pattern 1: Named phospho notation
-    phospho_pattern1 <- "([STY])\\(Phospho[^)]*\\)"
-    # Pattern 2: UniMod:21 notation (phosphorylation)
-    phospho_pattern2 <- "([STY])\\(UniMod:21\\)"
-
-    # Try both patterns
-    matches1 <- gregexpr(phospho_pattern1, seq, perl = TRUE)[[1]]
-    matches2 <- gregexpr(phospho_pattern2, seq, perl = TRUE)[[1]]
-
-    # Combine matches from both patterns
-    all_matches <- c()
-    if (matches1[1] != -1) {
-      all_matches <- c(all_matches, matches1)
-    }
-    if (matches2[1] != -1) {
-      all_matches <- c(all_matches, matches2)
-    }
-
-    if (length(all_matches) == 0) {
-      # No phosphosites found
-      next
-    }
-
-    # Remove duplicates and sort
-    all_matches <- sort(unique(all_matches))
-
-    # Extract each phosphosite
-    for (match_start in all_matches) {
-      # Extract the residue (S, T, or Y)
-      residue <- substr(seq, match_start, match_start)
-
-      # Calculate position in stripped sequence
-      # Remove modification annotations to count position
-      seq_before_mod <- substr(seq, 1, match_start)
-
-      # Remove all modification annotations from sequence before this point
-      clean_seq_before <- gsub("\\([^)]+\\)", "", seq_before_mod)
-
-      position <- nchar(clean_seq_before)
-
-      # Create site ID
-      site_id <- paste(prot, residue, position, sep = "_")
-
-      results[[length(results) + 1]] <- data.frame(
-        row_idx = i,  # Track which input row this came from
-        site_id = site_id,
-        protein_id = prot,
-        residue = residue,
-        position = position,
-        stringsAsFactors = FALSE
-      )
-    }
+  n <- length(mod_seq)
+  if (n == 0) return(NULL)
+  # error parity with the per-row loop: a missing protein column failed first
+  if (is.null(protein_ids)) stop("subscript out of bounds")
+  seq_chr <- as.character(mod_seq)
+  if (anyNA(seq_chr)) {
+    # the per-row loop failed on the first NA sequence with this condition
+    stop("missing value where TRUE/FALSE needed")
   }
+  useq <- unique(seq_chr)
+  m1 <- gregexpr(phospho_pattern1, useq, perl = TRUE)
+  m2 <- gregexpr(phospho_pattern2, useq, perl = TRUE)
+  starts <- lapply(seq_along(useq), function(j) {
+    s <- c(if (m1[[j]][1] != -1) as.integer(m1[[j]]), if (m2[[j]][1] != -1) as.integer(m2[[j]]))
+    if (length(s) == 0) integer(0) else sort(unique(s))
+  })
+  n_sites <- lengths(starts)
+  row_u <- match(seq_chr, useq)
+  row_n <- n_sites[row_u]
+  if (sum(row_n) == 0) return(NULL)
 
-  if (length(results) == 0) {
-    return(NULL)
-  }
+  # per distinct sequence: residue and position in the stripped sequence
+  u_rep <- rep(seq_along(useq), n_sites)
+  u_start <- unlist(starts)
+  u_res <- substr(useq[u_rep], u_start, u_start)
+  u_pos <- nchar(gsub("\\([^)]+\\)", "", substr(useq[u_rep], 1, u_start)))
+  u_first <- cumsum(n_sites) - n_sites   # offset of each sequence's sites
 
-  # Combine all results
-  do.call(rbind, results)
+  row_idx <- rep(seq_len(n), row_n)
+  take <- u_first[row_u[row_idx]] + sequence(row_n[row_n > 0])
+  # Take first protein if semicolon-separated list
+  has_site <- which(row_n > 0)
+  prot_all <- vapply(strsplit(as.character(protein_ids[has_site]), ";"), function(x) x[1], character(1))
+  prot <- rep(prot_all, row_n[has_site])
+  residue <- u_res[take]
+  position <- u_pos[take]
+
+  data.frame(
+    row_idx = row_idx,  # Track which input row this came from
+    site_id = paste(prot, residue, position, sep = "_"),
+    protein_id = prot,
+    residue = residue,
+    position = position,
+    stringsAsFactors = FALSE
+  )
 }

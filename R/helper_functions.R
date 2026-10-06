@@ -259,15 +259,15 @@ GetExpressResultDisplayNames <- function(dataName=""){
     phospho.ids <- intersect(ids, rownames(phospho.map))
     if (length(phospho.ids) > 0 && "symbol" %in% colnames(phospho.map)) {
       map.syms <- as.character(phospho.map[phospho.ids, "symbol", drop = TRUE])
-      for (i in seq_along(ids)) {
-        id <- ids[i]
-        if (!(id %in% phospho.ids)) next
-        sym <- map.syms[which(phospho.ids == id)[1]]
-        if (is.na(sym) || sym == "" || sym == "NA" || sym == id) next
-        # Use the symbol directly - it already contains the full display name
-        # with isoform and site suffix (e.g., "DOCK10-2_S_12")
-        labels[i] <- sym
-      }
+      # Use the symbol directly - it already contains the full display name
+      # with isoform and site suffix (e.g., "DOCK10-2_S_12").
+      # Vectorized lookup (was a per-id which() scan, O(n^2)); NA ids never
+      # matched in the old scan, so they are excluded explicitly.
+      hit.pos <- match(ids, phospho.ids)
+      hit.pos[is.na(ids)] <- NA_integer_
+      sym <- map.syms[hit.pos]
+      use <- !is.na(hit.pos) & !is.na(sym) & sym != "" & sym != "NA" & sym != ids
+      labels[use] <- sym[use]
     }
   }
   return(labels)
