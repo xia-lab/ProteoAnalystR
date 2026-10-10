@@ -322,11 +322,23 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   hits.query <- lapply(current.featureset, function(x) sig.entrez[sig.entrez %in% x])
   hit.num    <- sapply(hits.query, length)
 
+  # Hypergeometric test over EVERY pathway tested (>= 2 members in the universe; no hit = p 1), adjusted
+  # over that whole family BEFORE any pathway is dropped for its hits, as the ORA table (enrich_utils.R)
+  # adjusts before its display filter; adjusting over the hit pathways alone called pathways significant
+  # that the ORA table does not (FDR 0.0204 against 0.184 for the same raw p).
+  raw.pvals            <- phyper(hit.num - 1, set.size, uniq.count - set.size, q.size, lower.tail = FALSE)
+  raw.pvals[is.nan(raw.pvals)] <- 1
+  holm.pvals           <- p.adjust(raw.pvals, "holm")
+  fdr.pvals            <- p.adjust(raw.pvals, "fdr")
+
   # Keep only pathways with at least one hit
   keep          <- hit.num > 0
   set.size      <- set.size[keep]
   hit.num       <- hit.num[keep]
   hits.query    <- hits.query[keep]
+  raw.pvals     <- raw.pvals[keep]
+  holm.pvals    <- holm.pvals[keep]
+  fdr.pvals     <- fdr.pvals[keep]
   ora.enzyme.hits.list <<- hits.query   # pathway name -> Entrez IDs vector
 
   if (length(hit.num) == 0) {
@@ -335,11 +347,6 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
     return(0)
   }
 
-  # Hypergeometric test
-  raw.pvals            <- phyper(hit.num - 1, set.size, uniq.count - set.size, q.size, lower.tail = FALSE)
-  raw.pvals[is.nan(raw.pvals)] <- 1
-  holm.pvals           <- p.adjust(raw.pvals, "holm")
-  fdr.pvals            <- p.adjust(raw.pvals, "fdr")
   expected             <- q.size * (set.size / uniq.count)
 
   # Impact score: fraction of pathway covered by significant proteins
