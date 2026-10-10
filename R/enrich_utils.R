@@ -150,9 +150,11 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   #if(!is.null(dataSet$data.anot)){
    if(file.exists("data.anot.qs")){
     current.featureset <- lapply(current.featureset, function(x){x[x %in% current.universe]})
-    inds <- lapply(current.featureset, length) > 0
-    current.featureset <- current.featureset[inds]
   }
+  # A pathway of fewer than two (measured) members is not tested: one protein cannot be "enriched". Filtered by size
+  # alone, before any test, so the family the p-values are adjusted over never depends on the hits (the same family
+  # as the KEGG pathway-maps table, CalculateEnzymePathwayOra).
+  current.featureset <- current.featureset[lengths(current.featureset) >= 2]
 
   if (length(current.featureset) == 0) {
     msgSet$current.msg <- "No pathway overlaps with the measured features; unable to compute enrichment.";
