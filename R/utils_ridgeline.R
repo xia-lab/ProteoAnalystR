@@ -124,6 +124,13 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
   }
   if(ridgeType == "ora"){
     gene.vec <- rownames(sigmat);
+    if(anal.type == "proteinlist"){
+      # a complete ranked list tests its top hits against the whole list, not every protein of it
+      gene.vec <- .paListQueryIds(paramSet, gene.vec);
+      if(is.null(gene.vec)){
+        return(0);
+      }
+    }
 
     # Check if phospho data and use appropriate functions
     is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")

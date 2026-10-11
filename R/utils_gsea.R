@@ -53,6 +53,7 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
   );
 
   require("fgsea");
+  list.rank <- NULL;
   
   if(anal.type == "onedata"){
     datnorm <- dataSet$data.norm;
@@ -61,6 +62,18 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     sampleNms <- sampleNms[inx]
     rankedVec<- ComputeRankedVec(dataSet, rankOpt, paramSet$selectedFactorInx);
 
+  }else if(anal.type == "proteinlist"){
+    # a protein list is ranked by its own scores, and only a complete ranked list can be (SetListEnrichInput)
+    list.rank <- .paListRankedVec(paramSet);
+    if(is.null(list.rank)){
+      msgSet <- readSet(msgSet, "msgSet");
+      msgSet$current.msg <- "Rank-based enrichment needs a complete ranked list: every protein tested, with a score.";
+      saveSet(msgSet, "msgSet");
+      return(0);
+    }
+    rankedVec <- list.rank$vec;
+    sampleNms <- NULL;
+    inx <- NULL;
   }else{
     if(paramSet$selDataNm == "meta_default"){
       inmex <- ov_qs_read("inmex_meta.qs");
@@ -156,20 +169,22 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     msg("DEBUG: rankedVec IDs are already Entrez, no conversion needed")
   }
 
+  # scores that are all non-negative (a p-value as -log10, an importance) can only enrich at the top of the ranking
+  gsea.score.type <- if(anal.type == "proteinlist" && all(rankedVec >= 0, na.rm = TRUE)) "pos" else "std";
   set.seed(123)
   if(fun.type %in% c("go_bp", "go_mf", "go_cc")){
       fgseaRes <- fgsea::fgsea(pathways = current.featureset, 
                           stats    = rankedVec,
                           minSize  = 5,
                           maxSize = 500,
-                          scoreType = "std",
+                          scoreType = gsea.score.type,
                           nperm=1000)    
     }else{
       fgseaRes <- fgsea::fgsea(pathways = current.featureset, 
                           stats    = rankedVec,
                           minSize  = 5,
                           maxSize = 500,
-                          scoreType = "std")   
+                          scoreType = gsea.score.type)   
      
     }
   
@@ -195,6 +210,11 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
     paramSet$gsea.lib      <- fun.type
     paramSet$gsea.rank.opt <- if (nzchar(rankOpt)) rankOpt else paramSet$gseaRankOpt
     paramSet$gsea.n.tested <- nrow(fgseaRes)
+    if(!is.null(list.rank)){
+      # what the ranking tested: every protein of the list, by rank
+      paramSet <- .paListRecordRun(paramSet, list.rank$bg, "gsea", length(rankedVec), length(rankedVec),
+                                   length(rankedVec), nrow(fgseaRes))
+    }
     saveSet(paramSet, "paramSet")
   }, error = function(e) NULL)
 
@@ -266,6 +286,10 @@ my.perform.gsea<- function(dataName, file.nm, fun.type, netNm, mType, selectedFa
   ov_qs_save(hits.query, "hits_query.qs");
   fgseaRes$hits <- hit.num[which(fgseaRes$pathway  %in% names(hit.num))] 
   fgseaRes$total <- set.num[which(fgseaRes$pathway %in% names(set.num))]
+  if(anal.type == "proteinlist"){
+    # a set's size is the number of its members in the ranked list, not in the library
+    fgseaRes$total <- fgseaRes$size
+  }
   
   fgseaRes.filt <- fgseaRes[which(fgseaRes$hits>1),];
   fgseaRes.filt <- fgseaRes.filt[which(fgseaRes.filt$hits<500),];

@@ -41,6 +41,9 @@ MapListIds <- function(listNm, geneIDs, org, idType){
   msgSet <- res[[3]];
   paramSet$numOfLists <- length(dataList)
   paramSet$backgroundUniverse <- NULL;
+  # a new list starts with no chosen input type and nothing tested (SetListEnrichInput)
+  paramSet$list.enrich <- NULL;
+  paramSet[c("enrich.used", "enrich.mode", "enrich.background", "enrich.cutoff")] <- NULL;
   all.prot.mat <- list(); 
   all.mapping <- list(); # Collect all mapping results
   inx <- 0;
@@ -93,6 +96,9 @@ MapListIds <- function(listNm, geneIDs, org, idType){
     dataSet$sig.mat <- gene.mat;
     dataSet$prot.mat <- prot.mat;
     dataSet$seeds.proteins <- seed.proteins;
+    # the score, p-value and FDR of each protein, by Entrez id, for a complete ranked list (SetListEnrichInput)
+    dataSet$list.stats <- .paListBuildStats(prot.mat, mapped, attr(gene.mat, "list.extra"));
+    dataSet$score.label <- attr(gene.mat, "score.label");
     # OPTIMIZED: Collect in lists instead of growing with rbind/c
     if(i == 1){
       all.prot.mat <- vector("list", length(dataList));
@@ -386,8 +392,10 @@ GetListIntersectionSize <- function(){
     # header so its labels ("Protein", "LogFC") don't try to map as IDs and
     # drag the mapping success rate to 0. (a) multi-column: row 1 col 2 is
     # non-numeric; (b) single-column: first cell is a common header keyword.
+    hdr <- NULL;
     if (nrow(gene.mat) > 1) {
       if (ncol(gene.mat) >= 2 && !.is_valid_numeric(gene.mat[1, 2])) {
+        hdr <- gene.mat[1, ];
         gene.mat <- gene.mat[-1, , drop = FALSE];
       } else if (ncol(gene.mat) == 1 &&
                  tolower(gene.mat[1, 1]) %in%
@@ -400,12 +408,15 @@ GetListIntersectionSize <- function(){
       }
     }
 
+    extra <- NULL;
     if(dim(gene.mat)[2] == 1){ # add 0
       gene.mat <- cbind(gene.mat, rep(0, nrow(gene.mat)));
       msgSet$current.msg <- "Only one column found in the list. Abundance will be all zeros. ";
     }else if(dim(gene.mat)[2] > 2){
+      # a third and fourth column are the p-value and the FDR of a complete ranked list
+      extra <- .paListExtraColumns(gene.mat, hdr);
       gene.mat <- gene.mat[,1:2];
-      msgSet$current.msg <- "More than two columns found in the list. Only first two columns will be used. ";
+      msgSet$current.msg <- "More than two columns found in the list. The first two are used as protein and score; a third and fourth column are kept as the p-value and FDR of a complete ranked list. ";
     }
 
     inx <- .is_valid_numeric(gene.mat[,2]);
@@ -418,6 +429,8 @@ GetListIntersectionSize <- function(){
     msgSet <- res[[2]];
     good.inx <- !is.na(gene.mat[,1]);
     gene.mat <- gene.mat[good.inx, , drop=F];
+    attr(gene.mat, "score.label") <- .paListScoreLabel(hdr);
+    attr(gene.mat, "list.extra") <- extra;
     dataList[[i]] <- gene.mat;
   }
   return(list(dataList, paramSet, msgSet));
@@ -482,6 +495,8 @@ ReadUniverseFile <- function(fileName) {
 
 
     paramSet$backgroundUniverse <- backgroundUniverse;
+    # the tested proteins changed: what was last tested no longer describes the next run
+    paramSet[c("enrich.used", "enrich.mode", "enrich.background", "enrich.cutoff")] <- NULL;
     saveSet(paramSet, "paramSet");
 
     return(length(backgroundUniverse))

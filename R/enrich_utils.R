@@ -99,7 +99,29 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     ora.nms <- sym.vec[!na.inx];
   }
   
-  if(paramSet$universe.opt == "library"){
+  # A protein LIST is tested as the user said it is (SetListEnrichInput): a complete ranked list against
+  # the whole list, a significant list against the proteins tested in the study when they were given
+  # (ReadUniverseFile), else against the library.
+  list.bg <- NULL;
+  if(identical(paramSet$anal.type, "proteinlist")){
+    list.bg <- .paListBackground(paramSet, ora.vec);
+    if(isTRUE(list.bg$refused)){
+      .paListRefuse(list.bg$msg);
+      return(0);
+    }
+    q.input <- length(unique(ora.vec[!is.na(ora.vec)]));
+    if(!is.null(list.bg$universe)){
+      # the universe is the tested proteins that are in the library; a set counts only its tested members,
+      # and so does the query
+      current.featureset <- lapply(current.featureset, function(x){x[x %in% list.bg$universe]});
+      current.universe <- unique(unlist(current.featureset, use.names=FALSE));
+      keep.inx <- !is.na(ora.vec) & !duplicated(ora.vec) & ora.vec %in% current.universe;
+      ora.vec <- ora.vec[keep.inx];
+      ora.nms <- ora.nms[keep.inx];
+    }else{
+      current.universe <- unique(unlist(current.featureset));
+    }
+  }else if(paramSet$universe.opt == "library"){
     current.universe <- unique(unlist(current.featureset));
   }else{
     # cut to the universe to uploaded features
@@ -124,7 +146,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # otherwise every pathway empties out and phyper() gets a NULL hit count.
   univ.non.na <- current.universe[!is.na(current.universe)]
   univ.entrez.like <- length(univ.non.na) > 0 && mean(grepl("^[0-9]+$", univ.non.na)) >= 0.8
-  if (!univ.entrez.like) {
+  if (!univ.entrez.like && is.null(list.bg)) {
     norm.univ <- sub("_[A-Z]_\\d+$", "", trimws(current.universe))
     norm.univ <- sub("-\\d+$", "", norm.univ)
     uniprot.map <- queryGeneDB("entrez_uniprot", paramSet$data.org)
@@ -138,11 +160,16 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # Persist the actual post-mapping universe used by the test.  The analysis
   # summary previously knew the universe choice but could report its size as NA
   # for ordinary one-dataset ORA runs because this local vector was never saved.
-  paramSet$backgroundUniverse <- unique(current.universe)
-  paramSet$universe.opt.readable <- if (identical(paramSet$universe.opt, "library")) {
-    "Gene Set Library"
+  if (!is.null(list.bg)) {
+    # backgroundUniverse stays what the user uploaded (ReadUniverseFile); what this run used is recorded beside it
+    paramSet <- .paListRecordRun(paramSet, list.bg, "ora", q.input, length(ora.vec), length(current.universe))
   } else {
-    "Uploaded Data (measured features)"
+    paramSet$backgroundUniverse <- unique(current.universe)
+    paramSet$universe.opt.readable <- if (identical(paramSet$universe.opt, "library")) {
+      "Gene Set Library"
+    } else {
+      "Uploaded Data (measured features)"
+    }
   }
   saveSet(paramSet, "paramSet")
 
@@ -155,6 +182,10 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # alone, before any test, so the family the p-values are adjusted over never depends on the hits (the same family
   # as the KEGG pathway-maps table, CalculateEnzymePathwayOra).
   current.featureset <- current.featureset[lengths(current.featureset) >= 2]
+  if (!is.null(list.bg)) {
+    paramSet$enrich.used$sets.tested <- length(current.featureset)
+    saveSet(paramSet, "paramSet")
+  }
 
   if (length(current.featureset) == 0) {
     msgSet$current.msg <- "No pathway overlaps with the measured features; unable to compute enrichment.";
@@ -676,6 +707,11 @@ PerformDefaultEnrichment <- function(dataName="", file.nm, fun.type){
       gene.vec <- rownames(analSet$meta.mat);
     }else{
       gene.vec <- rownames(paramSet$all.ent.mat);
+      # a complete ranked list tests its top hits against the whole list, not every protein of it
+      gene.vec <- .paListQueryIds(paramSet, gene.vec);
+      if(is.null(gene.vec)){
+        return(0);
+      }
     }
 
   # Check if phospho data and use appropriate functions

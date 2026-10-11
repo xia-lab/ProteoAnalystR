@@ -233,6 +233,11 @@ PerformHeatmapEnrichment <- function(dataName="", file.nm, fun.type, IDs){
       gene.vec <- rownames(analSet$meta.mat);
     }else{
       gene.vec <- rownames(paramSet$all.ent.mat);
+      # a complete ranked list tests its top hits against the whole list, not every protein of it
+      gene.vec <- .paListQueryIds(paramSet, gene.vec);
+      if(is.null(gene.vec)){
+        return(0);
+      }
     }
   }else if(IDs=="overlap"){
     # Multi-list overlap view: enrich on the intersection of all uploaded
@@ -388,6 +393,11 @@ GetListEnrGeneNumber <- function(){
 
       #all.enIDs <- rownames(dataSet$prot.mat);
       all.enIDs <- dataSet$GeneAnotDB$gene_id;
+      # a complete ranked list tests its top hits against the whole list, not every protein of it
+      all.enIDs <- .paListQueryIds(paramSet, all.enIDs);
+      if(is.null(all.enIDs)){
+        all.enIDs <- character(0);
+      }
       names(all.enIDs) <- doEntrez2SymbolMapping(all.enIDs, paramSet$data.org, paramSet$data.idType)
       listSizes[[1]] <- list(
         name = "datalist1",

@@ -355,11 +355,19 @@
     u <- .pa_g(paramSet, "backgroundUniverse", NULL)
     if (!is.null(u) && length(u) > 1) length(u) else "NA"
   }, error = function(e) "NA")
+  # a protein list records what it tested (SetListEnrichInput): its background and, in words, the test
+  eb <- .pa_g(paramSet, "enrich.background", NULL)
+  if (!is.null(eb)) {
+    bg <- .pa_g(eb, "label", bg)
+    bg.size <- .pa_g(eb, "size", bg.size)
+  }
+  list.msg <- tryCatch(.paListSentence(.pa_g(paramSet, "enrich.used", NULL)), error = function(e) "")
 
   c("== Functional Enrichment (ORA) ==",
     .pa_line("Gene-set library", .pa_g(paramSet, "init.lib")),
     .pa_line("Background / universe", bg),
     .pa_line("Background feature count", bg.size),
+    if (nzchar(list.msg)) .pa_line("What was tested", list.msg),
     .pa_line("Number of terms tested", .pa_nrow(enr)),
     .pa_line("Raw p-value column", if (length(pcol)) pcol[1] else "Pval"),
     .pa_line("Adjusted p-value column", if (length(apcol)) apcol[1] else "FDR"),

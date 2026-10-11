@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Protein-list enrichment
+- A protein list is tested as the user says it is, the same way in every Xia Lab tool.
+  `SetListEnrichInput()` says whether the list is a significant list or a complete ranked list
+  (every protein tested, with a score and optionally its p-value and FDR) and, for a ranked list, how
+  its top hits are chosen: the top share (10% by default), a score cutoff with an explicit direction
+  (`>=` for a fold change or statistic, `<=` for a p-value-like score, both changeable), or an FDR or
+  p-value cutoff. A cutoff nobody passes, everybody passes, or with no such column is refused in words.
+  The existing entry points honour it: `PerformDefaultEnrichment()`, `InitEnrichmentNetwork()`,
+  `PerformHeatmapEnrichment()` and the ridgeline test the top hits against the whole list as background,
+  and `PerformGSEA()` ranks the whole list (preranked fgsea).
+- A significant list with the proteins tested in the study (`ReadUniverseFile()`) is tested against the
+  tested proteins that are in the library: a set counts its tested members, only sets with at least two are
+  tested, and the query is restricted to them (the universe used to change only N). A significant list alone
+  is tested against the library, and said to be the weaker claim.
+- Every run records what it tested in `paramSet` (`enrich.mode`, `enrich.background`, `enrich.cutoff`) and
+  `GetListEnrichInputMsg()` says it in one sentence. A run that fell back to the library is no longer
+  labelled "Uploaded Data (measured features)", and a library used as the background no longer replaces
+  the universe the user uploaded.
+
 ### Statistics
 - `DetectPTMOccupancy()`: the per-pair Welch t-test on logit occupancies is
   replaced by a limma-moderated test (lmFit + eBayes robust across all
