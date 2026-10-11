@@ -292,6 +292,20 @@ test_that("a significant list with the proteins tested: a set counts its tested 
                "Your 8 significant proteins (2 of them not among the tested proteins, left out) tested against the 30 proteins tested in your study as background")
 })
 
+test_that("a significant protein that was tested but is in no library set is not called 'not tested'", {
+  e <- .load_list_env(); .new_session(e)
+  .save_list(e, n = 8)
+  # P45 is among the proteins tested but is in no set of the library; P35 is in the library (set H) but was not tested
+  ps <- .ps(e); ps$all.ent.mat <- matrix(1, nrow = 8, dimnames = list(c(sprintf("P%02d", 1:6), "P45", "P35"), "x"))
+  ps$backgroundUniverse <- c(sprintf("P%02d", 1:30), "P45"); e$saveSet(ps, "paramSet")
+  expect_equal(e$SetListEnrichInput("datalist1", "sig"), 1)
+  expect_equal(e$PerformDefaultEnrichment("datalist1", "enr_untested", "kegg"), 1)
+  u <- .ps(e)$enrich.used
+  expect_equal(c(u$query.input, u$query.size, u$query.untested), c(8, 6, 1))     # only P35 is not among the tested
+  expect_equal(e$GetListEnrichInputMsg(),
+               "Your 8 significant proteins (1 of them not among the tested proteins, left out) tested against the 31 proteins tested in your study as background (30 of them in the gene-set library)")
+})
+
 test_that("a significant list alone is tested against the library and says so: the label never claims uploaded data", {
   e <- .load_list_env(); .new_session(e); .save_list(e, n = 8)
   ps <- .ps(e); ps$all.ent.mat <- matrix(1, nrow = 6, dimnames = list(sprintf("P%02d", 1:6), "x")); e$saveSet(ps, "paramSet")

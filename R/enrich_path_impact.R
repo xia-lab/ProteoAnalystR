@@ -290,11 +290,13 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
     list.bg <- .paListBackground(paramSet, sig.entrez)
     if (isTRUE(list.bg$refused)) { .paListRefuse(list.bg$msg); return(0) }
     q.input <- length(sig.entrez)
+    q.untested <- 0L
   }
   if (!is.null(list.bg)) {
     if (!is.null(list.bg$universe)) {
       # the tested proteins that are in the library; the hits are restricted to them
       all.entrez <- unique(unlist(lapply(current.featureset, function(x) x[x %in% list.bg$universe])))
+      q.untested <- sum(!sig.entrez %in% list.bg$universe)
       sig.entrez <- sig.entrez[sig.entrez %in% all.entrez]
     } else {
       all.entrez <- unique(unlist(current.featureset))
@@ -339,7 +341,8 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   q.size     <- length(sig.entrez)
   uniq.count <- length(all.entrez)
   if (!is.null(list.bg)) {
-    paramSet <- .paListRecordRun(paramSet, list.bg, "ora", q.input, q.size, uniq.count, length(current.featureset))
+    paramSet <- .paListRecordRun(paramSet, list.bg, "ora", q.input, q.size, uniq.count, length(current.featureset),
+                                 query.untested = q.untested)
     saveSet(paramSet, "paramSet")
   }
 

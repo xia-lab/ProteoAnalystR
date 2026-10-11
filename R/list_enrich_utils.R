@@ -386,13 +386,15 @@ GetListScoreInfo <- function(dataName = "") {
 }
 
 # Record what a run tested, in paramSet, so every surface can say it.
-.paListRecordRun <- function(paramSet, bg, method, query.input, query.size, bg.size, sets.tested = NA_integer_) {
+.paListRecordRun <- function(paramSet, bg, method, query.input, query.size, bg.size, sets.tested = NA_integer_,
+                             query.untested = 0L) {
   paramSet$enrich.mode <- bg$mode
   paramSet$enrich.background <- list(label = bg$label, size = bg.size)
   paramSet$enrich.cutoff <- list(kind = bg$cutoff$kind, value = bg$cutoff$value, dir = bg$cutoff$dir)
   paramSet$enrich.used <- list(mode = bg$mode, method = method, label = bg$label,
                                n.list = bg$n.list, tested = bg$tested, n.hits = bg$n.hits,
                                query.input = query.input, query.size = query.size, bg.size = bg.size,
+                               query.untested = query.untested,
                                sets.tested = sets.tested, cutoff = bg$cutoff,
                                score.label = bg$score.label, score.kind = bg$score.kind,
                                library = paramSet$init.lib)
@@ -438,9 +440,9 @@ GetListScoreInfo <- function(dataName = "") {
   }
   if (identical(u$mode, "ora_measured")) {
     q <- if (!is.null(u$query.input) && !is.na(u$query.input)) paste0(.paListN(u$query.input), " significant proteins") else "significant proteins"
-    left <- if (!is.null(u$query.input) && !is.null(u$query.size) && !is.na(u$query.input) && !is.na(u$query.size) &&
-                u$query.size < u$query.input)
-      paste0(" (", .paListN(u$query.input - u$query.size), " of them not among the tested proteins, left out)") else ""
+    # only the significant proteins that were not among the tested ones: a protein in no set of the library is not "untested"
+    left <- if (!is.null(u$query.untested) && !is.na(u$query.untested) && u$query.untested > 0)
+      paste0(" (", .paListN(u$query.untested), " of them not among the tested proteins, left out)") else ""
     return(paste0("Your ", q, left, " tested against the ", .paListN(u$tested), " proteins tested in your study as background",
                   inlib(u$bg.size, u$tested)))
   }

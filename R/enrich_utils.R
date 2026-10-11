@@ -110,7 +110,10 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
       return(0);
     }
     q.input <- length(unique(ora.vec[!is.na(ora.vec)]));
+    q.untested <- 0L;
     if(!is.null(list.bg$universe)){
+      # query proteins that are not among the proteins tested (a protein in no library set is not "untested")
+      q.untested <- sum(!unique(ora.vec[!is.na(ora.vec)]) %in% list.bg$universe);
       # the universe is the tested proteins that are in the library; a set counts only its tested members,
       # and so does the query
       current.featureset <- lapply(current.featureset, function(x){x[x %in% list.bg$universe]});
@@ -162,7 +165,8 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   # for ordinary one-dataset ORA runs because this local vector was never saved.
   if (!is.null(list.bg)) {
     # backgroundUniverse stays what the user uploaded (ReadUniverseFile); what this run used is recorded beside it
-    paramSet <- .paListRecordRun(paramSet, list.bg, "ora", q.input, length(ora.vec), length(current.universe))
+    paramSet <- .paListRecordRun(paramSet, list.bg, "ora", q.input, length(ora.vec), length(current.universe),
+                                 query.untested = q.untested)
   } else {
     paramSet$backgroundUniverse <- unique(current.universe)
     paramSet$universe.opt.readable <- if (identical(paramSet$universe.opt, "library")) {
