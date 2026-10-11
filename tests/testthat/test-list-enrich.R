@@ -206,6 +206,15 @@ test_that("the direction of a score cutoff is recorded: defaulted by the kind of
   expect_equal(.ps(e)$list.enrich$cutoff.dir, ">=")
 })
 
+test_that("GetListScoreInfo says what the list carries, so a page offers only what can be used", {
+  e <- .load_list_env(); .new_session(e)
+  .save_list(e)
+  expect_equal(e$GetListScoreInfo(), c("logFC", "effect", "FALSE", "FALSE"))
+  .save_list(e, score = seq(0.001, 0.9, length.out = 40), label = "P.Value", p = seq(0.001, 0.9, length.out = 40))
+  expect_equal(e$GetListScoreInfo("datalist1"), c("P.Value", "p", "TRUE", "FALSE"))
+  expect_equal(e$GetListScoreInfo("nope"), c("", "", "FALSE", "FALSE"))
+})
+
 # ---- saying it -------------------------------------------------------------------------------------
 
 test_that("GetListEnrichInputMsg says the contract's sentence for a complete list", {

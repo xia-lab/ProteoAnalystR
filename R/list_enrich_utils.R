@@ -296,6 +296,21 @@ SetListEnrichInput <- function(dataName = "", list.type = "sig", cutoff.by = "to
   1
 }
 
+#' What a protein list carries, for the page that offers the choices
+#' @description The name of the score column (its header, else "score"), the kind of score ("effect": a fold
+#' change or statistic; "p": a p-value-like score), and whether the list has a p-value and an FDR column, so that
+#' a page offers a score cutoff in the right direction and an FDR or p-value cutoff only when the columns exist.
+#' @param dataName The list (default: the first).
+#' @return A character vector: score name, score kind, "TRUE" or "FALSE" for a p-value column, the same for an
+#' FDR column. Empty strings and "FALSE" when the list is not there.
+#' @export
+GetListScoreInfo <- function(dataName = "") {
+  paramSet <- readSet(paramSet, "paramSet")
+  lst <- .paListStats(paramSet, dataName)
+  if (is.null(lst)) return(c("", "", "FALSE", "FALSE"))
+  c(lst$label, as.character(lst$kind), as.character(any(is.finite(lst$stats$p))), as.character(any(is.finite(lst$stats$fdr))))
+}
+
 # The saved input for this list, or NULL when the list is not a ranked one.
 .paListRankedSpec <- function(paramSet) {
   le <- paramSet$list.enrich
