@@ -230,6 +230,11 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
     # Get significant protein IDs (UniProt IDs as row names of sig.mat)
     sig.vec <- rownames(dataSet$sig.mat)
   }
+  if (identical(paramSet$anal.type, "proteinlist")) {
+    # a complete ranked list tests its top hits against the whole list, not every protein of it
+    sig.vec <- .paListQueryIds(paramSet, sig.vec)
+    if (is.null(sig.vec)) return(0)
+  }
   sig.vec <- sub("_[A-Z]_\\d+$", "", sig.vec)   # strip phosphosite annotations
   sig.vec <- sub("-\\d+$", "", sig.vec)           # strip isoform suffixes
   sig.vec <- unique(trimws(sig.vec))
@@ -278,7 +283,23 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
   # impact honours the shared measured-proteome default instead of a stray
   # camelCase toggle that SetUniverseOpt never wrote.
   universeOpt <- if (!is.null(paramSet$universe.opt)) paramSet$universe.opt else "uploaded"
-  if (universeOpt == "uploaded") {
+  # A protein LIST is tested as the user said it is (SetListEnrichInput): a complete ranked list against the
+  # whole list, a significant list against the proteins tested in the study when they were given, else the library.
+  list.bg <- NULL
+  if (identical(paramSet$anal.type, "proteinlist")) {
+    list.bg <- .paListBackground(paramSet, sig.entrez)
+    if (isTRUE(list.bg$refused)) { .paListRefuse(list.bg$msg); return(0) }
+    q.input <- length(sig.entrez)
+  }
+  if (!is.null(list.bg)) {
+    if (!is.null(list.bg$universe)) {
+      # the tested proteins that are in the library; the hits are restricted to them
+      all.entrez <- unique(unlist(lapply(current.featureset, function(x) x[x %in% list.bg$universe])))
+      sig.entrez <- sig.entrez[sig.entrez %in% all.entrez]
+    } else {
+      all.entrez <- unique(unlist(current.featureset))
+    }
+  } else if (universeOpt == "uploaded") {
     all.vec    <- rownames(dataSet$data.norm)
     if (is.null(all.vec) || length(all.vec) == 0) all.vec <- rownames(dataSet$comp.res)
     if (is.null(all.vec)) all.vec <- character(0)
@@ -317,6 +338,10 @@ CalculateEnzymePathwayOra <- function(dataName, topoCode = "rbc") {
 
   q.size     <- length(sig.entrez)
   uniq.count <- length(all.entrez)
+  if (!is.null(list.bg)) {
+    paramSet <- .paListRecordRun(paramSet, list.bg, "ora", q.input, q.size, uniq.count, length(current.featureset))
+    saveSet(paramSet, "paramSet")
+  }
 
   set.size   <- sapply(current.featureset, length)
   hits.query <- lapply(current.featureset, function(x) sig.entrez[sig.entrez %in% x])
@@ -437,16 +462,23 @@ CalculateEnzymePathwayGsea <- function(dataName) {
   msgSet   <- readSet(msgSet, "msgSet")
   dataSet  <- readDataset(dataName)
 
+  # A complete ranked protein list is ranked by its own score (SetListEnrichInput)
+  list.rank <- if (identical(paramSet$anal.type, "proteinlist")) .paListRankedVec(paramSet) else NULL
+
   comp.res <- dataSet$comp.res
-  if (is.null(comp.res) || nrow(comp.res) == 0) {
+  if (is.null(list.rank) && (is.null(comp.res) || nrow(comp.res) == 0)) {
     msgSet$current.msg <- "No differential analysis results found. Please run differential analysis first."
     saveSet(msgSet, "msgSet")
     return(0)
   }
 
   # Build ranked vector: UniProt IDs -> logFC
-  lfc <- comp.res[, "logFC"]
-  names(lfc) <- rownames(comp.res)
+  if (!is.null(list.rank)) {
+    lfc <- list.rank$vec
+  } else {
+    lfc <- comp.res[, "logFC"]
+    names(lfc) <- rownames(comp.res)
+  }
   lfc <- lfc[is.finite(lfc)]
   if (length(lfc) == 0) {
     msgSet$current.msg <- "No finite fold-change values available for GSEA ranking."
@@ -505,7 +537,8 @@ CalculateEnzymePathwayGsea <- function(dataName) {
   set.seed(123)
   gsea.res <- tryCatch(
     fgsea::fgsea(pathways = current.featureset, stats = ranked.vec,
-                 minSize = 3, maxSize = 500, scoreType = "std"),
+                 minSize = 3, maxSize = 500,
+                 scoreType = if (!is.null(list.rank) && all(ranked.vec >= 0)) "pos" else "std"),
     error = function(e) { message("[GSEA] fgsea error: ", e$message); NULL }
   )
   if (is.null(gsea.res) || nrow(gsea.res) == 0) {
@@ -514,6 +547,7 @@ CalculateEnzymePathwayGsea <- function(dataName) {
     return(0)
   }
   gsea.res <- gsea.res[order(gsea.res$pval), ]
+  n.gsea.tested <- nrow(gsea.res)
 
   # Keep only pathways with available KEGG JSON maps
   json.dir    <- paste0(paramSet$lib.path, "kegg_pws/json/")
@@ -579,6 +613,12 @@ CalculateEnzymePathwayGsea <- function(dataName) {
     stringsAsFactors = FALSE
   )
 
+  if (!is.null(list.rank)) {
+    # what the ranking tested: every protein of the list, by rank
+    paramSet <- .paListRecordRun(paramSet, list.rank$bg, "gsea", length(ranked.vec), length(ranked.vec),
+                                 length(ranked.vec), n.gsea.tested)
+    saveSet(paramSet, "paramSet")
+  }
   msgSet$current.msg <- paste0("Pathway GSEA complete. ", nrow(result.df), " enriched pathways found.")
   saveSet(msgSet, "msgSet")
   return(1)

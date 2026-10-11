@@ -12,7 +12,7 @@
 
 R_DIR <- normalizePath(file.path(testthat::test_path(), "..", "..", "R"), mustWork = FALSE)
 R_FILES <- c("misc_utils.R", "data_utils_general.R", "list_enrich_utils.R", "enrich_utils.R",
-             "data_maplist_utils.R", "utils_gsea.R", "report_summary.R")
+             "data_maplist_utils.R", "utils_gsea.R", "report_summary.R", "enrich_path_impact.R")
 
 # ---- the world of the tests -------------------------------------------------------------------
 # Proteins P01..P60 are Entrez genes 1..60. The gene-set library:
@@ -34,6 +34,9 @@ LIB2 <- list(X = as.character(1:6), Y = as.character(5:12), Z = as.character(c(1
   e$paramSet <- list(objName = "paramSet"); e$msgSet <- list(objName = "msgSet")
   e$cmdSet <- list(objName = "cmdSet"); e$current.msg <- character(0)
   e$dataSet <- list(annotated = FALSE)     # a global in a session; PerformDefaultEnrichment hands it on unread for a list
+  # what the pathway-impact analysis leaves in globals for its viewer
+  for (g in c("ora.enzyme.symbol.to.uniprot", "ora.enzyme.hits.list", "ora.enzyme.mat", "ora.enzyme.paths",
+              "ora.enzyme.kegg.ids", "ora.enzyme.pathway.compartments")) assign(g, NULL, envir = e)
   e$lib <- LIB
   e$queryGeneDB <- function(db.nm, org) {
     ids <- 1:60
@@ -43,7 +46,7 @@ LIB2 <- list(X = as.character(1:6), Y = as.character(5:12), Z = as.character(c(1
   e$doEntrez2SymbolMapping <- function(entrez.vec, data.org = "NA", data.idType = "NA") ifelse(is.na(entrez.vec), NA_character_, sprintf("G%02d", suppressWarnings(as.integer(as.character(entrez.vec)))))
   e$.loadEnrichLib <- function(fun.type, paramSet) {
     lib <- get("lib", envir = e)
-    list(current.featureset = lib, current.setids = stats::setNames(paste0("ID_", names(lib)), names(lib)), current.setlink = "http://x/")
+    list(current.featureset = lib, current.setids = stats::setNames(sprintf("hsa%05d", seq_along(lib)), names(lib)), current.setlink = "http://x/")
   }
   # UniProt accessions are kept as they are by MapListIds
   e$.doGeneIDMapping <- function(feature.vec, idType, paramSet, outputType = "vec", keepNA = FALSE)
@@ -51,6 +54,10 @@ LIB2 <- list(X = as.character(1:6), Y = as.character(5:12), Z = as.character(c(1
   e$.addUniprotColumn <- function(symbol.map, idType, feature.vec, mapped.ids, paramSet) symbol.map
   e$saveDataQs <- function(data, name, module.nm, dataName) invisible(NULL)
   e$getEntrezTableName <- function(data.org, data.idType) "entrez"
+  e$.annotateKeggPathwayCompartments <- function(path.names, kegg.ids, featureset, org, lib.path)
+    data.frame(Primary.Compartment = rep("Cytosol", length(path.names)), All.Compartments = "Cytosol",
+               Compartment.Method = "test", Compartment.Score = 1, Compartment.Mapped = 1, Compartment.Distribution = "",
+               stringsAsFactors = FALSE)
   e$RecordRCommand <- function(...) invisible(NULL)
   e
 }
@@ -62,9 +69,12 @@ LIB2 <- list(X = as.character(1:6), Y = as.character(5:12), Z = as.character(c(1
   e$paramSet <- list(objName = "paramSet", anal.type = "proteinlist", data.org = "hsa", data.idType = "uniprot",
                      universe.opt = "uploaded", universe.opt.readable = "Uploaded data", numOfLists = 1,
                      on.public.web = TRUE, init.lib = "kegg", selDataNm = "datalist1", mdata.all = list(),
-                     partialToBeSaved = character(0), lib.path = "", api.bool = FALSE)
+                     partialToBeSaved = character(0), lib.path = paste0(dir, "/lib/"), api.bool = FALSE)
   e$msgSet <- list(objName = "msgSet", current.msg = character(0))
   e$current.msg <- character(0)
+  # a pathway map for every set of the library, which the pathway-impact analysis requires
+  dir.create(file.path(dir, "lib", "kegg_pws", "json"), recursive = TRUE)
+  for (i in seq_along(LIB)) writeLines("{}", file.path(dir, "lib", "kegg_pws", "json", sprintf("ko%05d.json", i)))
   e$saveSet(e$paramSet, "paramSet"); e$saveSet(e$msgSet, "msgSet")
   e$saveSet(list(objName = "analSet"), "analSet"); e$saveSet(list(objName = "cmdSet"), "cmdSet")
   e$saveSet(list(objName = "imgSet", enrTables = list(), featureList = list()), "imgSet")
@@ -73,7 +83,7 @@ LIB2 <- list(X = as.character(1:6), Y = as.character(5:12), Z = as.character(c(1
 }
 
 # a mapped list as MapListIds leaves it: proteins P01..Pn, with a score (and p, fdr)
-.save_list <- function(e, n = 40, score = NULL, p = NULL, fdr = NULL, label = "logFC", name = "datalist1") {
+.save_list <- function(e, n = 40, score = NULL, p = NULL, fdr = NULL, label = "logFC", name = "datalist1", sig.ids = NULL) {
   ids <- sprintf("P%02d", seq_len(n))
   if (is.null(score)) {
     # P01..P04 stand out, then a smooth fall; signs alternate so that both directions occur
@@ -82,7 +92,9 @@ LIB2 <- list(X = as.character(1:6), Y = as.character(5:12), Z = as.character(c(1
   }
   st <- data.frame(gene_id = ids, score = score, p = if (is.null(p)) NA_real_ else p,
                    fdr = if (is.null(fdr)) NA_real_ else fdr, stringsAsFactors = FALSE)
-  ds <- list(name = name, list.stats = st, score.label = label, prot.mat = matrix(score, ncol = 1, dimnames = list(ids, "x")))
+  if (is.null(sig.ids)) sig.ids <- ids
+  ds <- list(name = name, list.stats = st, score.label = label, prot.mat = matrix(score, ncol = 1, dimnames = list(ids, "x")),
+             sig.mat = matrix(1, ncol = 1, nrow = length(sig.ids), dimnames = list(sig.ids, "x")))
   e$RegisterData(ds)
   ps <- e$readSet(paramSet, "paramSet"); ps$all.ent.mat <- ds$prot.mat; e$saveSet(ps, "paramSet")
   st
@@ -366,4 +378,53 @@ test_that("the analysis summary names the background a list was tested against",
   expect_match(txt, "Background / universe: +All proteins of your complete list")
   expect_match(txt, "Background feature count: +40")
   expect_match(txt, "What was tested: +Top 10% of the 40 proteins")
+})
+
+# ---- the pathway-impact analysis honours the same input ---------------------------------------
+
+test_that("pathway impact (ORA): a ranked list tests its top hits against the whole list", {
+  e <- .load_list_env(); .new_session(e); .save_list(e, n = 40)
+  expect_equal(e$SetListEnrichInput("datalist1", "ranked", "top", 0.10), 1)
+  expect_equal(e$CalculateEnzymePathwayOra("datalist1"), 1)
+  u <- .ps(e)$enrich.used
+  expect_equal(.ps(e)$enrich.mode, "ranked")
+  expect_equal(c(u$n.hits, u$query.size, u$bg.size, u$sets.tested), c(4, 4, 40, 7))
+  tab <- as.data.frame(arrow::read_feather("pathway_enzyme_ora.arrow"))
+  a <- tab[tab$row_names_id == "A", ]
+  expect_equal(c(a$total, a$hits), c(10, 4))
+  expect_equal(a$rawP, stats::phyper(3, 10, 30, 4, lower.tail = FALSE))
+  expect_false(any(c("D", "F", "H", "G") %in% tab$row_names_id))     # no hit, or not tested at all
+})
+
+test_that("pathway impact (ORA): a significant list is tested against the proteins tested, not the library", {
+  e <- .load_list_env(); .new_session(e)
+  .save_list(e, n = 8, sig.ids = c(sprintf("P%02d", 1:6), "P35", "P36"))
+  ps <- .ps(e); ps$backgroundUniverse <- sprintf("P%02d", 1:30); e$saveSet(ps, "paramSet")
+  expect_equal(e$SetListEnrichInput("datalist1", "sig"), 1)
+  expect_equal(e$CalculateEnzymePathwayOra("datalist1"), 1)
+  u <- .ps(e)$enrich.used
+  expect_equal(.ps(e)$enrich.mode, "ora_measured")
+  expect_equal(c(u$query.input, u$query.size, u$bg.size, u$sets.tested), c(8, 6, 30, 5))
+  tab <- as.data.frame(arrow::read_feather("pathway_enzyme_ora.arrow"))
+  expect_equal(tab$total[tab$row_names_id == "A"], 10)
+  expect_equal(tab$rawP[tab$row_names_id == "A"], stats::phyper(5, 10, 20, 6, lower.tail = FALSE))
+})
+
+test_that("pathway impact (ORA): a significant list alone falls back to the library without claiming uploaded data", {
+  e <- .load_list_env(); .new_session(e)
+  .save_list(e, n = 8, sig.ids = sprintf("P%02d", 1:6))
+  expect_equal(e$SetListEnrichInput("datalist1", "sig"), 1)
+  expect_equal(e$CalculateEnzymePathwayOra("datalist1"), 1)
+  expect_equal(.ps(e)$enrich.mode, "ora_catalog")
+  expect_equal(.ps(e)$universe.opt.readable, "Gene Set Library")
+  expect_false(any(grepl("No measured proteome", .ps(e)$enrich.used$label)))
+})
+
+test_that("pathway impact (GSEA) ranks a complete ranked list by its own score", {
+  skip_if_not_installed("fgsea")
+  e <- .load_list_env(); .new_session(e); .save_list(e, n = 40)
+  expect_equal(e$SetListEnrichInput("datalist1", "ranked"), 1)
+  expect_equal(suppressWarnings(e$CalculateEnzymePathwayGsea("datalist1")), 1)
+  expect_equal(.ps(e)$enrich.mode, "ranked"); expect_equal(.ps(e)$enrich.used$method, "gsea")
+  expect_equal(e$GetListEnrichInputMsg(), "All 40 proteins of your complete list tested by rank (preranked GSEA on logFC)")
 })
