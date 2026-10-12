@@ -1360,7 +1360,7 @@ PerformCV.test <- function(dataName = "", method, lvNum, propTraining=2/3, nRuns
       saveSet(msgSet, "msgSet");
       return (0);
     } else {
-      doLogisticRegMdl(dataName, x.train.all, y.train.all, x.test.all, y.test.all);
+      analSet$LR <- doLogisticRegMdl(dataName, x.train.all, y.train.all, x.test.all, y.test.all);
     }
   }
   
@@ -1727,6 +1727,9 @@ doLogisticRegMdl <- function(dataName = "", x.train, y.train, x.test, y.test){
   
   # Save analSet
   saveSet(analSet, "analSet");
+  
+  # the caller holds its own copy of analSet and saves it afterwards: hand back the model's part
+  return(analSet$LR);
 }
 
 
