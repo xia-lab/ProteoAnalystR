@@ -2332,16 +2332,19 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
     return(0L)
   }
 
-  # The sample-wise site-minus-parent route already produces a protein-adjusted
-  # matrix for downstream (including multifactor) contrasts. Applying either
-  # engine here would subtract the parent-protein effect a second time.
-  if (identical(paramSet$norm.opt, "abundance_corr"))
-    return(fail(paste0(
-      "The current matrix is already protein-adjusted by sample-wise log2(site) - ",
-      "log2(parent). Use its differential-analysis results directly, or re-run ",
-      "normalization with an unadjusted transformation before using the dedicated ",
-      "Protein-Adjusted Phosphosite Analysis."
-    )))
+  # When the active matrix is already protein-adjusted at the normalization step
+  # (norm.opt == "abundance_corr"), applying either engine to it would subtract the
+  # parent-protein effect a second time. Rather than fail, fall back to the
+  # pre-adjustment (filtered) site matrix below so the dedicated delta/MSstatsPTM
+  # analysis runs on an unadjusted input. This is a rigorous re-estimate and will
+  # differ from the naive normalization-level adjustment already in the DE results.
+  preadjust.fallback <- identical(paramSet$norm.opt, "abundance_corr")
+  preadjust.notice   <- if (isTRUE(preadjust.fallback)) paste0(
+    " The active matrix was already protein-adjusted at the normalization step, so ",
+    "this analysis was computed from the pre-adjustment (filtered) matrix to avoid ",
+    "subtracting the parent-protein effect twice; these results are the dedicated ",
+    "delta/MSstatsPTM estimate and may differ from the differential-analysis output."
+  ) else NULL
 
   if (!isTRUE(paramSet$has.protein.ref) || is.null(paramSet$protein.ref))
     return(fail(paste0(
@@ -2352,9 +2355,28 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
 
   prot.ref <- paramSet$protein.ref   # log2 protein abundances: proteins x samples
 
-  phospho.mat <- dataSet$data.norm
-  if (is.null(phospho.mat) || nrow(phospho.mat) == 0)
-    return(fail("No normalized phospho data found. Run normalization first."))
+  if (isTRUE(preadjust.fallback)) {
+    # Use the unadjusted, pre-normalization site matrix so the adjustment is
+    # applied once (here) rather than twice (normalization + this step).
+    phospho.mat <- tryCatch(readDataQs("data.filtered.qs", paramSet$anal.type, dataName),
+                            error = function(e) NULL)
+    if (is.null(phospho.mat) || nrow(phospho.mat) == 0)
+      return(fail(paste0(
+        "The active matrix is already protein-adjusted, and the pre-adjustment matrix ",
+        "(data.filtered.qs) could not be loaded. Re-run normalization with an unadjusted ",
+        "transformation to use this analysis, or use your differential-analysis results."
+      )))
+    # data.filtered may still be on a linear scale; log2 as the abundance_corr route does.
+    finite.pf <- phospho.mat[is.finite(phospho.mat)]
+    if (length(finite.pf) > 0 && min(finite.pf) >= 0 && max(finite.pf) > 100) {
+      phospho.mat[phospho.mat <= 0] <- NA
+      phospho.mat <- log2(phospho.mat)
+    }
+  } else {
+    phospho.mat <- dataSet$data.norm
+    if (is.null(phospho.mat) || nrow(phospho.mat) == 0)
+      return(fail("No normalized phospho data found. Run normalization first."))
+  }
 
   # --- conditions ---
   meta.info <- dataSet$meta.info
@@ -2792,7 +2814,8 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
   fast.write(results,  "ptm_occupancy_results.csv")
 
   msgSet$current.msg <- paste0(
-    "Protein-adjusted phosphosite analysis complete. ", nrow(results), " site(s) analyzed."
+    "Protein-adjusted phosphosite analysis complete. ", nrow(results), " site(s) analyzed.",
+    if (!is.null(preadjust.notice)) preadjust.notice else ""
   )
   # Persist occupancy parameters for analysis_summary.txt reporting.
   paramSet$ptm.occ.n.sites  <- nrow(results)
