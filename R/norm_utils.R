@@ -3108,6 +3108,28 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
   list(prec.df = prec.df, group.mode = group.mode)
 }
 
+# Unmodified peptide sequence of each precursor. Uses Stripped.Sequence when the
+# reader kept it; otherwise strips modifications and the trailing charge from a
+# DIA-NN-style precursor id, e.g. "(UniMod:1)AAAPSGGK3" -> "AAAPSGGK". Ids of any
+# other shape are kept as-is, so each such precursor counts as its own sequence.
+.proteoform_stripped_seq <- function(prec.df) {
+  seq <- if ("Stripped.Sequence" %in% names(prec.df)) as.character(prec.df$Stripped.Sequence) else rep(NA_character_, nrow(prec.df))
+  miss <- is.na(seq) | seq == ""
+  if (any(miss)) {
+    ids <- as.character(prec.df$Protein.IDs[miss])
+    bare <- gsub("\\([^)]*\\)|\\[[^]]*\\]", "", ids)
+    looks.precursor <- grepl("^_?[A-Z]+_?\\.?[0-9]{1,2}$", bare)
+    seq[miss] <- ifelse(looks.precursor, gsub("[^A-Z]", "", bare), ids)
+  }
+  seq
+}
+
+# Number of distinct peptide sequences: charge states and modified forms of one
+# sequence count once.
+.proteoform_distinct_peptides <- function(seqs) {
+  length(unique(seqs[!is.na(seqs) & seqs != ""]))
+}
+
 .proteoform_plot_group <- function(dataSet, meta.info, samples) {
   if (!is.null(meta.info) && !is.null(rownames(meta.info))) {
     analysis.var <- dataSet$analysisVar
@@ -3425,13 +3447,18 @@ DetectProteoformAnalysis <- function(dataName) {
   records <- list()
   ratio.rows <- list()
   total.rows <- list()
+  # Evidence gate counts distinct peptide sequences, not precursors: two charge
+  # states of one peptide are one piece of evidence (see .proteoform_distinct_peptides).
   min.peptides.per.isoform <- 2L
+  prec.df$seq <- .proteoform_stripped_seq(prec.df)
 
   for (grp in multi.groups) {
     isoforms <- group.isoforms[[grp]]
     pep.counts <- sapply(isoforms, function(iso)
+      .proteoform_distinct_peptides(prec.df$seq[prec.df$group.key == grp & prec.df$clean.prot == iso]))
+    prec.counts <- sapply(isoforms, function(iso)
       sum(prec.df$group.key == grp & prec.df$clean.prot == iso))
-    isoforms <- isoforms[order(pep.counts, decreasing = TRUE)]
+    isoforms <- isoforms[order(pep.counts, prec.counts, decreasing = TRUE)]
     eligible.isoforms <- isoforms[pep.counts[isoforms] >= min.peptides.per.isoform]
     if (length(eligible.isoforms) < 2) next
 
@@ -3479,6 +3506,8 @@ DetectProteoformAnalysis <- function(dataName) {
           Transcript.B = get.ta(grp, isoB),
           Peptides.A = unname(pep.counts[isoA]),
           Peptides.B = unname(pep.counts[isoB]),
+          Precursors.A = unname(prec.counts[isoA]),
+          Precursors.B = unname(prec.counts[isoB]),
           LogRatio.Cond1 = mean_for(log.ratio, ctx$cond1.label),
           LogRatio.Cond2 = mean_for(log.ratio, ctx$cond2.label)
         )
@@ -3491,7 +3520,7 @@ DetectProteoformAnalysis <- function(dataName) {
   if (length(ratio.rows) == 0)
     return(fail(paste0(
       "Insufficient data for isoform usage analysis after requiring >= ",
-      min.peptides.per.isoform, " proteotypic peptides per isoform."
+      min.peptides.per.isoform, " distinct proteotypic peptide sequences per isoform."
     )))
 
   ratio.mat <- do.call(rbind, ratio.rows)
@@ -3526,6 +3555,8 @@ DetectProteoformAnalysis <- function(dataName) {
       Transcript.B = rec$Transcript.B,
       Peptides.A = rec$Peptides.A,
       Peptides.B = rec$Peptides.B,
+      Precursors.A = rec$Precursors.A,
+      Precursors.B = rec$Precursors.B,
       LogRatio.Cond1 = rec$LogRatio.Cond1,
       LogRatio.Cond2 = rec$LogRatio.Cond2,
       Delta.LogRatio = ratio.tbl[id, "logFC"],
@@ -3575,7 +3606,7 @@ DetectProteoformAnalysis <- function(dataName) {
   result.cols <- c("Gene", "Comparison", "Isoform.Group", "Isoform.Count",
                    "Omnibus.F", "Omnibus.Pvalue", "Omnibus.FDR",
                    "Isoform.A", "Transcript.A", "Isoform.B", "Transcript.B",
-                   "Peptides.A", "Peptides.B", "LogRatio.Cond1", "LogRatio.Cond2",
+                   "Peptides.A", "Peptides.B", "Precursors.A", "Precursors.B", "LogRatio.Cond1", "LogRatio.Cond2",
                    "Delta.LogRatio", "Ratio.Pvalue", "Ratio.FDR",
                    "Total.LogFC", "Total.Pvalue", "Is.Switch")
   results <- results[, result.cols[result.cols %in% names(results)], drop = FALSE]
@@ -3588,7 +3619,7 @@ DetectProteoformAnalysis <- function(dataName) {
   msgSet$current.msg <- paste0(
     "Detected ", nrow(results), " isoform pair(s) across ",
     length(unique(results$Isoform.Group)), " gene/protein group(s) with >= ",
-    min.peptides.per.isoform, " proteotypic peptides per isoform. ANOVA tests gene-level isoform usage; pairwise contrasts are post-hoc. Design: ",
+    min.peptides.per.isoform, " distinct proteotypic peptide sequences per isoform. ANOVA tests gene-level isoform usage; pairwise contrasts are post-hoc. Design: ",
     ctx$mode, " (", ctx$contrast.name, ")."
   )
   saveSet(msgSet, "msgSet")

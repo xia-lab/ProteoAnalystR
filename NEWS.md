@@ -1,5 +1,21 @@
 # ProteoAnalystR NEWS
 
+## Version 1.0.1 — 2026-10-14 (minor-revision release)
+
+Version 1.0.0 plus a single change to isoform-usage analysis; every other
+function is identical to 1.0.0.
+
+### Isoform-usage analysis
+- `DetectProteoformAnalysis()`: the evidence threshold of at least two
+  proteotypic peptides per isoform now counts distinct peptide sequences
+  rather than precursors, so charge states and modified forms of the same
+  sequence count once. The results table reports both counts:
+  `Peptides.A`/`Peptides.B` (distinct sequences) and the new
+  `Precursors.A`/`Precursors.B` (precursor rows). On the manuscript's
+  Case Study 4, the number of testable isoform pairs falls from 6 to 5 and no
+  pair passes FDR < 0.05 (minimum ratio FDR 0.058). The controlled isoform
+  mixture validation is unchanged.
+
 ## Unreleased
 
 ### Statistics

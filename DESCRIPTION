@@ -1,7 +1,7 @@
 Package: ProteoAnalystR
 Type: Package
 Title: Backend R Functions for the ProteoAnalyst Platform
-Version: 1.0.0
+Version: 1.0.1
 Authors@R: c(
     person("Jeff", "Xia", email = "jeff.xia@mcgill.ca", role = c("aut", "cre")),
     person("Guangyan", "Zhou", email = "guangyan.zhou@mail.mcgill.ca", role = "aut"))
