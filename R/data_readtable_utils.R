@@ -1979,6 +1979,16 @@ SetSpectronautOptions <- function(inputType = "peptide", featureLevel = "fragmen
     #msg("[.readMetaData] smpl_nms to match: ", paste(head(smpl_nms), collapse=", "))
     
     hit.inx <- match(smpl_nms, mydata$`#NAME`)
+    if (anyNA(hit.inx) && is.character(mydata$`#NAME`)) {
+      # Spectronaut pivot headers ("[1] run.htrms.PG.Quantity") are read as the
+      # bare run name; accept metadata written with either form.
+      alt.hit <- match(smpl_nms, .cleanSpectronautRunName(mydata$`#NAME`))
+      fix <- is.na(hit.inx) & !is.na(alt.hit)
+      if (any(fix)) {
+        mydata$`#NAME`[alt.hit[fix]] <- smpl_nms[fix]
+        hit.inx <- match(smpl_nms, mydata$`#NAME`)
+      }
+    }
     #msg("[.readMetaData] hit.inx: ", paste(head(hit.inx), collapse=", "))
 
     miss.meta <- is.na(hit.inx)
@@ -3059,6 +3069,61 @@ GetAnalysisType <- function(){
 }
 
 # Helper: read Spectronaut report
+# --- Spectronaut pivot-report helpers -------------------------------------
+# Spectronaut writes these into quantity cells it did not report a value for.
+.SPEC_MISSING_TOKENS <- c("Filtered", "NaN", "NA", "N/A", "#N/A", "")
+
+.specNumeric <- function(x) {
+  if (is.numeric(x)) return(as.numeric(x))
+  x <- trimws(as.character(x))
+  x[x %in% .SPEC_MISSING_TOKENS] <- NA
+  suppressWarnings(as.numeric(x))
+}
+
+# "[3] F1RS_TB_BR_1_10.htrms.PG.Quantity" -> "F1RS_TB_BR_1_10"
+.cleanSpectronautRunName <- function(x) {
+  y <- sub("^\\[[0-9]+\\]\\s*", "", x)
+  y <- sub("\\.(PG|PEP|EG|FG)\\.[A-Za-z0-9]+$", "", y)
+  y <- sub("\\.(htrms|raw|d|wiff|mzML|dia)$", "", y, ignore.case = TRUE)
+  if (anyDuplicated(y) || any(!nzchar(y))) return(x)
+  y
+}
+
+# Intensity matrix (rows as in dat, columns = runs) of a Spectronaut pivot
+# report. Per-run quantity columns ("<run>.PG.Quantity") are taken directly, one
+# quantity family only, in the order of `levels`. Without them, columns are
+# kept when their values are numeric once Spectronaut's missing-value tokens are
+# read as NA; columns with no value at all (e.g. an empty PG.Genes) are not runs.
+.specIntensityMatrix <- function(dat, annot.cols, levels = c("PG", "PEP", "EG", "FG")) {
+  cols <- colnames(dat)
+  intensity.cols <- character(0)
+  for (lv in levels) {
+    for (q in c("Quantity", "MS2Quantity", "MS1Quantity", "TotalQuantity")) {
+      intensity.cols <- grep(paste0("\\.", lv, "\\.", q, "$"), cols, value = TRUE)
+      if (length(intensity.cols) > 0) break
+    }
+    if (length(intensity.cols) > 0) break
+  }
+  if (length(intensity.cols) == 0) {
+    intensity.cols <- grep("^[^P].*\\.[HEW]", cols, value = TRUE, ignore.case = FALSE)
+  }
+  if (length(intensity.cols) == 0) {
+    candidate.cols <- setdiff(cols, annot.cols)
+    candidate.cols <- grep("^RtoF|^Ratio|^FC_", candidate.cols, value = TRUE, invert = TRUE, ignore.case = TRUE)
+    is.quant <- vapply(candidate.cols, function(col) {
+      raw <- dat[[col]]
+      vals <- .specNumeric(raw)
+      present <- !is.na(raw) & !(trimws(as.character(raw)) %in% .SPEC_MISSING_TOKENS)
+      any(present) && !any(is.na(vals[present]))
+    }, logical(1))
+    intensity.cols <- candidate.cols[is.quant]
+  }
+  if (length(intensity.cols) == 0) return(NULL)
+  intens <- vapply(intensity.cols, function(col) .specNumeric(dat[[col]]), numeric(nrow(dat)))
+  intens <- matrix(intens, nrow = nrow(dat), dimnames = list(NULL, .cleanSpectronautRunName(intensity.cols)))
+  intens
+}
+
 .readSpectronaut <- function(data.file, opts = list(inputType = "protein")) {
   if (!file.exists(data.file)) {
     #msg('[Spectronaut] data file not found: ', data.file)
@@ -3074,7 +3139,7 @@ GetAnalysisType <- function(){
   }
 
   protein.id.candidates <- c('PG.ProteinAccessions', 'PG.ProteinGroups', 'PG.features',
-                             'Accession', 'Protein.Group', 'ProteinName')
+                             'Accession', 'Protein.Group', 'ProteinName', 'PG.UniProtIds')
   get.spectronaut.protein.ids <- function(x, protein.col) {
     proteins <- as.character(x[[protein.col]])
     # parse each distinct ID string once, then expand back by match()
@@ -3304,23 +3369,10 @@ GetAnalysisType <- function(){
                     'PG.Quantity', 'PG.NrOfStrippedSequencesIdentified',
                     'Experiment', 'Run', 'Accession', 'ModifiedSequence', 'Sequence', 'Precursor',
                     'PrecursorCharge', 'Protein.Group', 'ProteinName')
-    intensity.cols <- grep("^[^P].*\\.[HEW]", colnames(raw.dat), value = TRUE, ignore.case = FALSE)
-    if (length(intensity.cols) == 0) {
-      candidate.cols <- setdiff(colnames(raw.dat), annot.cols)
-      candidate.cols <- grep("^RtoF|^Ratio|^FC_", candidate.cols, value = TRUE, invert = TRUE, ignore.case = TRUE)
-      intensity.cols <- sapply(candidate.cols, function(col) {
-        col.data <- raw.dat[[col]]
-        sample.vals <- head(col.data[!is.na(col.data)], 10)
-        !any(is.na(suppressWarnings(as.numeric(sample.vals))))
-      })
-      intensity.cols <- names(intensity.cols[intensity.cols])
-    }
-    if (length(intensity.cols) == 0) {
+    intens <- .specIntensityMatrix(raw.dat, annot.cols, levels = c("PEP", "EG", "FG", "PG"))
+    if (is.null(intens)) {
       return(NULL)
     }
-
-    intens <- as.matrix(raw.dat[, intensity.cols, drop = FALSE])
-    storage.mode(intens) <- "numeric"
     peptide.ids <- as.character(raw.dat[[peptide.col]])
     proteins <- get.spectronaut.protein.ids(raw.dat, protein.col)
     valid.rows <- !is.na(peptide.ids) & nzchar(peptide.ids) & !is.na(proteins) & nzchar(proteins)
@@ -3429,6 +3481,11 @@ GetAnalysisType <- function(){
   is.pivot.format <- ("Accession" %in% colnames(dat) || "Protein.Group" %in% colnames(dat)) &&
                       ("Sequence" %in% colnames(dat) || "ModifiedSequence" %in% colnames(dat)) &&
                       !("R.FileName" %in% colnames(dat))
+  # Wide per-run quantity columns ("<run>.PG.Quantity") without R.FileName are a
+  # pivot report too; MSstatsConvert expects the long (Normal) report.
+  is.pivot.format <- is.pivot.format ||
+    (!("R.FileName" %in% colnames(dat)) &&
+       any(grepl("\\.(PG|PEP|EG|FG)\\.[A-Za-z0-9]*Quantity$", colnames(dat))))
 
   if (is.pivot.format) {
     #msg('[Spectronaut] Pivot table format detected; using manual parser')
@@ -3554,25 +3611,9 @@ GetAnalysisType <- function(){
                   'Experiment', 'Run', 'Accession', 'ModifiedSequence', 'Sequence', 'Precursor',
                   'PrecursorCharge', 'Protein.Group', 'ProteinName')
 
-  # Find intensity columns (typically end with sample names and contain numeric data)
-  # Spectronaut directLFQ columns or regular intensity columns
-  intensity.cols <- grep("^[^P].*\\.[HEW]", colnames(dat), value = TRUE, ignore.case = FALSE)
-
-  # If no intensity columns found with that pattern, try broader search
-  if (length(intensity.cols) == 0) {
-    candidate.cols <- setdiff(colnames(dat), annot.cols)
-    # Exclude ratio/calculated columns
-    candidate.cols <- grep("^RtoF|^Ratio|^FC_", candidate.cols, value = TRUE, invert = TRUE, ignore.case = TRUE)
-    intensity.cols <- sapply(candidate.cols, function(col) {
-      col.data <- dat[[col]]
-      sample.vals <- head(col.data[!is.na(col.data)], 10)
-      is.numeric.col <- !any(is.na(suppressWarnings(as.numeric(sample.vals))))
-      return(is.numeric.col)
-    })
-    intensity.cols <- names(intensity.cols[intensity.cols])
-  }
-
-  if (length(intensity.cols) == 0) {
+  # Per-run quantity columns, with Spectronaut's "Filtered"/"NaN" read as missing
+  intens <- .specIntensityMatrix(dat, annot.cols, levels = c("PG", "PEP", "EG", "FG"))
+  if (is.null(intens)) {
     #msg('[Spectronaut][ERROR] No intensity columns found')
     return(NULL)
   }
@@ -3592,14 +3633,12 @@ GetAnalysisType <- function(){
     protein.col <- 'Protein.Group'
   } else if ('ProteinName' %in% colnames(dat)) {
     protein.col <- 'ProteinName'
+  } else if ('PG.UniProtIds' %in% colnames(dat)) {
+    protein.col <- 'PG.UniProtIds'
   } else {
     #msg('[Spectronaut][ERROR] No protein identifier column found. Available columns: ', paste(colnames(dat)[1:min(10, ncol(dat))], collapse=', '))
     return(NULL)
   }
-
-  # Extract intensity matrix
-  intens <- as.matrix(dat[, intensity.cols, drop = FALSE])
-  storage.mode(intens) <- 'numeric'
 
   # Set row names from protein identifiers, handle semicolon-separated lists
   proteins <- get.spectronaut.protein.ids(dat, protein.col)

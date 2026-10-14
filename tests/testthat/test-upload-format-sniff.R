@@ -59,3 +59,39 @@ test_that("unrecognised generic tables are not rejected", {
   expect_length(e$.sniffToolFormat(f)$formats, 0)
   expect_null(e$.wrongTabMessage(f, "diann"))
 })
+
+# Spectronaut pivot reports: per-run quantity columns with "Filtered" cells must
+# all be kept as runs (with Filtered -> NA), and an empty PG.Genes is not a run.
+test_that("Spectronaut pivot keeps every run column and reads Filtered as NA", {
+  e <- .load_readtable()
+  dat <- data.frame(
+    PG.ProteinAccessions = c("P1", "P2", "P3"),
+    PG.Genes = c(NA, NA, NA),
+    "[1] run_A.htrms.PG.Quantity" = c("Filtered", "10.5", "20"),
+    "[2] run_B.htrms.PG.Quantity" = c("1", "NaN", "3"),
+    "[3] run_C.htrms.PG.Quantity" = c("4", "5", "6"),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  m <- e$.specIntensityMatrix(dat, annot.cols = c("PG.ProteinAccessions"))
+  expect_identical(colnames(m), c("run_A", "run_B", "run_C"))
+  expect_true(is.na(m[1, "run_A"]))
+  expect_true(is.na(m[2, "run_B"]))
+  expect_equal(unname(m[2, "run_A"]), 10.5)
+})
+
+test_that("generic numeric detection ignores Filtered tokens and empty columns", {
+  e <- .load_readtable()
+  dat <- data.frame(ID = c("P1", "P2"), Empty = c(NA, NA),
+                    s1 = c("Filtered", "2"), s2 = c("3", "4"),
+                    Note = c("x", "y"), stringsAsFactors = FALSE)
+  m <- e$.specIntensityMatrix(dat, annot.cols = "ID")
+  expect_identical(colnames(m), c("s1", "s2"))
+})
+
+test_that("run-name cleaning keeps the original names when it would collide", {
+  e <- .load_readtable()
+  expect_identical(e$.cleanSpectronautRunName("[12] F1RS_TB_BR_1_10.htrms.PG.Quantity"), "F1RS_TB_BR_1_10")
+  expect_identical(e$.cleanSpectronautRunName("[1] x.raw.PEP.Quantity"), "x")
+  clash <- c("[1] a.PG.Quantity", "[2] a.PG.Quantity")
+  expect_identical(e$.cleanSpectronautRunName(clash), clash)
+})
