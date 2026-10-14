@@ -154,14 +154,102 @@
 #' @export
 #' @license MIT License
 
+.toolFormatLabels <- c(maxquant = "MaxQuant", diann = "DIA-NN", fragpipe = "FragPipe",
+                       spectronaut = "Spectronaut", skyline = "Skyline")
+
+# Identify which search tool exported a table from its header alone, so a file
+# uploaded on the wrong tab can be reported as such instead of failing deep
+# inside the reader. Returns list(formats, evidence) - formats is a character
+# vector of matching tool keys (empty when nothing is recognised) and evidence
+# maps each key to the header columns that identified it.
+.sniffToolFormat <- function(filePath) {
+  cols <- tryCatch(names(data.table::fread(filePath, nrows = 0, header = TRUE,
+                                           check.names = FALSE, showProgress = FALSE)),
+                   error = function(e) NULL)
+  if (length(cols) == 0) return(list(formats = character(0), evidence = list()))
+  key <- gsub("[^a-z0-9]", "", tolower(cols))
+  ev <- list()
+
+  # Spectronaut: R./PG./PEP./EG./FG./F. prefixed columns, or wide pivot
+  # quantities such as "[1] run.htrms.PG.Quantity"
+  spec.named <- cols[cols %in% c("PG.ProteinAccessions", "PG.ProteinGroups", "PG.ProteinNames",
+                                 "PG.Genes", "R.FileName", "R.Condition", "EG.ModifiedSequence",
+                                 "EG.PrecursorId", "FG.Quantity", "F.PeakArea", "PG.Quantity",
+                                 "PEP.StrippedSequence")]
+  spec.wide <- grep("\\.(PG|PEP|EG|FG)\\.(Quantity|MS1Quantity|MS2Quantity|TotalQuantity)", cols, value = TRUE)
+  if (length(spec.named) >= 2 || length(spec.wide) > 0) ev$spectronaut <- c(spec.named, spec.wide)
+
+  # DIA-NN: Protein.Group/Protein.Ids plus one of its other dotted columns
+  di.id <- cols[cols %in% c("Protein.Group", "Protein.Ids")]
+  di.other <- cols[cols %in% c("Protein.Names", "Genes", "First.Protein.Description",
+                               "Precursor.Id", "Stripped.Sequence", "Modified.Sequence")]
+  if (length(di.id) > 0 && length(di.other) > 0) ev$diann <- c(di.id, di.other)
+
+  # MaxQuant: space-separated proteinGroups/evidence/peptides columns
+  mq <- c(cols[cols %in% c("Protein IDs", "Majority protein IDs", "Majority.protein.IDs",
+                           "Raw file", "Leading razor protein")],
+          grep("^LFQ[ .]intensity[ .]", cols, value = TRUE))
+  if (length(mq) > 0) ev$maxquant <- mq
+
+  # FragPipe: combined_protein / combined_peptide tables
+  fp <- c(cols[cols %in% c("Protein ID", "Entry Name", "Combined Total Peptides",
+                           "Combined Spectral Count", "Protein Probability")],
+          grep(" MaxLFQ Intensity$", cols, value = TRUE))
+  if (length(fp) > 0) ev$fragpipe <- fp
+
+  # Skyline MSstats-style transition report
+  if (all(c("proteinname", "peptidemodifiedsequence") %in% key) &&
+      any(c("filename", "replicatename") %in% key) && any(c("area", "totalarea") %in% key)) {
+    ev$skyline <- cols[key %in% c("proteinname", "peptidemodifiedsequence")]
+  }
+
+  list(formats = names(ev), evidence = ev)
+}
+
+# Message for a file whose header belongs to a different tool than the
+# selected upload tab; NULL when the header is consistent or unrecognised.
+.wrongTabMessage <- function(filePath, dataFormat) {
+  sniff <- .sniffToolFormat(filePath)
+  if (length(sniff$formats) == 0 || dataFormat %in% sniff$formats) return(NULL)
+  # The Skyline tab is not offered in the UI, so do not point users at it
+  other <- setdiff(sniff$formats, "skyline")
+  if (length(other) == 0) return(NULL)
+  detected <- other[1]
+  shown <- head(unique(sniff$evidence[[detected]]), 3)
+  selected <- if (dataFormat %in% names(.toolFormatLabels)) .toolFormatLabels[[dataFormat]] else "Generic Tables"
+  paste0("This file looks like a ", .toolFormatLabels[[detected]], " export (columns such as ",
+         paste(shown, collapse = ", "), "), but it was uploaded on the ", selected,
+         " tab. Please upload it on the ", .toolFormatLabels[[detected]], " Outputs tab instead.")
+}
+
+# Java shows only the first element of current.msg, so an upload error must
+# replace earlier (info) messages rather than be appended after them.
+.setUploadErrMsg <- function(msg) {
+  msgSet <- readSet(msgSet, "msgSet")
+  msgSet$current.msg <- msg
+  saveSet(msgSet, "msgSet")
+  message("[ERROR] ", msg)
+}
+
 ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneDataAnalType="default", path="", dataFormat="default") {
   try(RecordRCommand(paste0("ReadTabExpressData(\"", fileName, "\")")), silent = TRUE)
   #msg("[ReadTabExpressData] start file=", fileName, " metaContain=", metaContain, " path=", path, " dataFormat=", dataFormat)
-  is.maxquant <- dataFormat == "maxquant" || grepl("proteinGroups", fileName, ignore.case = TRUE)
-  is.fragpipe <- dataFormat == "fragpipe" || grepl("fragpipe", fileName, ignore.case = TRUE) || grepl("fragpipe", metafileName, ignore.case = TRUE)
-  is.diann <- dataFormat == "diann" || grepl("diann", fileName, ignore.case = TRUE) || grepl("diann", metafileName, ignore.case = TRUE)
-  is.spectronaut <- dataFormat == "spectronaut" || grepl("spectronaut", fileName, ignore.case = TRUE)
-  is.skyline <- dataFormat == "skyline" || grepl("skyline", fileName, ignore.case = TRUE) || grepl("skyline", metafileName, ignore.case = TRUE)
+  # An explicit tool tab wins over file-name guessing: a Spectronaut report that
+  # happens to be named "diann_..." must not be routed to the DIA-NN reader.
+  tool.tab <- dataFormat %in% names(.toolFormatLabels)
+  if (tool.tab) {
+    wrong.tab <- .wrongTabMessage(paste0(path, fileName), dataFormat)
+    if (!is.null(wrong.tab)) {
+      .setUploadErrMsg(wrong.tab)
+      return(0)
+    }
+  }
+  n.msg.before <- length(readSet(msgSet, "msgSet")$current.msg)
+  is.maxquant <- dataFormat == "maxquant" || (!tool.tab && grepl("proteinGroups", fileName, ignore.case = TRUE))
+  is.fragpipe <- dataFormat == "fragpipe" || (!tool.tab && (grepl("fragpipe", fileName, ignore.case = TRUE) || grepl("fragpipe", metafileName, ignore.case = TRUE)))
+  is.diann <- dataFormat == "diann" || (!tool.tab && (grepl("diann", fileName, ignore.case = TRUE) || grepl("diann", metafileName, ignore.case = TRUE)))
+  is.spectronaut <- dataFormat == "spectronaut" || (!tool.tab && grepl("spectronaut", fileName, ignore.case = TRUE))
+  is.skyline <- dataFormat == "skyline" || (!tool.tab && (grepl("skyline", fileName, ignore.case = TRUE) || grepl("skyline", metafileName, ignore.case = TRUE)))
 
   if (is.maxquant) {
     #msg("[ReadTabExpressData] MaxQuant format detected")
@@ -224,6 +312,14 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     dataSet <- .readTabData(paste0(path, fileName));
   }
   if(is.null(dataSet)){
+    # Several readers return NULL without explaining why; never leave the user
+    # with an empty error box.
+    if (length(readSet(msgSet, "msgSet")$current.msg) <= n.msg.before) {
+      fmt.label <- if (tool.tab) .toolFormatLabels[[dataFormat]] else "a data table"
+      .setUploadErrMsg(paste0("Could not read this file as ", fmt.label,
+                              if (tool.tab) " output" else "",
+                              ". Please check that you uploaded the right file on the right tab."))
+    }
     return(0);
   }  
   datOrig <- dataSet$data_orig;
