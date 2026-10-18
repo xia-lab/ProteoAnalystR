@@ -413,7 +413,7 @@ PlotCovariateMap <- function(dataName, theme="default", imgName="NA", format="pn
 #'@param version version
 #'@author Jessica Ewald\email{jessica.ewald@mcgill.ca}
 #'McGill University, Canada
-#'License: GPL-3 License
+#'License: MIT
 #'@export
 #'
 PlotMultiFacCmpdSummary <- function(dataName,imgName,name, id, meta, version, format="png", dpi=96, width=NA){

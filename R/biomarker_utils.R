@@ -2,7 +2,7 @@
 ### Adapted from MetaboAnalyst biomarker_utils.R
 ### Jeff Xia \email{jeff.xia@mcgill.ca}
 ### Adapted for ProteoAnalyst framework
-### License: GNU GPL (>= 2)
+### License: MIT
 
 ##############################################
 ## KEY ADAPTATIONS FOR PROTEOANALYST:
@@ -3521,7 +3521,7 @@ process_metadata <- function(df) {
 #'@param showPred Show predicted samples
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export
 
 PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred) {
@@ -3685,7 +3685,7 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
 #'@param showPred Show predicted samples
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export
 
 PlotProbViewTest <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, show, showPred) {
@@ -3852,7 +3852,7 @@ PlotProbViewTest <- function(dataName = "", imgName, format="png", dpi=default.d
 #'ROC curve, the number must be between 0 and 1.
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export
 #'
 PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, avg.method, show.conf, show.holdout, focus="fpr", cutoff = 1.0){
@@ -4026,7 +4026,7 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
 #'@param cutoff Input the threshold to limit the calculation of the ROC curve, the number must be between 0 and 1.
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export 
 
 PlotROCTest<-function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.inx, avg.method, show.conf, show.holdout, focus="fpr", cutoff = 1.0){
@@ -4208,7 +4208,7 @@ PlotROCTest<-function(dataName = "", imgName, format="png", dpi=default.dpi, mdl
 #'the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.  
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export
 
 PlotAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi){
@@ -4277,7 +4277,7 @@ PlotAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi){
 #'the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.  
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export
 
 PlotTestAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi){
@@ -4337,7 +4337,7 @@ PlotTestAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi
 #'@param feat.num Input the number of features to include in the plot, by default it is 15.
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export
 
 PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.dpi,
@@ -4556,7 +4556,7 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
 #'the default dpi is 72. It is suggested that for high-resolution images, select a dpi of 300.  
 #'@author Jeff Xia \email{jeff.xia@mcgill.ca}
 #'McGill University, Canada
-#'License: GNU GPL (>= 2)
+#'License: MIT
 #'@export
 #'
 Plot.Permutation<-function(dataName = "", imgName, format="png", dpi=default.dpi){
