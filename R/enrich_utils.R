@@ -738,7 +738,7 @@ PerformDefaultEnrichment <- function(dataName="", file.nm, fun.type){
 # ---------------------------------------------------------------------------- #
 # ORA on proteins carrying nominally-changed PTM-occupancy sites, tested        #
 # against the measured proteome. Mirrors PerformDefaultEnrichment but takes the #
-# query from the PTM-occupancy result (Occ.Pvalue < cutoff) instead of the      #
+# query from the PTM-occupancy result (RMF.Pvalue < cutoff) instead of the      #
 # DE-significant set, and appends a HitIDs column (data feature ids per term)   #
 # so the results table can open the protein-set intensity heatmap per term.     #
 # ---------------------------------------------------------------------------- #
@@ -746,26 +746,26 @@ PerformOccupancyEnrichment <- function(dataName="", file.nm, fun.type, pval.cuto
   paramSet <- readSet(paramSet, "paramSet");
   dataSet  <- readDataset(dataName);
 
-  occ <- tryCatch(ov_qs_read("ptm_occupancy_results.qs"), error=function(e) NULL);
-  if (is.null(occ) && file.exists("ptm_occupancy_results.csv"))
-    occ <- utils::read.csv("ptm_occupancy_results.csv", check.names=FALSE, stringsAsFactors=FALSE);
+  occ <- tryCatch(ov_qs_read("ptm_rmf_results.qs"), error=function(e) NULL);
+  if (is.null(occ) && file.exists("ptm_rmf_results.csv"))
+    occ <- utils::read.csv("ptm_rmf_results.csv", check.names=FALSE, stringsAsFactors=FALSE);
   if (is.null(occ) || nrow(occ) == 0) {
-    AddErrMsg("No PTM-occupancy results found. Run the occupancy analysis first.");
+    AddErrMsg("No relative modification fraction results found. Run the relative modification fraction analysis first.");
     return(0);
   }
-  if (!all(c("Gene","Occ.Pvalue") %in% colnames(occ))) {
-    AddErrMsg("Occupancy result is missing the Gene / Occ.Pvalue columns.");
+  if (!all(c("Gene","RMF.Pvalue") %in% colnames(occ))) {
+    AddErrMsg("Relative modification fraction result is missing the Gene / RMF.Pvalue columns.");
     return(0);
   }
 
-  sel <- suppressWarnings(as.numeric(occ$Occ.Pvalue)) < as.numeric(pval.cutoff);
+  sel <- suppressWarnings(as.numeric(occ$RMF.Pvalue)) < as.numeric(pval.cutoff);
   sel[is.na(sel)] <- FALSE;
   if (nzchar(mod.type) && "Modification" %in% colnames(occ))
     sel <- sel & (occ$Modification == mod.type);
   genes <- unique(as.character(occ$Gene[sel]));
   genes <- genes[!is.na(genes) & nzchar(genes)];
   if (length(genes) == 0) {
-    AddErrMsg(paste0("No proteins with nominally-changed occupancy sites (Occ.Pvalue < ", pval.cutoff,
+    AddErrMsg(paste0("No proteins with nominally changed modification fractions (p < ", pval.cutoff,
                      if (nzchar(mod.type)) paste0(", ", mod.type) else "", ") were found to enrich."));
     return(0);
   }
@@ -780,7 +780,7 @@ PerformOccupancyEnrichment <- function(dataName="", file.nm, fun.type, pval.cuto
   gene.vec <- ent[ok];
   names(gene.vec) <- genes[ok];
   if (length(gene.vec) == 0) {
-    AddErrMsg("None of the occupancy-changed genes could be mapped to Entrez IDs for enrichment.");
+    AddErrMsg("None of the genes with changed modification fractions could be mapped to Entrez IDs for enrichment.");
     return(0);
   }
 

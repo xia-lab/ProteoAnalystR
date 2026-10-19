@@ -637,15 +637,15 @@ GetSelectedKinaseDb <- function() {
     }
   }
 
-  occ.file <- "ptm_occupancy_results.qs"
+  occ.file <- "phospho_adjusted_results.qs"
   if (!file.exists(occ.file) &&
       isTRUE(paramSet$has.protein.ref) && !is.null(paramSet$protein.ref)) {
     tryCatch(DetectPhosphoOccupancyBySite(dataName), error = function(e) NULL)
   }
   if (file.exists(occ.file)) {
     occ <- tryCatch(ov_qs_read(occ.file), error = function(e) NULL)
-    if (!is.null(occ) && all(c("Peptide", "Delta.Occupancy") %in% colnames(occ))) {
-      fc <- suppressWarnings(as.numeric(occ$Delta.Occupancy))
+    if (!is.null(occ) && all(c("Peptide", "Adj.Log2FC") %in% colnames(occ))) {
+      fc <- suppressWarnings(as.numeric(occ$Adj.Log2FC))
       names(fc) <- as.character(occ$Peptide)
       fc <- fc[is.finite(fc)]
       if (length(fc) >= 10) {
@@ -2288,11 +2288,11 @@ PlotCompartmentEnrichment <- function(imgName, dpi = 96, format = "png") {
       Mod.Sig          = tolower(paste0("phospho_", res.k)),
       Precursors.Unmod = 0L,
       Precursors.Mod   = n.mod,
-      Occupancy.Cond1  = round(occ.gA, 3),
-      Occupancy.Cond2  = round(occ.gB, 3),
-      Delta.Occupancy  = round(adj$log2FC[ks], 3),
-      Occ.Pvalue       = signif(adj$pvalue[ks], 3),
-      Occ.FDR          = ifelse(is.finite(fdr), signif(fdr, 3), NA_real_),
+      Log2Ratio.Cond1  = round(occ.gA, 3),
+      Log2Ratio.Cond2  = round(occ.gB, 3),
+      Adj.Log2FC  = round(adj$log2FC[ks], 3),
+      Adj.Pvalue       = signif(adj$pvalue[ks], 3),
+      Adj.FDR          = ifelse(is.finite(fdr), signif(fdr, 3), NA_real_),
       Total.Pvalue     = tot.p,
       Cond1.Label      = grpA,
       Cond2.Label      = grpB,
@@ -2769,10 +2769,10 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
       Mod.Sig          = tolower(paste0("phospho_", res.c)),
       Precursors.Unmod = 0L,
       Precursors.Mod   = n.mod,
-      Occupancy.Cond1  = round(occ.g1, 3),
-      Occupancy.Cond2  = round(occ.g2, 3),
-      Delta.Occupancy  = round(adj.lfc, 3),
-      Occ.Pvalue       = signif(p.occ, 3),
+      Log2Ratio.Cond1  = round(occ.g1, 3),
+      Log2Ratio.Cond2  = round(occ.g2, 3),
+      Adj.Log2FC  = round(adj.lfc, 3),
+      Adj.Pvalue       = signif(p.occ, 3),
       Total.Pvalue     = signif(p.site, 3),
       row.names        = if (anyDuplicated(sid.c)) make.unique(sid.c, sep = "") else sid.c,
       stringsAsFactors = FALSE
@@ -2787,12 +2787,12 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
     )))
   }  # end ProteoAnalyst delta-method branch
 
-  # FDR/labels: the MSstatsPTM engine already supplies per-contrast Occ.FDR and
+  # FDR/labels: the MSstatsPTM engine already supplies per-contrast Adj.FDR and
   # per-row Cond labels (it may span multiple pairwise contrasts). Only compute the
   # single-contrast BH / scalar labels for the ProteoAnalyst delta-method path.
-  if (is.null(results$Occ.FDR))
-    results$Occ.FDR <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
-  results <- results[order(results$Occ.Pvalue), ]
+  if (is.null(results$Adj.FDR))
+    results$Adj.FDR <- signif(p.adjust(results$Adj.Pvalue, method = "BH"), 3)
+  results <- results[order(results$Adj.Pvalue), ]
   if (is.null(results$Cond1.Label)) results$Cond1.Label <- uniq.grp[1]
   if (is.null(results$Cond2.Label)) results$Cond2.Label <- uniq.grp[2]
 
@@ -2810,8 +2810,8 @@ DetectPhosphoOccupancyBySite <- function(dataName, engine = NULL) {
   results$Landscape.Group         <- comp.vec
 
   message("[PhosphoOccupancy] ", nrow(results), " sites with matched protein reference")
-  ov_qs_save(results, "ptm_occupancy_results.qs")
-  fast.write(results,  "ptm_occupancy_results.csv")
+  ov_qs_save(results, "phospho_adjusted_results.qs")
+  fast.write(results,  "phospho_adjusted_results.csv")
 
   msgSet$current.msg <- paste0(
     "Protein-adjusted phosphosite analysis complete. ", nrow(results), " site(s) analyzed.",

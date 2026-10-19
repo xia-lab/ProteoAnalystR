@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### PTM result names (output format change)
+- `DetectPTMOccupancy()` reports the relative modification fraction, not occupancy. It writes
+  `ptm_rmf_results.csv`/`.qs` (was `ptm_occupancy_results`) with `RMF.Cond1`, `RMF.Cond2`, `Delta.RMF`,
+  `RMF.Pvalue` and `RMF.FDR` (were `Occupancy.Cond1`, `Occupancy.Cond2`, `Delta.Occupancy`, `Occ.Pvalue`,
+  `Occ.FDR`). `PerformOccupancyEnrichment()` reads the new file.
+- `DetectPhosphoOccupancyBySite()` writes its own file, `phospho_adjusted_results.csv`/`.qs`, with
+  `Log2Ratio.Cond1`, `Log2Ratio.Cond2` (mean log2 site/protein), `Adj.Log2FC`, `Adj.Pvalue` and `Adj.FDR`.
+  The two analyses used to share a file, so a later phospho fold-change lookup could pick up the
+  modification fractions. Values are unchanged; only the names differ.
+
 ### Protein-list enrichment
 - A protein list is tested as the user says it is, the same way in every Xia Lab tool.
   `SetListEnrichInput()` says whether the list is a significant list or a complete ranked list

@@ -397,7 +397,7 @@
     .pa_line("Adjustment model", "site log2FC - parent-protein log2FC (delta method)"),
     .pa_line("Degrees of freedom", "Satterthwaite approximation"),
     .pa_line("Sites analyzed", n),
-    .pa_line("Columns in results", "Delta.Occupancy = protein-adjusted site log2FC (relative), Occ.Pvalue (raw), Occ.FDR (BH-FDR)"),
+    .pa_line("Columns in results", "Adj.Log2FC = protein-adjusted site log2FC (relative), Adj.Pvalue (raw), Adj.FDR (BH-FDR); Log2Ratio.Cond1/Cond2 = mean log2(site/protein)"),
     .pa_line("Multiple-testing correction", "Benjamini-Hochberg (FDR)"))
 }
 
