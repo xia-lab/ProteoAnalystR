@@ -590,10 +590,15 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
       return(NULL)
     })
     if (is.null(fit2)) return(0)
+    # A fold-change threshold (option ProteoAnalystR.lfc.threshold, log2) is TESTED with treat (H0: |log2FC| <= lfc), so the FDR
+    # holds for it, rather than filtered after the test (McCarthy & Smyth 2009). The omnibus F-test keeps the eBayes fit.
+    lfc <- as.numeric(getOption("ProteoAnalystR.lfc.threshold", 0))
+    fit.c <- if (isTRUE(lfc > 0)) treat(contrasts.fit(fit, contrast.matrix), lfc = lfc, trend = robustTrend, robust = robustTrend) else fit2
 
     result.list <- list()
     for (nm in colnames(contrast.matrix)) {
-      tbl <- topTable(fit2, coef = nm, number = Inf, adjust.method = "fdr")
+      tbl <- if (isTRUE(lfc > 0)) topTable(fit.c, coef = nm, number = Inf, adjust.method = "fdr", sort.by = "P")
+             else topTable(fit.c, coef = nm, number = Inf, adjust.method = "fdr")
       if (!is.null(tbl$ID)) { rownames(tbl) <- tbl$ID; tbl$ID <- NULL; }
       colnames(tbl)[colnames(tbl) == "FDR"] <- "adj.P.Val"
       result.list[[nm]] <- tbl
