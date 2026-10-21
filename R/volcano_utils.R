@@ -315,8 +315,8 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
 
   lib.path <- if (exists("api.lib.path")) api.lib.path else paramSet$lib.path
 
-  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
-  if (!file.exists(loc.path)) loc.path <- paste0(lib.path, org, "/localization.qs")
+  loc.path <- .get.pa.org.lib.path(lib.path, org, paste0(org, "_localization.qs"))
+  if (!file.exists(loc.path)) loc.path <- .get.pa.org.lib.path(lib.path, org, "localization.qs")
   if (!file.exists(loc.path)) {
     diag.log("[VolcanoCompartment] localization file missing for org=", org, "; lib.path=", lib.path)
     return(list(compartment=comp.map, raw=raw.map))

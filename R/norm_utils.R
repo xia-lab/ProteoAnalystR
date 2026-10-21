@@ -4121,8 +4121,8 @@ ptm.extract.bio.mods <- function(seq) {
     gene.entrez[[i]] <- unique(na.omit(sym.to.entrez[toupper(gene.tokens)]))
   }
 
-  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
-  if (!file.exists(loc.path)) loc.path <- paste0(lib.path, org, "/localization.qs")
+  loc.path <- .get.pa.org.lib.path(lib.path, org, paste0(org, "_localization.qs"))
+  if (!file.exists(loc.path)) loc.path <- .get.pa.org.lib.path(lib.path, org, "localization.qs")
   if (!file.exists(loc.path)) {
     results$Landscape.Group <- results$Parent.Compartment
     return(results)
