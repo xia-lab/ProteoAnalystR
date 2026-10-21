@@ -405,7 +405,7 @@ CorrIgraph2SigmaJS <- function(g,
   missing.cats <- node.categories == "Unknown"
   if (any(missing.cats)) {
     org <- if (!is.null(paramSet$data.org) && nzchar(paramSet$data.org)) paramSet$data.org else "hsa"
-    loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+    loc.path <- .get.pa.org.lib.path(paramSet$lib.path, org, paste0(org, "_localization.qs"))
     if (file.exists(loc.path)) {
       tryCatch({
         loc.data <- ov_qs_read(loc.path)

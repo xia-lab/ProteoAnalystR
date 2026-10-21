@@ -707,7 +707,7 @@ ExtractModule<- function(nodeids, type="enr"){
   missing.category <- is.na(category) | !nzchar(category) | category == "Unknown"
   missing.location <- is.na(main.loc) | !nzchar(main.loc) | main.loc == "Unknown"
   if (any(missing.category) || any(missing.location)) {
-    loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+    loc.path <- .get.pa.org.lib.path(paramSet$lib.path, org, paste0(org, "_localization.qs"))
     if (file.exists(loc.path)) {
       loc.data <- ov_qs_read(loc.path)
       loc.map <- loc.data[match(as.character(V(g)$entrez), as.character(loc.data$EntrezID)), ]
@@ -1233,7 +1233,7 @@ PrepareLocalizationNetwork <- function(fileName = "localization_network",
   # print(paste("org====", org));
 
   # Load localization data
-  loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+  loc.path <- .get.pa.org.lib.path(paramSet$lib.path, org, paste0(org, "_localization.qs"))
   if (!file.exists(loc.path)) {
     AddErrMsg(paste0("Localization data not found for organism: ", org))
     return(0)

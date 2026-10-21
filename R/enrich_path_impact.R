@@ -92,8 +92,8 @@
 }
 
 .loadPathwayLocalization <- function(org, lib.path) {
-  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
-  if (!file.exists(loc.path)) loc.path <- paste0(lib.path, org, "/localization.qs")
+  loc.path <- .get.pa.org.lib.path(lib.path, org, paste0(org, "_localization.qs"))
+  if (!file.exists(loc.path)) loc.path <- .get.pa.org.lib.path(lib.path, org, "localization.qs")
   if (!file.exists(loc.path)) return(NULL)
 
   loc <- try(ov_qs_read(loc.path), silent = TRUE)
@@ -761,8 +761,8 @@ GetEnzymeHitsCompartmentsJson <- function(pathwayQuery) {
   entrez.ids <- as.character(entrez.ids)[valid]
 
   lib.path <- if (exists("api.lib.path")) api.lib.path else paramSet$lib.path
-  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
-  if (!file.exists(loc.path)) loc.path <- paste0(lib.path, org, "/localization.qs")
+  loc.path <- .get.pa.org.lib.path(lib.path, org, paste0(org, "_localization.qs"))
+  if (!file.exists(loc.path)) loc.path <- .get.pa.org.lib.path(lib.path, org, "localization.qs")
   if (!file.exists(loc.path)) return("{}")
 
   loc.data <- try(ov_qs_read(loc.path), silent = TRUE)

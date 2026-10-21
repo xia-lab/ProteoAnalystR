@@ -447,7 +447,7 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     lib.path <- paramSet$lib.path;
   }
 
-  my.path <- paste(lib.path, folderNm, "/", fun.type, ".rds", sep="");
+  my.path <- .get.pa.org.lib.path(lib.path, folderNm, paste0(fun.type, ".rds"));
   if(!paramSet$on.public.web && !file.exists(platform.path)){
     nmdb <- basename(my.path);
     download.file(my.path, destfile = nmdb, method="libcurl", mode = "wb");
@@ -613,7 +613,7 @@ PlotGSViewNew <-function(cmpdNm, format="png", dpi=96, imgName){
     return(get(cache.key, envir = .GlobalEnv))
 
   lib.path <- if (exists("api.lib.path")) api.lib.path else paramSet$lib.path
-  loc.path <- paste0(lib.path, org, "/", org, "_localization.qs")
+  loc.path <- .get.pa.org.lib.path(lib.path, org, paste0(org, "_localization.qs"))
   if (!file.exists(loc.path)) {
     AddErrMsg(paste0("[CompartmentLib] Localization file not found: ", loc.path))
     return(0)

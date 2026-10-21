@@ -356,7 +356,7 @@ SearchNetDB <- function(dummy = NA, dbType = "ppi", dbName = "NA", requireExp = 
     org <- "hsa"
   }
 
-  loc.path <- paste0(paramSet$lib.path, org, "/localization.qs")
+  loc.path <- .get.pa.org.lib.path(paramSet$lib.path, org, "localization.qs")
   loc.data <- if (file.exists(loc.path)) ov_qs_read(loc.path) else NULL
 
   msg(sprintf("[PPI] Querying %s in %s mode with %d seeds (min.score=%s, order=%s)",
@@ -737,7 +737,7 @@ CreateGraph <- function(dummy = NA) {
 
   # Add compartment/localization information as vertex attributes
   # This preserves compartment data for extracted modules
-  loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+  loc.path <- .get.pa.org.lib.path(paramSet$lib.path, org, paste0(org, "_localization.qs"))
 
   if (file.exists(loc.path)) {
     msg(sprintf("[CreateGraph] Loading localization data from: %s\n", loc.path))
@@ -1012,7 +1012,7 @@ PrepareNetwork <- function(net.nm, json.nm) {
 
   # Load localization data for compartment assignment. Localization tables use
   # Entrez IDs, even when the graph itself uses UniProt vertex names.
-  loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+  loc.path <- .get.pa.org.lib.path(paramSet$lib.path, org, paste0(org, "_localization.qs"))
 
   node.labels <- tryCatch({
     doEntrez2SymbolMapping(graph.ids$entrez, org, "entrez")

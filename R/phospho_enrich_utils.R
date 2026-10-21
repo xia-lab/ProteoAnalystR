@@ -1393,7 +1393,7 @@ GetMotifEnrichmentJSON <- function(jsonNm) {
   if (is.null(protein.ids) || length(protein.ids) == 0) return(result)
 
   org <- if (!is.null(paramSet$data.org) && nzchar(paramSet$data.org)) paramSet$data.org else "hsa"
-  loc.path <- paste0(paramSet$lib.path, org, "/", org, "_localization.qs")
+  loc.path <- .get.pa.org.lib.path(paramSet$lib.path, org, paste0(org, "_localization.qs"))
   if (!file.exists(loc.path)) return(result)
   loc <- tryCatch(ov_qs_read(loc.path), error = function(e) NULL)
   if (is.null(loc) || !all(c("EntrezID", "Broad.category") %in% colnames(loc))) return(result)
