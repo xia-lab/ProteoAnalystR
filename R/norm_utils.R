@@ -31,7 +31,8 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
 
   # Any prior protein-adjusted result was derived from a different normalized
   # matrix and must not be reused after normalization is rerun.
-  unlink(c("ptm_occupancy_results.qs", "ptm_occupancy_results.csv"))
+  unlink(c("ptm_rmf_results.qs", "ptm_rmf_results.csv",
+           "phospho_adjusted_results.qs", "phospho_adjusted_results.csv"))
 
   #msg("[Norm] PerformNormalization start data=", dataName, " type=", dataSet$type, " norm.opt=", norm.opt,
   #        " var.thresh=", var.thresh, " count.thresh=", count.thresh, " filterUnmapped=", filterUnmapped)
@@ -234,7 +235,8 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
           if (ncol(data) > 0) {
             df <- as.data.frame(data)
             df$Protein <- rownames(data)
-            df <- stats::aggregate(. ~ Protein, data = df, FUN = function(x) mean(x, na.rm = TRUE))
+            df <- stats::aggregate(. ~ Protein, data = df, na.action = na.pass,
+                                  FUN = function(x) if (all(is.na(x))) x[NA_integer_] else mean(x, na.rm = TRUE))
             rownames(df) <- df$Protein
             df$Protein <- NULL
             data <- as.matrix(df)
@@ -3147,6 +3149,28 @@ ApplyFragpipePhosphoFiltering <- function(data, removeContaminants = TRUE, minPr
   list(prec.df = prec.df, group.mode = group.mode)
 }
 
+# Unmodified peptide sequence of each precursor. Uses Stripped.Sequence when the
+# reader kept it; otherwise strips modifications and the trailing charge from a
+# DIA-NN-style precursor id, e.g. "(UniMod:1)AAAPSGGK3" -> "AAAPSGGK". Ids of any
+# other shape are kept as-is, so each such precursor counts as its own sequence.
+.proteoform_stripped_seq <- function(prec.df) {
+  seq <- if ("Stripped.Sequence" %in% names(prec.df)) as.character(prec.df$Stripped.Sequence) else rep(NA_character_, nrow(prec.df))
+  miss <- is.na(seq) | seq == ""
+  if (any(miss)) {
+    ids <- as.character(prec.df$Protein.IDs[miss])
+    bare <- gsub("\\([^)]*\\)|\\[[^]]*\\]", "", ids)
+    looks.precursor <- grepl("^_?[A-Z]+_?\\.?[0-9]{1,2}$", bare)
+    seq[miss] <- ifelse(looks.precursor, gsub("[^A-Z]", "", bare), ids)
+  }
+  seq
+}
+
+# Number of distinct peptide sequences: charge states and modified forms of one
+# sequence count once.
+.proteoform_distinct_peptides <- function(seqs) {
+  length(unique(seqs[!is.na(seqs) & seqs != ""]))
+}
+
 .proteoform_plot_group <- function(dataSet, meta.info, samples) {
   if (!is.null(meta.info) && !is.null(rownames(meta.info))) {
     analysis.var <- dataSet$analysisVar
@@ -3464,13 +3488,18 @@ DetectProteoformAnalysis <- function(dataName) {
   records <- list()
   ratio.rows <- list()
   total.rows <- list()
+  # Evidence gate counts distinct peptide sequences, not precursors: two charge
+  # states of one peptide are one piece of evidence (see .proteoform_distinct_peptides).
   min.peptides.per.isoform <- 2L
+  prec.df$seq <- .proteoform_stripped_seq(prec.df)
 
   for (grp in multi.groups) {
     isoforms <- group.isoforms[[grp]]
     pep.counts <- sapply(isoforms, function(iso)
+      .proteoform_distinct_peptides(prec.df$seq[prec.df$group.key == grp & prec.df$clean.prot == iso]))
+    prec.counts <- sapply(isoforms, function(iso)
       sum(prec.df$group.key == grp & prec.df$clean.prot == iso))
-    isoforms <- isoforms[order(pep.counts, decreasing = TRUE)]
+    isoforms <- isoforms[order(pep.counts, prec.counts, decreasing = TRUE)]
     eligible.isoforms <- isoforms[pep.counts[isoforms] >= min.peptides.per.isoform]
     if (length(eligible.isoforms) < 2) next
 
@@ -3518,6 +3547,8 @@ DetectProteoformAnalysis <- function(dataName) {
           Transcript.B = get.ta(grp, isoB),
           Peptides.A = unname(pep.counts[isoA]),
           Peptides.B = unname(pep.counts[isoB]),
+          Precursors.A = unname(prec.counts[isoA]),
+          Precursors.B = unname(prec.counts[isoB]),
           LogRatio.Cond1 = mean_for(log.ratio, ctx$cond1.label),
           LogRatio.Cond2 = mean_for(log.ratio, ctx$cond2.label)
         )
@@ -3530,7 +3561,7 @@ DetectProteoformAnalysis <- function(dataName) {
   if (length(ratio.rows) == 0)
     return(fail(paste0(
       "Insufficient data for isoform usage analysis after requiring >= ",
-      min.peptides.per.isoform, " proteotypic peptides per isoform."
+      min.peptides.per.isoform, " distinct proteotypic peptide sequences per isoform."
     )))
 
   ratio.mat <- do.call(rbind, ratio.rows)
@@ -3565,6 +3596,8 @@ DetectProteoformAnalysis <- function(dataName) {
       Transcript.B = rec$Transcript.B,
       Peptides.A = rec$Peptides.A,
       Peptides.B = rec$Peptides.B,
+      Precursors.A = rec$Precursors.A,
+      Precursors.B = rec$Precursors.B,
       LogRatio.Cond1 = rec$LogRatio.Cond1,
       LogRatio.Cond2 = rec$LogRatio.Cond2,
       Delta.LogRatio = ratio.tbl[id, "logFC"],
@@ -3614,7 +3647,7 @@ DetectProteoformAnalysis <- function(dataName) {
   result.cols <- c("Gene", "Comparison", "Isoform.Group", "Isoform.Count",
                    "Omnibus.F", "Omnibus.Pvalue", "Omnibus.FDR",
                    "Isoform.A", "Transcript.A", "Isoform.B", "Transcript.B",
-                   "Peptides.A", "Peptides.B", "LogRatio.Cond1", "LogRatio.Cond2",
+                   "Peptides.A", "Peptides.B", "Precursors.A", "Precursors.B", "LogRatio.Cond1", "LogRatio.Cond2",
                    "Delta.LogRatio", "Ratio.Pvalue", "Ratio.FDR",
                    "Total.LogFC", "Total.Pvalue", "Is.Switch")
   results <- results[, result.cols[result.cols %in% names(results)], drop = FALSE]
@@ -3627,7 +3660,7 @@ DetectProteoformAnalysis <- function(dataName) {
   msgSet$current.msg <- paste0(
     "Detected ", nrow(results), " isoform pair(s) across ",
     length(unique(results$Isoform.Group)), " gene/protein group(s) with >= ",
-    min.peptides.per.isoform, " proteotypic peptides per isoform. ANOVA tests gene-level isoform usage; pairwise contrasts are post-hoc. Design: ",
+    min.peptides.per.isoform, " distinct proteotypic peptide sequences per isoform. ANOVA tests gene-level isoform usage; pairwise contrasts are post-hoc. Design: ",
     ctx$mode, " (", ctx$contrast.name, ")."
   )
   saveSet(msgSet, "msgSet")
@@ -4214,12 +4247,12 @@ DetectPTMOccupancy <- function(dataName) {
     if (!has.annot)
       return(fail(paste0(
         "This peptide table reports stripped sequences only - it contains no modification ",
-        "annotations, so PTM occupancy cannot be computed from it. Upload a format that ",
+        "annotations, so the relative modification fraction cannot be computed from it. Upload a format that ",
         "includes modified peptide sequences, e.g. a DIA-NN precursor report (report.tsv or ",
         "pr_matrix with a Modified.Sequence column) or an equivalent modified-sequence export.")))
     return(fail(paste0(
       "Modification annotations were found, but none remained after excluding fixed ",
-      "modifications (e.g. carbamidomethyl). PTM occupancy requires variable modifications ",
+      "modifications (e.g. carbamidomethyl). The relative modification fraction requires variable modifications ",
       "(e.g. phosphorylation, oxidation, acetylation) on quantified precursors.")))
   }
 
@@ -4270,7 +4303,7 @@ DetectPTMOccupancy <- function(dataName) {
   if (length(seqs.with.both) == 0)
     return(fail(paste0(
       "No peptide sequences found with both modified and unmodified precursors. ",
-      "PTM occupancy requires both forms to be quantified in the same run."
+      "The relative modification fraction requires both forms to be quantified in the same run."
     )))
 
   mod.sigs.by.seq <- split(
@@ -4295,7 +4328,7 @@ DetectPTMOccupancy <- function(dataName) {
   }
   if (length(pair.list) == 0)
     return(fail(paste0(
-      "Insufficient data for PTM occupancy analysis. ",
+      "Insufficient data for relative modification fraction analysis. ",
       "Need \u22652 samples with both modified and unmodified forms detected per condition."
     )))
 
@@ -4334,36 +4367,36 @@ DetectPTMOccupancy <- function(dataName) {
       Mod.Sig          = pr$sig,
       Precursors.Unmod = as.integer(prec.count[paste0(pr$sq, "___unmodified")]),
       Precursors.Mod   = as.integer(prec.count[paste0(pr$sq, "___", pr$sig)]),
-      Occupancy.Cond1  = round(mean(valid.g1), 3),
-      Occupancy.Cond2  = round(mean(valid.g2), 3),
-      Delta.Occupancy  = round(mean(valid.g2) - mean(valid.g1), 3),
-      Occ.Pvalue       = signif(occ.p[i], 3),
+      RMF.Cond1  = round(mean(valid.g1), 3),
+      RMF.Cond2  = round(mean(valid.g2), 3),
+      Delta.RMF  = round(mean(valid.g2) - mean(valid.g1), 3),
+      RMF.Pvalue       = signif(occ.p[i], 3),
       Total.Pvalue     = if (!is.na(tot.p[i])) signif(tot.p[i], 3) else NA_real_,
       Total.LogFC      = round(mean(pr$total.log[g2.idx], na.rm = TRUE) -
                                mean(pr$total.log[g1.idx], na.rm = TRUE), 3),
       stringsAsFactors = FALSE
     )
   }))
-  results <- results[!is.na(results$Occ.Pvalue), , drop = FALSE]
+  results <- results[!is.na(results$RMF.Pvalue), , drop = FALSE]
   if (nrow(results) == 0)
     return(fail(paste0(
-      "Insufficient data for PTM occupancy analysis. ",
+      "Insufficient data for relative modification fraction analysis. ",
       "Need \u22652 samples with both modified and unmodified forms detected per condition."
     )))
 
-  results$Occ.FDR <- signif(p.adjust(results$Occ.Pvalue, method = "BH"), 3)
-  results <- results[order(results$Occ.Pvalue), ]
+  results$RMF.FDR <- signif(p.adjust(results$RMF.Pvalue, method = "BH"), 3)
+  results <- results[order(results$RMF.Pvalue), ]
   results$Cond1.Label <- unique.groups[1]
   results$Cond2.Label <- unique.groups[2]
   paramSet <- readSet(paramSet, "paramSet")
   results <- .ptmAnnotateOccupancyCompartments(results, paramSet$data.org, paramSet$lib.path)
 
   message("[PTMOccupancy] Final results: ", nrow(results), " pairs")
-  ov_qs_save(results, "ptm_occupancy_results.qs")
-  fast.write(results, "ptm_occupancy_results.csv")
+  ov_qs_save(results, "ptm_rmf_results.qs")
+  fast.write(results, "ptm_rmf_results.csv")
 
   msgSet$current.msg <- paste0(
-    "Analyzed PTM occupancy for ", nrow(results), " peptide-modification pair(s)."
+    "Computed relative modification fractions for ", nrow(results), " peptide-modification pair(s)."
   )
   saveSet(msgSet, "msgSet")
   message("[PTMOccupancy] Done. Returning ", nrow(results))
@@ -4459,7 +4492,7 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
       plot.title       = element_text(size = 11, hjust = 0.5),
       plot.subtitle    = element_text(size = 9,  hjust = 0.5, color = "#666666")
     ) +
-    ylab("Modification Occupancy") +
+    ylab("Relative modification fraction") +
     ggtitle(trunc.seq, subtitle = mod.label)
 
   imgName <- paste0(imageName, "dpi", dpi, ".", format)
@@ -4472,7 +4505,7 @@ PlotPTMOccupancyProfile <- function(dataName, imageName, peptide, modSig,
 PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
   require(ggplot2)
 
-  res <- ov_qs_read("ptm_occupancy_results.qs")
+  res <- ov_qs_read("ptm_rmf_results.qs")
   if (is.null(res) || nrow(res) == 0) return(invisible(0))
 
   cond1.lbl <- if ("Cond1.Label" %in% names(res)) res$Cond1.Label[1] else "Cond1"
@@ -4485,9 +4518,9 @@ PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
     data.frame(
       Modification = mod,
       Tested       = nrow(sub),
-      Median.Occ   = median(c(as.numeric(sub$Occupancy.Cond1),
-                               as.numeric(sub$Occupancy.Cond2)), na.rm = TRUE),
-      Best.FDR     = min(as.numeric(sub$Occ.FDR), na.rm = TRUE),
+      Median.Occ   = median(c(as.numeric(sub$RMF.Cond1),
+                               as.numeric(sub$RMF.Cond2)), na.rm = TRUE),
+      Best.FDR     = min(as.numeric(sub$RMF.FDR), na.rm = TRUE),
       stringsAsFactors = FALSE
     )
   }))
@@ -4499,11 +4532,11 @@ PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
   # Long form: one row per feature per condition
   df_long <- rbind(
     data.frame(Modification = res$Modification,
-               Occupancy    = as.numeric(res$Occupancy.Cond1),
+               Occupancy    = as.numeric(res$RMF.Cond1),
                Condition    = cond1.lbl,
                stringsAsFactors = FALSE),
     data.frame(Modification = res$Modification,
-               Occupancy    = as.numeric(res$Occupancy.Cond2),
+               Occupancy    = as.numeric(res$RMF.Cond2),
                Condition    = cond2.lbl,
                stringsAsFactors = FALSE)
   )
@@ -4532,7 +4565,7 @@ PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
     scale_y_continuous(labels = function(x) sprintf("%.0f%%", x * 100),
                        limits = c(0, 1.08), expand = c(0, 0)) +
     coord_flip() +
-    labs(x = NULL, y = "Occupancy",
+    labs(x = NULL, y = "Relative modification fraction",
          caption = "\u25c6 median   * FDR \u2264 0.05   ** FDR \u2264 0.01") +
     theme_bw(base_size = 10) +
     theme(
@@ -4556,7 +4589,7 @@ PlotPTMOccupancyLandscape <- function(imageName, format = "png", dpi = 96) {
 }
 
 PrepPTMOccupancyVolcano <- function(dataName, fileNm) {
-  res <- ov_qs_read("ptm_occupancy_results.qs")
+  res <- ov_qs_read("ptm_rmf_results.qs")
   if (is.null(res) || nrow(res) == 0) {
     message("[PTMVolcano] No PTM occupancy results found")
     return(invisible(0))
@@ -4564,12 +4597,12 @@ PrepPTMOccupancyVolcano <- function(dataName, fileNm) {
 
   res$label <- make.unique(paste0(res$Gene, " [", res$Modification, "]"))
 
-  delta  <- setNames(as.list(res$Delta.Occupancy), res$label)
-  p.log  <- setNames(as.list(-log10(pmax(res$Occ.FDR, 1e-300))), res$label)
-  inx.up   <- !is.na(res$Delta.Occupancy) & !is.na(res$Occ.FDR) &
-               res$Delta.Occupancy > 0.1 & res$Occ.FDR < 0.05
-  inx.down <- !is.na(res$Delta.Occupancy) & !is.na(res$Occ.FDR) &
-               res$Delta.Occupancy < -0.1 & res$Occ.FDR < 0.05
+  delta  <- setNames(as.list(res$Delta.RMF), res$label)
+  p.log  <- setNames(as.list(-log10(pmax(res$RMF.FDR, 1e-300))), res$label)
+  inx.up   <- !is.na(res$Delta.RMF) & !is.na(res$RMF.FDR) &
+               res$Delta.RMF > 0.1 & res$RMF.FDR < 0.05
+  inx.down <- !is.na(res$Delta.RMF) & !is.na(res$RMF.FDR) &
+               res$Delta.RMF < -0.1 & res$RMF.FDR < 0.05
   inx.p    <- inx.up | inx.down
 
   sig.up.ids   <- res$label[inx.up]
@@ -4582,7 +4615,7 @@ PrepPTMOccupancyVolcano <- function(dataName, fileNm) {
     fc.log     = delta,
     fc.log.uniq = delta,
     p.log      = p.log,
-    p.raw      = setNames(as.list(res$Occ.FDR), res$label),
+    p.raw      = setNames(as.list(res$RMF.FDR), res$label),
     inx.up     = setNames(as.list(inx.up),   res$label),
     inx.down   = setNames(as.list(inx.down), res$label),
     inx.p      = setNames(as.list(inx.p),    res$label),
@@ -4596,7 +4629,7 @@ PrepPTMOccupancyVolcano <- function(dataName, fileNm) {
     fc.symb     = res$label,
     analType    = "ptm_occupancy",
     org         = paramSet$data.org,
-    naviString  = "PTM Occupancy Volcano"
+    naviString  = "Modification Fraction Volcano"
   )
 
   json.path <- paste0(fileNm, ".json")

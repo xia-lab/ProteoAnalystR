@@ -229,7 +229,9 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
     }
   } else if (proteinRefFile != "" && file.exists(proteinRefFile)) {
     #msg("[ReadPhosphoData] Loading global proteome reference file: ", proteinRefFile)
-    protein_data <- if (identical(dataFormat, "diann")) {
+    ref_header <- tryCatch(colnames(data.table::fread(proteinRefFile, nrows = 0, check.names = FALSE)),
+                           error = function(e) character(0))
+    protein_data <- if (identical(dataFormat, "diann") || "Protein.Group" %in% ref_header) {
       .readDIANNProteome(proteinRefFile, colnames(int.mat))
     } else {
       .readMaxQuantProteome(proteinRefFile, colnames(int.mat))
@@ -779,13 +781,20 @@ ReadPhosphoData <- function(fileName, metafileName, phosphoLocProb = 0, dataForm
   }
   intensity_mat <- intensity_mat[, keep_cols, drop = FALSE]
 
-  common_samples <- intersect(colnames(intensity_mat), phospho_samples)
-  if (length(common_samples) == 0) {
+  # DIA-NN pg_matrix headers are usually full raw-file paths (e.g. D:\runs\S1.raw),
+  # while report.tsv Run values are bare run names; match on path/extension-stripped keys.
+  .runKey <- function(x) {
+    x <- sub(".*[\\\\/]", "", x)
+    sub("\\.(raw|d|mzml|wiff|wiff2|dia|mzxml)$", "", x, ignore.case = TRUE)
+  }
+  ref_idx <- match(.runKey(phospho_samples), .runKey(colnames(intensity_mat)))
+  keep <- !is.na(ref_idx)
+  if (!any(keep)) {
     return(NULL)
   }
 
-  phospho_order <- phospho_samples[phospho_samples %in% common_samples]
-  intensity_mat <- intensity_mat[, phospho_order, drop = FALSE]
+  intensity_mat <- intensity_mat[, ref_idx[keep], drop = FALSE]
+  colnames(intensity_mat) <- phospho_samples[keep]
   intensity_mat[intensity_mat == 0] <- NA
   intensity_mat <- log2(intensity_mat)
 
@@ -1450,12 +1459,16 @@ MapPhosphositeUniprotToSymbol <- function() {
       agg_df$site_id <- site_ids
       
       # Aggregate intensities
-      final_intens <- aggregate(. ~ site_id, data = agg_df, FUN = mean, na.rm = TRUE)
-      
+      # na.pass: the formula default (na.omit) would drop every row with any NA
+      # before averaging; average non-NA values per column instead.
+      final_intens <- aggregate(. ~ site_id, data = agg_df, FUN = mean, na.rm = TRUE,
+                                na.action = na.pass)
+
       rownames(final_intens) <- final_intens$site_id
       final_intens$site_id <- NULL
       int.mat <- as.matrix(final_intens)
-      
+      int.mat[is.nan(int.mat)] <- NA  # all-NA group -> NA, not NaN
+
       # Re-align site_ids after aggregation
       site_ids <- rownames(int.mat)
   } else {

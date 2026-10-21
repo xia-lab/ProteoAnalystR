@@ -154,14 +154,102 @@
 #' @export
 #' @license MIT License
 
+.toolFormatLabels <- c(maxquant = "MaxQuant", diann = "DIA-NN", fragpipe = "FragPipe",
+                       spectronaut = "Spectronaut", skyline = "Skyline")
+
+# Identify which search tool exported a table from its header alone, so a file
+# uploaded on the wrong tab can be reported as such instead of failing deep
+# inside the reader. Returns list(formats, evidence) - formats is a character
+# vector of matching tool keys (empty when nothing is recognised) and evidence
+# maps each key to the header columns that identified it.
+.sniffToolFormat <- function(filePath) {
+  cols <- tryCatch(names(data.table::fread(filePath, nrows = 0, header = TRUE,
+                                           check.names = FALSE, showProgress = FALSE)),
+                   error = function(e) NULL)
+  if (length(cols) == 0) return(list(formats = character(0), evidence = list()))
+  key <- gsub("[^a-z0-9]", "", tolower(cols))
+  ev <- list()
+
+  # Spectronaut: R./PG./PEP./EG./FG./F. prefixed columns, or wide pivot
+  # quantities such as "[1] run.htrms.PG.Quantity"
+  spec.named <- cols[cols %in% c("PG.ProteinAccessions", "PG.ProteinGroups", "PG.ProteinNames",
+                                 "PG.Genes", "R.FileName", "R.Condition", "EG.ModifiedSequence",
+                                 "EG.PrecursorId", "FG.Quantity", "F.PeakArea", "PG.Quantity",
+                                 "PEP.StrippedSequence")]
+  spec.wide <- grep("\\.(PG|PEP|EG|FG)\\.(Quantity|MS1Quantity|MS2Quantity|TotalQuantity)", cols, value = TRUE)
+  if (length(spec.named) >= 2 || length(spec.wide) > 0) ev$spectronaut <- c(spec.named, spec.wide)
+
+  # DIA-NN: Protein.Group/Protein.Ids plus one of its other dotted columns
+  di.id <- cols[cols %in% c("Protein.Group", "Protein.Ids")]
+  di.other <- cols[cols %in% c("Protein.Names", "Genes", "First.Protein.Description",
+                               "Precursor.Id", "Stripped.Sequence", "Modified.Sequence")]
+  if (length(di.id) > 0 && length(di.other) > 0) ev$diann <- c(di.id, di.other)
+
+  # MaxQuant: space-separated proteinGroups/evidence/peptides columns
+  mq <- c(cols[cols %in% c("Protein IDs", "Majority protein IDs", "Majority.protein.IDs",
+                           "Raw file", "Leading razor protein")],
+          grep("^LFQ[ .]intensity[ .]", cols, value = TRUE))
+  if (length(mq) > 0) ev$maxquant <- mq
+
+  # FragPipe: combined_protein / combined_peptide tables
+  fp <- c(cols[cols %in% c("Protein ID", "Entry Name", "Combined Total Peptides",
+                           "Combined Spectral Count", "Protein Probability")],
+          grep(" MaxLFQ Intensity$", cols, value = TRUE))
+  if (length(fp) > 0) ev$fragpipe <- fp
+
+  # Skyline MSstats-style transition report
+  if (all(c("proteinname", "peptidemodifiedsequence") %in% key) &&
+      any(c("filename", "replicatename") %in% key) && any(c("area", "totalarea") %in% key)) {
+    ev$skyline <- cols[key %in% c("proteinname", "peptidemodifiedsequence")]
+  }
+
+  list(formats = names(ev), evidence = ev)
+}
+
+# Message for a file whose header belongs to a different tool than the
+# selected upload tab; NULL when the header is consistent or unrecognised.
+.wrongTabMessage <- function(filePath, dataFormat) {
+  sniff <- .sniffToolFormat(filePath)
+  if (length(sniff$formats) == 0 || dataFormat %in% sniff$formats) return(NULL)
+  # The Skyline tab is not offered in the UI, so do not point users at it
+  other <- setdiff(sniff$formats, "skyline")
+  if (length(other) == 0) return(NULL)
+  detected <- other[1]
+  shown <- head(unique(sniff$evidence[[detected]]), 3)
+  selected <- if (dataFormat %in% names(.toolFormatLabels)) .toolFormatLabels[[dataFormat]] else "Generic Tables"
+  paste0("This file looks like a ", .toolFormatLabels[[detected]], " export (columns such as ",
+         paste(shown, collapse = ", "), "), but it was uploaded on the ", selected,
+         " tab. Please upload it on the ", .toolFormatLabels[[detected]], " Outputs tab instead.")
+}
+
+# Java shows only the first element of current.msg, so an upload error must
+# replace earlier (info) messages rather than be appended after them.
+.setUploadErrMsg <- function(msg) {
+  msgSet <- readSet(msgSet, "msgSet")
+  msgSet$current.msg <- msg
+  saveSet(msgSet, "msgSet")
+  message("[ERROR] ", msg)
+}
+
 ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneDataAnalType="default", path="", dataFormat="default") {
   try(RecordRCommand(paste0("ReadTabExpressData(\"", fileName, "\")")), silent = TRUE)
   #msg("[ReadTabExpressData] start file=", fileName, " metaContain=", metaContain, " path=", path, " dataFormat=", dataFormat)
-  is.maxquant <- dataFormat == "maxquant" || grepl("proteinGroups", fileName, ignore.case = TRUE)
-  is.fragpipe <- dataFormat == "fragpipe" || grepl("fragpipe", fileName, ignore.case = TRUE) || grepl("fragpipe", metafileName, ignore.case = TRUE)
-  is.diann <- dataFormat == "diann" || grepl("diann", fileName, ignore.case = TRUE) || grepl("diann", metafileName, ignore.case = TRUE)
-  is.spectronaut <- dataFormat == "spectronaut" || grepl("spectronaut", fileName, ignore.case = TRUE)
-  is.skyline <- dataFormat == "skyline" || grepl("skyline", fileName, ignore.case = TRUE) || grepl("skyline", metafileName, ignore.case = TRUE)
+  # An explicit tool tab wins over file-name guessing: a Spectronaut report that
+  # happens to be named "diann_..." must not be routed to the DIA-NN reader.
+  tool.tab <- dataFormat %in% names(.toolFormatLabels)
+  if (tool.tab) {
+    wrong.tab <- .wrongTabMessage(paste0(path, fileName), dataFormat)
+    if (!is.null(wrong.tab)) {
+      .setUploadErrMsg(wrong.tab)
+      return(0)
+    }
+  }
+  n.msg.before <- length(readSet(msgSet, "msgSet")$current.msg)
+  is.maxquant <- dataFormat == "maxquant" || (!tool.tab && grepl("proteinGroups", fileName, ignore.case = TRUE))
+  is.fragpipe <- dataFormat == "fragpipe" || (!tool.tab && (grepl("fragpipe", fileName, ignore.case = TRUE) || grepl("fragpipe", metafileName, ignore.case = TRUE)))
+  is.diann <- dataFormat == "diann" || (!tool.tab && (grepl("diann", fileName, ignore.case = TRUE) || grepl("diann", metafileName, ignore.case = TRUE)))
+  is.spectronaut <- dataFormat == "spectronaut" || (!tool.tab && grepl("spectronaut", fileName, ignore.case = TRUE))
+  is.skyline <- dataFormat == "skyline" || (!tool.tab && (grepl("skyline", fileName, ignore.case = TRUE) || grepl("skyline", metafileName, ignore.case = TRUE)))
 
   if (is.maxquant) {
     #msg("[ReadTabExpressData] MaxQuant format detected")
@@ -224,6 +312,14 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     dataSet <- .readTabData(paste0(path, fileName));
   }
   if(is.null(dataSet)){
+    # Several readers return NULL without explaining why; never leave the user
+    # with an empty error box.
+    if (length(readSet(msgSet, "msgSet")$current.msg) <= n.msg.before) {
+      fmt.label <- if (tool.tab) .toolFormatLabels[[dataFormat]] else "a data table"
+      .setUploadErrMsg(paste0("Could not read this file as ", fmt.label,
+                              if (tool.tab) " output" else "",
+                              ". Please check that you uploaded the right file on the right tab."))
+    }
     return(0);
   }  
   datOrig <- dataSet$data_orig;
@@ -1883,6 +1979,16 @@ SetSpectronautOptions <- function(inputType = "peptide", featureLevel = "fragmen
     #msg("[.readMetaData] smpl_nms to match: ", paste(head(smpl_nms), collapse=", "))
     
     hit.inx <- match(smpl_nms, mydata$`#NAME`)
+    if (anyNA(hit.inx) && is.character(mydata$`#NAME`)) {
+      # Spectronaut pivot headers ("[1] run.htrms.PG.Quantity") are read as the
+      # bare run name; accept metadata written with either form.
+      alt.hit <- match(smpl_nms, .cleanSpectronautRunName(mydata$`#NAME`))
+      fix <- is.na(hit.inx) & !is.na(alt.hit)
+      if (any(fix)) {
+        mydata$`#NAME`[alt.hit[fix]] <- smpl_nms[fix]
+        hit.inx <- match(smpl_nms, mydata$`#NAME`)
+      }
+    }
     #msg("[.readMetaData] hit.inx: ", paste(head(hit.inx), collapse=", "))
 
     miss.meta <- is.na(hit.inx)
@@ -2620,7 +2726,9 @@ GetAnalysisType <- function(){
       #msg('[DIA-NN] Found ', n.dup, ' duplicate protein IDs after splitting; aggregating by sum')
       intens.df <- as.data.frame(intens)
       intens.df$Protein <- protein.ids
-      intens.agg <- stats::aggregate(. ~ Protein, data = intens.df, FUN = sum, na.rm = TRUE)
+      # na.pass keeps rows with any NA (na.omit dropped them); an all-NA group stays NA
+      intens.agg <- stats::aggregate(. ~ Protein, data = intens.df, na.action = na.pass,
+                                     FUN = function(x) if (all(is.na(x))) x[NA_integer_] else sum(x, na.rm = TRUE))
       rownames(intens.agg) <- intens.agg$Protein
       intens.agg$Protein <- NULL
       intens <- as.matrix(intens.agg)
@@ -2915,7 +3023,8 @@ GetAnalysisType <- function(){
     if (length(parts) == 0) return(NA_character_)
     parts[1]
   })
-  df <- df[!is.na(df$Protein) & !is.na(df$Qty), ]
+  keep <- !is.na(df$Protein) & !is.na(df$Qty)
+  df <- df[keep, ]
   agg <- .fast_aggregate_formula(Qty ~ Protein + Run, data = df, FUN = mean)
   wide <- reshape(agg, idvar = "Protein", timevar = "Run", direction = "wide")
   rownames(wide) <- wide$Protein
@@ -2924,11 +3033,11 @@ GetAnalysisType <- function(){
   intens <- as.matrix(wide)
   diann_meta <- data.frame(Protein.IDs = rownames(intens), stringsAsFactors = FALSE)
   if ("Q.Value" %in% colnames(dat)) {
-    qv <- .fast_aggregate_vec(as.numeric(dat$Q.Value), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
+    qv <- .fast_aggregate_vec(as.numeric(dat$Q.Value[keep]), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
     diann_meta$Q.Value <- qv$x[match(diann_meta$Protein.IDs, qv$Protein)]
   }
   if ("PEP" %in% colnames(dat)) {
-    pepv <- .fast_aggregate_vec(as.numeric(dat$PEP), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
+    pepv <- .fast_aggregate_vec(as.numeric(dat$PEP[keep]), by = list(Protein = df$Protein), FUN = min, na.rm = TRUE)
     diann_meta$PEP <- pepv$x[match(diann_meta$Protein.IDs, pepv$Protein)]
   }
   count_col <- NULL
@@ -2939,7 +3048,7 @@ GetAnalysisType <- function(){
     }
   }
   if (!is.null(count_col)) {
-    cnt <- .fast_aggregate_vec(as.numeric(dat[[count_col]]), by = list(Protein = df$Protein), FUN = max, na.rm = TRUE)
+    cnt <- .fast_aggregate_vec(as.numeric(dat[[count_col]][keep]), by = list(Protein = df$Protein), FUN = max, na.rm = TRUE)
     diann_meta$Peptide.Count <- cnt$x[match(diann_meta$Protein.IDs, cnt$Protein)]
   }
   ov_qs_save(diann_meta, "diann_metadata.qs")
@@ -2960,6 +3069,61 @@ GetAnalysisType <- function(){
 }
 
 # Helper: read Spectronaut report
+# --- Spectronaut pivot-report helpers -------------------------------------
+# Spectronaut writes these into quantity cells it did not report a value for.
+.SPEC_MISSING_TOKENS <- c("Filtered", "NaN", "NA", "N/A", "#N/A", "")
+
+.specNumeric <- function(x) {
+  if (is.numeric(x)) return(as.numeric(x))
+  x <- trimws(as.character(x))
+  x[x %in% .SPEC_MISSING_TOKENS] <- NA
+  suppressWarnings(as.numeric(x))
+}
+
+# "[3] F1RS_TB_BR_1_10.htrms.PG.Quantity" -> "F1RS_TB_BR_1_10"
+.cleanSpectronautRunName <- function(x) {
+  y <- sub("^\\[[0-9]+\\]\\s*", "", x)
+  y <- sub("\\.(PG|PEP|EG|FG)\\.[A-Za-z0-9]+$", "", y)
+  y <- sub("\\.(htrms|raw|d|wiff|mzML|dia)$", "", y, ignore.case = TRUE)
+  if (anyDuplicated(y) || any(!nzchar(y))) return(x)
+  y
+}
+
+# Intensity matrix (rows as in dat, columns = runs) of a Spectronaut pivot
+# report. Per-run quantity columns ("<run>.PG.Quantity") are taken directly, one
+# quantity family only, in the order of `levels`. Without them, columns are
+# kept when their values are numeric once Spectronaut's missing-value tokens are
+# read as NA; columns with no value at all (e.g. an empty PG.Genes) are not runs.
+.specIntensityMatrix <- function(dat, annot.cols, levels = c("PG", "PEP", "EG", "FG")) {
+  cols <- colnames(dat)
+  intensity.cols <- character(0)
+  for (lv in levels) {
+    for (q in c("Quantity", "MS2Quantity", "MS1Quantity", "TotalQuantity")) {
+      intensity.cols <- grep(paste0("\\.", lv, "\\.", q, "$"), cols, value = TRUE)
+      if (length(intensity.cols) > 0) break
+    }
+    if (length(intensity.cols) > 0) break
+  }
+  if (length(intensity.cols) == 0) {
+    intensity.cols <- grep("^[^P].*\\.[HEW]", cols, value = TRUE, ignore.case = FALSE)
+  }
+  if (length(intensity.cols) == 0) {
+    candidate.cols <- setdiff(cols, annot.cols)
+    candidate.cols <- grep("^RtoF|^Ratio|^FC_", candidate.cols, value = TRUE, invert = TRUE, ignore.case = TRUE)
+    is.quant <- vapply(candidate.cols, function(col) {
+      raw <- dat[[col]]
+      vals <- .specNumeric(raw)
+      present <- !is.na(raw) & !(trimws(as.character(raw)) %in% .SPEC_MISSING_TOKENS)
+      any(present) && !any(is.na(vals[present]))
+    }, logical(1))
+    intensity.cols <- candidate.cols[is.quant]
+  }
+  if (length(intensity.cols) == 0) return(NULL)
+  intens <- vapply(intensity.cols, function(col) .specNumeric(dat[[col]]), numeric(nrow(dat)))
+  intens <- matrix(intens, nrow = nrow(dat), dimnames = list(NULL, .cleanSpectronautRunName(intensity.cols)))
+  intens
+}
+
 .readSpectronaut <- function(data.file, opts = list(inputType = "protein")) {
   if (!file.exists(data.file)) {
     #msg('[Spectronaut] data file not found: ', data.file)
@@ -2975,7 +3139,7 @@ GetAnalysisType <- function(){
   }
 
   protein.id.candidates <- c('PG.ProteinAccessions', 'PG.ProteinGroups', 'PG.features',
-                             'Accession', 'Protein.Group', 'ProteinName')
+                             'Accession', 'Protein.Group', 'ProteinName', 'PG.UniProtIds')
   get.spectronaut.protein.ids <- function(x, protein.col) {
     proteins <- as.character(x[[protein.col]])
     # parse each distinct ID string once, then expand back by match()
@@ -3205,23 +3369,10 @@ GetAnalysisType <- function(){
                     'PG.Quantity', 'PG.NrOfStrippedSequencesIdentified',
                     'Experiment', 'Run', 'Accession', 'ModifiedSequence', 'Sequence', 'Precursor',
                     'PrecursorCharge', 'Protein.Group', 'ProteinName')
-    intensity.cols <- grep("^[^P].*\\.[HEW]", colnames(raw.dat), value = TRUE, ignore.case = FALSE)
-    if (length(intensity.cols) == 0) {
-      candidate.cols <- setdiff(colnames(raw.dat), annot.cols)
-      candidate.cols <- grep("^RtoF|^Ratio|^FC_", candidate.cols, value = TRUE, invert = TRUE, ignore.case = TRUE)
-      intensity.cols <- sapply(candidate.cols, function(col) {
-        col.data <- raw.dat[[col]]
-        sample.vals <- head(col.data[!is.na(col.data)], 10)
-        !any(is.na(suppressWarnings(as.numeric(sample.vals))))
-      })
-      intensity.cols <- names(intensity.cols[intensity.cols])
-    }
-    if (length(intensity.cols) == 0) {
+    intens <- .specIntensityMatrix(raw.dat, annot.cols, levels = c("PEP", "EG", "FG", "PG"))
+    if (is.null(intens)) {
       return(NULL)
     }
-
-    intens <- as.matrix(raw.dat[, intensity.cols, drop = FALSE])
-    storage.mode(intens) <- "numeric"
     peptide.ids <- as.character(raw.dat[[peptide.col]])
     proteins <- get.spectronaut.protein.ids(raw.dat, protein.col)
     valid.rows <- !is.na(peptide.ids) & nzchar(peptide.ids) & !is.na(proteins) & nzchar(proteins)
@@ -3330,6 +3481,11 @@ GetAnalysisType <- function(){
   is.pivot.format <- ("Accession" %in% colnames(dat) || "Protein.Group" %in% colnames(dat)) &&
                       ("Sequence" %in% colnames(dat) || "ModifiedSequence" %in% colnames(dat)) &&
                       !("R.FileName" %in% colnames(dat))
+  # Wide per-run quantity columns ("<run>.PG.Quantity") without R.FileName are a
+  # pivot report too; MSstatsConvert expects the long (Normal) report.
+  is.pivot.format <- is.pivot.format ||
+    (!("R.FileName" %in% colnames(dat)) &&
+       any(grepl("\\.(PG|PEP|EG|FG)\\.[A-Za-z0-9]*Quantity$", colnames(dat))))
 
   if (is.pivot.format) {
     #msg('[Spectronaut] Pivot table format detected; using manual parser')
@@ -3378,6 +3534,8 @@ GetAnalysisType <- function(){
     if (!is.null(msstats.fmt)) {
       # Save msstats input for later use (normalization, imputation, summarization in ProteoAnalyst pipeline)
       ov_qs_save(msstats.fmt, "msstats_input.qs")
+      # MSstatsConvert returns an S4 MSstatsValidated object, which model.frame() rejects
+      msstats.fmt <- as.data.frame(msstats.fmt)
       #msg('[Spectronaut] MSstats format saved with ', length(unique(msstats.fmt$ProteinName)), ' proteins')
 
       # Simple aggregation to protein level (median intensity per protein per run)
@@ -3453,25 +3611,9 @@ GetAnalysisType <- function(){
                   'Experiment', 'Run', 'Accession', 'ModifiedSequence', 'Sequence', 'Precursor',
                   'PrecursorCharge', 'Protein.Group', 'ProteinName')
 
-  # Find intensity columns (typically end with sample names and contain numeric data)
-  # Spectronaut directLFQ columns or regular intensity columns
-  intensity.cols <- grep("^[^P].*\\.[HEW]", colnames(dat), value = TRUE, ignore.case = FALSE)
-
-  # If no intensity columns found with that pattern, try broader search
-  if (length(intensity.cols) == 0) {
-    candidate.cols <- setdiff(colnames(dat), annot.cols)
-    # Exclude ratio/calculated columns
-    candidate.cols <- grep("^RtoF|^Ratio|^FC_", candidate.cols, value = TRUE, invert = TRUE, ignore.case = TRUE)
-    intensity.cols <- sapply(candidate.cols, function(col) {
-      col.data <- dat[[col]]
-      sample.vals <- head(col.data[!is.na(col.data)], 10)
-      is.numeric.col <- !any(is.na(suppressWarnings(as.numeric(sample.vals))))
-      return(is.numeric.col)
-    })
-    intensity.cols <- names(intensity.cols[intensity.cols])
-  }
-
-  if (length(intensity.cols) == 0) {
+  # Per-run quantity columns, with Spectronaut's "Filtered"/"NaN" read as missing
+  intens <- .specIntensityMatrix(dat, annot.cols, levels = c("PG", "PEP", "EG", "FG"))
+  if (is.null(intens)) {
     #msg('[Spectronaut][ERROR] No intensity columns found')
     return(NULL)
   }
@@ -3491,14 +3633,12 @@ GetAnalysisType <- function(){
     protein.col <- 'Protein.Group'
   } else if ('ProteinName' %in% colnames(dat)) {
     protein.col <- 'ProteinName'
+  } else if ('PG.UniProtIds' %in% colnames(dat)) {
+    protein.col <- 'PG.UniProtIds'
   } else {
     #msg('[Spectronaut][ERROR] No protein identifier column found. Available columns: ', paste(colnames(dat)[1:min(10, ncol(dat))], collapse=', '))
     return(NULL)
   }
-
-  # Extract intensity matrix
-  intens <- as.matrix(dat[, intensity.cols, drop = FALSE])
-  storage.mode(intens) <- 'numeric'
 
   # Set row names from protein identifiers, handle semicolon-separated lists
   proteins <- get.spectronaut.protein.ids(dat, protein.col)
@@ -3520,7 +3660,9 @@ GetAnalysisType <- function(){
     #msg('[Spectronaut] Aggregating ', sum(duplicated(proteins)), ' duplicate protein IDs')
     intens <- as.data.frame(intens)
     intens$Protein <- proteins
-    intens <- stats::aggregate(. ~ Protein, data = intens, FUN = function(x) max(x, na.rm = TRUE))
+    # na.pass keeps rows with any NA (na.omit dropped them); an all-NA group stays NA
+    intens <- stats::aggregate(. ~ Protein, data = intens, na.action = na.pass,
+                               FUN = function(x) if (all(is.na(x))) x[NA_integer_] else max(x, na.rm = TRUE))
     proteins <- intens$Protein
     intens$Protein <- NULL
     intens <- as.matrix(intens)

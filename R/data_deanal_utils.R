@@ -131,7 +131,8 @@ PerformDEAnal<-function (dataName="", anal.type = "default", par1 = NULL, par2 =
           df$Protein <- new_id_vector
 
           # Aggregate duplicates by mean
-          df <- stats::aggregate(. ~ Protein, data = df, FUN = function(x) mean(x, na.rm = TRUE))
+          df <- stats::aggregate(. ~ Protein, data = df, na.action = na.pass,
+                                  FUN = function(x) if (all(is.na(x))) x[NA_integer_] else mean(x, na.rm = TRUE))
           rownames(df) <- df$Protein
           df$Protein <- NULL
           dataSet$data.norm <- as.matrix(df)
