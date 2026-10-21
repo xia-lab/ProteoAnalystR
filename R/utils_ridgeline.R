@@ -152,6 +152,9 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     # refine callers recomputing, where the ridgeline query (sig.mat) differs.
     .reuse.enr <- isTRUE(getOption("ov.enrich.reuse", FALSE)) &&
                   file.exists("enr.mat.qs") && file.exists("hits_query.qs");
+    # A recompute never reads another analysis's table: GSEA writes enr.mat.qs too, in its own columns, and an enrichment that returns
+    # without a result left that file to be read here ("length of 'dimnames' [2] not equal to array extent").
+    if (!.reuse.enr && file.exists("enr.mat.qs")) unlink("enr.mat.qs");
     if (.reuse.enr) {
       message("[compute.ridgeline] reusing precomputed enr.mat.qs for ", fun.type,
               " (skipped ORA recompute)");
