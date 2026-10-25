@@ -1389,6 +1389,18 @@ GetSetCacheInfo <- function() {
   )
 }
 
+# Plot-data hook. A plotter hands over what its drawing reads (`data`, small, never the session's data set), the NAME of the
+# Draw<X> function in this package that draws from it alone (`draw`) and that function's other arguments (`args`, named).
+# Whoever wants the plot data sets options(ov.plot_data_hook = function(img, data, draw, args) ...); when nobody does, or the
+# hook fails, this does nothing -- the package names nothing outside itself.
+# `export` (optional): a named list of the data frames / matrices behind the figure, e.g. list(fc = fc_data); the hook keeps each
+# as the downloadable <name>_data.csv the figure has always had.
+.ov_plot_data <- function(img, data, draw, args = list(), export = NULL) {
+  h <- getOption("ov.plot_data_hook")
+  if (is.function(h)) tryCatch(if (is.null(export)) h(img, data, draw, args) else h(img, data, draw, args, export), error = function(e) NULL)
+  invisible(NULL)
+}
+
 readDataset <- function(dataName = "", quiet = FALSE) {
 
   #-- 1 - quick sanity check ----------------------------------------------------

@@ -84,6 +84,7 @@ qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png"
   require('gridExtra')
 
   dpi <- as.numeric(dpi)
+  stem <- imgNm
   finalFileNm <- paste0(imgNm, "dpi", dpi, ".", format)
 
   # Cap to 12 randomly selected samples on large datasets (keeps the CV
@@ -140,6 +141,23 @@ qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png"
     df_all <- do.call(rbind, df_list)
   }
 
+  # what the histogram reads: the CV of every protein with its condition, and the sampling note
+  pd <- list(cv = df_all, note = cv_subset_note)
+  .ov_plot_data(stem, pd, "DrawPaProteinCV", list(dpi = dpi, format = format))
+  DrawPaProteinCV(pd, stem, dpi, format)
+
+  return(finalFileNm)
+}
+
+# Draws the protein CV histograms from pd = list(cv = <data frame: CV (%), Condition>, note = <subtitle or NULL>)
+DrawPaProteinCV <- function(pd, imgNm, dpi = 96, format = "png") {
+  require('ggplot2')
+
+  dpi <- as.numeric(dpi)
+  finalFileNm <- paste0(imgNm, "dpi", dpi, ".", format)
+  df_all <- pd$cv
+  cv_subset_note <- pd$note
+
   medians <- aggregate(CV ~ Condition, data = df_all, median)
   medians$Label <- round(medians$CV, 1)
 
@@ -171,7 +189,7 @@ qc.protein.cv.hist <- function(data_mat, groups, imgNm, dpi = 96, format = "png"
     dev.off()
   })
 
-  return(finalFileNm)
+  invisible(finalFileNm)
 }
 
 coerce.numeric.matrix <- function(dat) {
@@ -691,6 +709,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
   dpi <- as.numeric(dpi)
   require('ggplot2')
   require('lattice');
+  stem <- imgNm;
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
   fullPath <- paste0(fileNm, format, sep="");  subgene <- 10000;
 
@@ -727,9 +746,40 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     sample_names <- paste0("Sample_", seq_len(ncol(Mss)))
     colnames(Mss) <- sample_names
   }
-  sample_order <- sort(sample_names, method = "radix")
 
   group.map <- get.primary.group.values(sample_names, meta = meta)
+
+  # what the box plot reads: the plotted subset, each plotted sample's group and the group colours
+  pd <- list(mat = Mss, group = group.map, palette = full_group_palette);
+
+  if(interactive){
+    return(DrawPaBoxplot(pd, stem, dpi, format, interactive=TRUE));
+  }else{
+    .ov_plot_data(stem, pd, "DrawPaBoxplot", list(dpi = dpi, format = format));
+    DrawPaBoxplot(pd, stem, dpi, format);
+
+    imgSet <- readSet(imgSet, "imgSet");
+    if(grepl("norm", imgNm)){
+      imgSet$qc_norm_boxplot <- fullPath;
+    }else{
+      imgSet$qc_boxplot <- fullPath;
+    }
+    saveSet(imgSet, "imgSet");
+    return("NA")
+  }
+}
+
+# Draws the sample box plot from pd = list(mat = <features x samples matrix plotted>, group = <named group of each sample>,
+# palette = <named colour of each group>)
+DrawPaBoxplot <- function(pd, imgNm, dpi=96, format="png", interactive=FALSE){
+  dpi <- as.numeric(dpi)
+  require('ggplot2')
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
+  fullPath <- paste0(fileNm, format, sep="");
+  Mss <- pd$mat;
+  sample_names <- colnames(Mss)
+  sample_order <- sort(sample_names, method = "radix")
+  group.map <- pd$group
 
   df <- data.frame(
     values = as.numeric(Mss),
@@ -755,7 +805,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
     theme_bw() + coord_flip() +
     guides(fill = guide_legend(title = "Group"));
 
-  bp <- bp + scale_fill_manual(values = full_group_palette)
+  bp <- bp + scale_fill_manual(values = pd$palette)
 
   if(interactive){
     library(plotly);
@@ -774,15 +824,7 @@ qc.boxplot <- function(dat, imgNm, dpi=96, format="png", interactive=F, meta = N
         dev.off();
     })
     # ---------------------------------
-
-    imgSet <- readSet(imgSet, "imgSet");
-    if(grepl("norm", imgNm)){
-      imgSet$qc_norm_boxplot <- fullPath;
-    }else{
-      imgSet$qc_boxplot <- fullPath;
-    }
-    saveSet(imgSet, "imgSet");
-    return("NA")
+    invisible(fullPath)
   }
 }
 
@@ -790,6 +832,7 @@ qc.nonmissing.per.sample <- function(dat, imgNm, dpi = 96, format = "png",
                                      interactive = FALSE, meta = NULL) {
   dat <- coerce.numeric.matrix(dat)
   dpi <- as.numeric(dpi)
+  stem <- imgNm
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep = "")
   fullPath <- paste0(fileNm, format, sep = "")
 
@@ -817,6 +860,34 @@ qc.nonmissing.per.sample <- function(dat, imgNm, dpi = 96, format = "png",
   miss.df$Group <- factor(miss.df$Group)
   miss.df <- miss.df[order(miss.df$NonMissingPct, decreasing = TRUE), , drop = FALSE]
   miss.df$Sample <- factor(miss.df$Sample, levels = miss.df$Sample)
+
+  # what the plot reads: each sample's non-missing percentage and group, in the order drawn
+  pd <- list(miss = miss.df)
+
+  if (interactive) {
+    return(DrawPaNonMissing(pd, stem, dpi, format, interactive = TRUE))
+  }
+
+  .ov_plot_data(stem, pd, "DrawPaNonMissing", list(dpi = dpi, format = format))
+  DrawPaNonMissing(pd, stem, dpi, format)
+
+  imgSet <- readSet(imgSet, "imgSet")
+  if (grepl("norm", imgNm)) {
+    imgSet$qc_norm_nonmissing <- fullPath
+  } else {
+    imgSet$qc_nonmissing <- fullPath
+  }
+  saveSet(imgSet, "imgSet")
+  return("NA")
+}
+
+# Draws the non-missing-per-sample plot from pd = list(miss = <data frame: Sample (factor, in plot order), NonMissingPct, Group (factor)>)
+DrawPaNonMissing <- function(pd, imgNm, dpi = 96, format = "png", interactive = FALSE) {
+  require("ggplot2")
+  dpi <- as.numeric(dpi)
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep = "")
+  fullPath <- paste0(fileNm, format, sep = "")
+  miss.df <- pd$miss
 
   mean_line <- mean(miss.df$NonMissingPct, na.rm = TRUE)
   bp <- ggplot(miss.df, aes(x = Sample, y = NonMissingPct, color = Group)) +
@@ -851,15 +922,7 @@ qc.nonmissing.per.sample <- function(dat, imgNm, dpi = 96, format = "png",
       dev.off()
   })
   # ---------------------------------
-
-  imgSet <- readSet(imgSet, "imgSet")
-  if (grepl("norm", imgNm)) {
-    imgSet$qc_norm_nonmissing <- fullPath
-  } else {
-    imgSet$qc_nonmissing <- fullPath
-  }
-  saveSet(imgSet, "imgSet")
-  return("NA")
+  invisible(fullPath)
 }
 
 # MA plot (sample vs feature mean) for QC
@@ -868,6 +931,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
   dpi <- as.numeric(dpi)
   require("ggplot2")
 
+  stem <- imgNm
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep = "")
   fullPath <- paste0(fileNm, format, sep = "")
 
@@ -936,6 +1000,46 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
     return("NA")
   }
 
+  # what the plot reads: A and M of every plotted feature in each panel (sample), the panel layout and the axis scale
+  pd <- list(ma = ma_df, mode = mode, note = ma_subset_note, logged = use_logged_scale)
+
+  if (interactive) {
+    return(DrawPaMA(pd, stem, dpi, format, interactive = TRUE))
+  } else {
+    .ov_plot_data(stem, pd, "DrawPaMA", list(dpi = dpi, format = format))
+    DrawPaMA(pd, stem, dpi, format)
+
+    imgSet <- readSet(imgSet, "imgSet")
+    if (grepl("norm", imgNm)) {
+      if (grepl("overview", imgNm, ignore.case = TRUE)) {
+        imgSet$qc_norm_ma_overview <- fullPath
+      } else {
+        imgSet$qc_norm_ma <- fullPath
+      }
+    } else {
+      if (grepl("overview", imgNm, ignore.case = TRUE)) {
+        imgSet$qc_ma_overview <- fullPath
+      } else {
+        imgSet$qc_ma <- fullPath
+      }
+    }
+    saveSet(imgSet, "imgSet")
+    return("NA")
+  }
+}
+
+# Draws the MA plot(s) from pd = list(ma = <data frame: Panel (sample), A, M>, mode = "single" | "overview",
+# note = <subtitle or NULL>, logged = <TRUE when the input is already on a log scale>)
+DrawPaMA <- function(pd, imgNm, dpi = 96, format = "png", interactive = FALSE) {
+  require("ggplot2")
+  dpi <- as.numeric(dpi)
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep = "")
+  fullPath <- paste0(fileNm, format, sep = "")
+  ma_df <- pd$ma
+  mode <- pd$mode
+  use_logged_scale <- pd$logged
+  ma_subset_note <- pd$note
+
   # Calculate per-sample statistics for labeling
   ma_stats <- aggregate(M ~ Panel, data = ma_df, FUN = function(m) {
     c(median = stats::median(m, na.rm = TRUE),
@@ -996,23 +1100,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
     }, finally = {
       dev.off()
     })
-
-    imgSet <- readSet(imgSet, "imgSet")
-    if (grepl("norm", imgNm)) {
-      if (grepl("overview", imgNm, ignore.case = TRUE)) {
-        imgSet$qc_norm_ma_overview <- fullPath
-      } else {
-        imgSet$qc_norm_ma <- fullPath
-      }
-    } else {
-      if (grepl("overview", imgNm, ignore.case = TRUE)) {
-        imgSet$qc_ma_overview <- fullPath
-      } else {
-        imgSet$qc_ma <- fullPath
-      }
-    }
-    saveSet(imgSet, "imgSet")
-    return("NA")
+    invisible(fullPath)
   }
 }
 
@@ -1214,6 +1302,7 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
                              linkage = "complete", meta = NULL) {
   if (is.data.frame(dat)) dat <- as.matrix(dat)
   dpi <- as.numeric(dpi)
+  stem <- imgNm
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep = "")
   fullPath <- paste0(fileNm, format, sep = "")
 
@@ -1275,7 +1364,36 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
     }
   }
 
-  ann.count <- if (is.null(ann.df)) 0 else ncol(ann.df)
+  # what the heatmap reads: the clustered sample correlations and their colour range, and the (up to two) annotation tracks
+  pd <- list(cor = cor.ord, range = c(corr.min, corr.max),
+             ann.names = if (is.null(ann.df)) NULL else colnames(ann.df), ann.cols = ann.cols, ann.pals = ann.pals)
+  .ov_plot_data(stem, pd, "DrawPaSampleDendro", list(dpi = dpi, format = format))
+  DrawPaSampleDendro(pd, stem, dpi, format)
+
+  imgSet <- readSet(imgSet, "imgSet");
+  if (grepl("norm", imgNm)) {
+    imgSet$qc_norm_dendro <- fullPath;
+  } else {
+    imgSet$qc_dendro <- fullPath;
+  }
+  saveSet(imgSet, "imgSet");
+  return("NA")
+}
+
+
+# Draws the sample correlation heatmap from pd = list(cor = <clustered sample x sample correlations>, range = c(min, max),
+# ann.names = <annotation tracks>, ann.cols = <colour of each sample per track>, ann.pals = <colour of each level per track>)
+DrawPaSampleDendro <- function(pd, imgNm, dpi = 96, format = "png") {
+  dpi <- as.numeric(dpi)
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep = "")
+  fullPath <- paste0(fileNm, format, sep = "")
+  cor.ord <- pd$cor
+  sample.nms <- colnames(cor.ord)
+  corr.min <- pd$range[1]
+  corr.max <- pd$range[2]
+  ann.cols <- pd$ann.cols
+  ann.pals <- pd$ann.pals
+  ann.count <- length(pd$ann.names)
   width_in <- max(7, min(16, 4 + ncol(cor.ord) * 0.28))
   height_in <- max(6, min(16, 4 + nrow(cor.ord) * 0.22 + ann.count * 0.45 + 1.0))
   legend_height <- if (ann.count > 0) 1.4 else 0.9
@@ -1293,7 +1411,7 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
 
       if (ann.count > 0) {
         n <- length(sample.nms)
-        for (nm in colnames(ann.df)) {
+        for (nm in pd$ann.names) {
           par(mar = c(0, 8, 0.2, 2))
           plot.new()
           plot.window(xlim = c(0.5, n + 0.5), ylim = c(0, 1))
@@ -1355,14 +1473,7 @@ qc.sample.dendro <- function(dat, imgNm, dpi = 96, format = "png",
   })
   # ---------------------------------
 
-  imgSet <- readSet(imgSet, "imgSet");
-  if (grepl("norm", imgNm)) {
-    imgSet$qc_norm_dendro <- fullPath;
-  } else {
-    imgSet$qc_dendro <- fullPath;
-  }
-  saveSet(imgSet, "imgSet");
-  return("NA")
+  invisible(fullPath)
 }
 
 #' Sample correlation heatmap (metadata-style aesthetic)
@@ -1694,10 +1805,33 @@ PlotDataDensity <- function(fileName, imgNm, dpi,format){
 
 qc.density<- function(dataSet, imgNm="abc", dpi=96, format, interactive){
   require("ggplot2")
-  dat <- dataSet$data.norm
+  stem <- imgNm
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
   imgNm <- paste0(fileNm, format, sep="");
   dpi <- as.numeric(dpi)
+
+  # what the density plot reads: the normalized matrix and the sample metadata
+  pd <- list(mat = dataSet$data.norm, meta = dataSet$meta.info);
+
+  if(interactive){
+    return(DrawPaDensity(pd, stem, dpi, format, interactive=TRUE));
+  }else{
+    .ov_plot_data(stem, pd, "DrawPaDensity", list(dpi = dpi, format = format));
+    DrawPaDensity(pd, stem, dpi, format);
+    imgSet <- readSet(imgSet, "imgSet");
+    imgSet$qc.density_norm <- imgNm;
+    saveSet(imgSet, "imgSet");
+    return("NA")
+  }
+}
+
+# Draws the sample density plot from pd = list(mat = <features x samples matrix>, meta = <sample metadata>)
+DrawPaDensity <- function(pd, imgNm="abc", dpi=96, format="png", interactive=FALSE){
+  require("ggplot2")
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
+  imgNm <- paste0(fileNm, format, sep="");
+  dpi <- as.numeric(dpi)
+  dataSet <- list(data.norm = pd$mat, meta.info = pd$meta)
 
   ######check.names=F is important for names not following conventions (i.e. with -, starts with number)
   df <- data.frame(dataSet$data.norm, stringsAsFactors = FALSE, check.names = FALSE)
@@ -1762,16 +1896,13 @@ qc.density<- function(dataSet, imgNm="abc", dpi=96, format, interactive){
     ggp_build <- plotly::layout(plotly::ggplotly(g), autosize = FALSE, width = w, height = 600, margin = m)
     return(ggp_build);
   }else{
-    imgSet <- readSet(imgSet, "imgSet");
-    imgSet$qc.density_norm <- imgNm;
-    saveSet(imgSet, "imgSet");
   if(dpi == 72){
   dpi <- dpi *1.34
   }
     Cairo::Cairo(file=imgNm, width=width, height=height, type=format, bg="white", dpi=dpi, unit="in");
     print(g)
     dev.off();
-    return("NA")
+    invisible(imgNm)
   }
 }
 
@@ -1781,6 +1912,7 @@ PlotLibSizeView<-function(fileName, imgNm,dpi=96, format="png"){
   require("ggplot2");
 
   dataSet <- readDataset(fileName);
+  stem <- imgNm;
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
   imgNm <- paste0(fileNm, format, sep="");
   dpi <- as.numeric(dpi);
@@ -1791,8 +1923,33 @@ PlotLibSizeView<-function(fileName, imgNm,dpi=96, format="png"){
   # Use NA-tolerant column sums; raw proteomics matrices often contain missing values
   smpl.sums <- colSums(data_bef, na.rm = TRUE);
   
-  names(smpl.sums) <- sampleNms <- colnames(data_bef);
-  df <- data.frame(count=smpl.sums,ind=colnames(data_bef))
+  names(smpl.sums) <- colnames(data_bef);
+
+  # what the plot reads: the total intensity of each sample and the sample metadata
+  pd <- list(sums = smpl.sums, meta = dataSet$meta.info);
+  .ov_plot_data(stem, pd, "DrawPaLibSize", list(dpi = dpi, format = format));
+  DrawPaLibSize(pd, stem, dpi, format);
+  str <- "NA"
+
+  imgSet <- readSet(imgSet, "imgSet");
+  imgSet$libsize <- imgNm;
+    saveSet(imgSet, "imgSet");
+
+  return(str);
+}
+
+# Draws the library size (total intensity per sample) plot from pd = list(sums = <named total per sample>, meta = <sample metadata>)
+DrawPaLibSize <- function(pd, imgNm, dpi=96, format="png"){
+  library("ggrepel");
+  require("ggplot2");
+
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
+  imgNm <- paste0(fileNm, format, sep="");
+  dpi <- as.numeric(dpi);
+  smpl.sums <- pd$sums;
+  sampleNms <- names(smpl.sums);
+  dataSet <- list(meta.info = pd$meta);
+  df <- data.frame(count=smpl.sums,ind=sampleNms)
   
   if(length(dataSet$meta.info) == 2){
     Factor1 <- as.vector(dataSet$meta.info[,1])
@@ -1866,13 +2023,7 @@ PlotLibSizeView<-function(fileName, imgNm,dpi=96, format="png"){
   Cairo::Cairo(file=imgNm, width=width, height=height, type=format, bg="white", unit="in", dpi=dpi);
   print(g);
   dev.off();
-  str <- "NA"
-
-  imgSet <- readSet(imgSet, "imgSet");
-  imgSet$libsize <- imgNm;
-    saveSet(imgSet, "imgSet");
-
-  return(str);
+  invisible(imgNm)
 }
 
 PlotDataMeanStd <- function(fileName, imgName, dpi, format){
@@ -1888,28 +2039,79 @@ PlotDataMeanStd <- function(fileName, imgName, dpi, format){
 
 qc.meanstd <- function(dat, imgNm, dpi=96, format="png"){
   dpi <- as.numeric(dpi)
+  stem <- imgNm
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
   fullPath <- paste0(fileNm, format, sep="");
-  
-  # --- FIX: Safe Device Handling ---
-  if(dpi == 72){ dpi <- 96 }
-  
-  Cairo::Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
-  
-  tryCatch({
-      # Call meanSdPlot with plot=FALSE to prevent it from printing to the wrong device
-      res <- meanSdPlot(dat, ranks=FALSE, plot=FALSE) 
-      print(res$gg)
-  }, finally = {
-      dev.off();
-  })
-  # ---------------------------------
+
+  # what the plot reads: the mean and sd of every feature and the running median of the sd
+  pd <- .paMeanSdStats(dat, ranks=FALSE)
+  if(!is.null(pd)){
+    .ov_plot_data(stem, pd, "DrawPaMeanStd", list(dpi = dpi, format = format))
+  }
+  DrawPaMeanStd(pd, stem, dpi, format)
 
   imgSet <- readSet(imgSet, "imgSet");
   imgSet$qc.meanstd <- fullPath;
   saveSet(imgSet, "imgSet");
 
   return("NA");
+}
+
+# Draws the mean-sd plot from pd = list(quantile = , sd = , px = <feature means>, py = <feature sds>), see .paMeanSdStats()
+DrawPaMeanStd <- function(pd, imgNm, dpi=96, format="png"){
+  require("ggplot2")
+  dpi <- as.numeric(dpi)
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep="");
+  fullPath <- paste0(fileNm, format, sep="");
+
+  # --- FIX: Safe Device Handling ---
+  if(dpi == 72){ dpi <- 96 }
+
+  Cairo::Cairo(file=fullPath, width=8, height=6, type=format, bg="white", dpi=dpi, unit="in");
+
+  tryCatch({
+      if(!is.null(pd)){
+        fmt = function() function(x) format(round(x, 0), nsmall = 0L, scientific = FALSE)
+        gg = ggplot(data.frame(px = pd$px, py = pd$py),
+                    aes_string(x = "px", y = "py")) + 
+          xlab("mean") + ylab("sd") +
+          geom_hex(bins = 50) +
+          scale_fill_gradient(name = "count", trans = "log", labels = fmt()) + 
+          geom_line(aes_string(x = "x", y = "y"),
+                    data = data.frame(x = pd$quantile, y = pd$sd), color = "red") +
+          theme_bw();
+        print(gg)
+      }
+  }, finally = {
+      dev.off();
+  })
+  # ---------------------------------
+  invisible(fullPath)
+}
+
+# The numbers meanSdPlot() draws: feature means (px) and sds (py), and the running median of the sd.
+.paMeanSdStats <- function(x, ranks = TRUE) {
+  n <- nrow(x)
+  if (n == 0L) {
+    warning("In 'meanSdPlot': input matrix 'x' has 0 rows. There is nothing to be done.")
+    return(NULL)
+  }
+
+  px   = rowMeans(x, na.rm = TRUE)
+  py   = sqrt(rowV(x, mean = px, na.rm = TRUE))
+  rpx  = rank(px, na.last = FALSE, ties.method = "random")
+  
+  dm        = 0.025
+  midpoints = seq(dm, 1-dm, by = dm)
+  within    = function(x, x1, x2) { (x >= x1) & (x <= x2) }
+  mediwind  = function(mp) median(py[within(rpx/n, mp - 2*dm, mp + 2*dm)], na.rm = TRUE)
+  rq.sds    = sapply(midpoints, mediwind)
+  
+  if(ranks) {
+    list(rank = midpoints*n, sd = rq.sds, px = rpx, py = py)
+  } else {
+    list(quantile = quantile(px, probs = midpoints, na.rm = TRUE), sd = rq.sds, px = px, py = py)
+  }
 }
 
 meanSdPlot <- function(x, ranks = TRUE, xlab = ifelse(ranks, "rank(mean)", "mean"),
@@ -1923,21 +2125,7 @@ meanSdPlot <- function(x, ranks = TRUE, xlab = ifelse(ranks, "rank(mean)", "mean
     return()
   }
 
-  px   = rowMeans(x, na.rm = TRUE)
-  py   = sqrt(rowV(x, mean = px, na.rm = TRUE))
-  rpx  = rank(px, na.last = FALSE, ties.method = "random")
-  
-  dm        = 0.025
-  midpoints = seq(dm, 1-dm, by = dm)
-  within    = function(x, x1, x2) { (x >= x1) & (x <= x2) }
-  mediwind  = function(mp) median(py[within(rpx/n, mp - 2*dm, mp + 2*dm)], na.rm = TRUE)
-  rq.sds    = sapply(midpoints, mediwind)
-  
-  res = if(ranks) {
-    list(rank = midpoints*n, sd = rq.sds, px = rpx, py = py)
-  } else {
-    list(quantile = quantile(px, probs = midpoints, na.rm = TRUE), sd = rq.sds, px = px, py = py)
-  }
+  res = .paMeanSdStats(x, ranks)
   
   fmt = function() function(x) format(round(x, 0), nsmall = 0L, scientific = FALSE)
   
@@ -1992,6 +2180,7 @@ PlotDataPCA <- function(fileName, imgName, dpi, format){
 
 qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALSE) {
   dpi <- as.numeric(dpi)
+  stem <- imgNm
   fileNm <- paste(imgNm, "dpi", dpi, ".", sep="")
   fullPath <- paste0(fileNm, format, sep="")
   
@@ -2028,15 +2217,48 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
   Factor <- dataSet$meta.info[, 1]
   legend_title <- colnames(dataSet$meta.info)[1]
   pca.res$Conditions <- Factor
+
+  # the "dose" palette is a property of the analysis, read here and handed to the drawing
+  is.norm <- grepl("norm", imgNm)
+  is.dose <- is.norm && isTRUE(paramSet$oneDataAnalType == "dose")
+
+  # what the plot reads: the first two scores with the primary condition of each sample, the axis labels and ranges
+  pd <- list(pc = pca.res, legend = legend_title, xlabel = xlabel, ylabel = ylabel, xlim = xlim, ylim = ylim,
+             norm = is.norm, dose = is.dose)
+
+  analSet <- readSet(analSet, "analSet")
+  num_pcs <- min(3, ncol(pca$x))
+  analSet$pca <- list(x = pca$x[, 1:num_pcs, drop = FALSE], xlabel = xlabel, ylabel = ylabel)
+  saveSet(analSet, "analSet");
+
+  if (interactive) {
+    return(DrawPaPCA(pd, stem, dpi, format, interactive = TRUE))
+  } else {
+    .ov_plot_data(stem, pd, "DrawPaPCA", list(dpi = dpi, format = format))
+    DrawPaPCA(pd, stem, dpi, format)
+    return("NA")
+  }
+}
+
+# Draws the sample PCA plot from pd = list(pc = <data frame: PC1, PC2, Conditions per sample>, legend = <legend title>,
+# xlabel = , ylabel = , xlim = , ylim = , norm = <TRUE after normalization: group palette>, dose = <TRUE for a dose series>)
+DrawPaPCA <- function(pd, imgNm, dpi=96, format="png", interactive=FALSE) {
+  dpi <- as.numeric(dpi)
+  fileNm <- paste(imgNm, "dpi", dpi, ".", sep="")
+  fullPath <- paste0(fileNm, format, sep="")
+
+  require('ggplot2')
+  pca.res <- pd$pc
+
   pcafig <- ggplot(pca.res, aes(x = PC1, y = PC2, color = Conditions)) +
-      geom_point(size = 3, alpha = 0.5) + xlim(xlim) + ylim(ylim) + xlab(xlabel) + ylab(ylabel) +
-      theme_bw() + labs(color = legend_title)
+      geom_point(size = 3, alpha = 0.5) + xlim(pd$xlim) + ylim(pd$ylim) + xlab(pd$xlabel) + ylab(pd$ylabel) +
+      theme_bw() + labs(color = pd$legend)
 
   width <- 10; height <- 6
-  if(grepl("norm", imgNm)){
+  if(isTRUE(pd$norm)){
       n_conditions <- length(unique(pca.res$Conditions))
 
-      if (paramSet$oneDataAnalType == "dose") {
+      if (isTRUE(pd$dose)) {
         pal <- colorRampPalette(c("#2196F3", "#DE690D"))
         col.pal <- pal(n_conditions)
         pcafig <- pcafig + scale_fill_manual(values = col.pal) + scale_color_manual(values = col.pal)
@@ -2045,11 +2267,6 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
         pcafig <- pcafig + scale_fill_manual(values = color_pal) + scale_color_manual(values = color_pal)
       }
   }
-
-  analSet <- readSet(analSet, "analSet")
-  num_pcs <- min(3, ncol(pca$x))
-  analSet$pca <- list(x = pca$x[, 1:num_pcs, drop = FALSE], xlabel = xlabel, ylabel = ylabel)
-  saveSet(analSet, "analSet");
 
   if (interactive) {
     library(plotly)
@@ -2068,7 +2285,7 @@ qc.pcaplot <- function(dataSet, x, imgNm, dpi=96, format="png", interactive=FALS
         dev.off()
     })
     # ---------------------------------
-    return("NA")
+    invisible(fullPath)
   }
 }
 
@@ -2111,6 +2328,25 @@ qc.ncov5.plot <- function(ncov5_df,
   dpi <- as.numeric(dpi)
   if (dpi <= 0) stop("DPI must be a positive number.")
 
+  # what the plot reads: the count per sample with its status, the outlier limits, and the random-number state the jitter
+  # and label placement start from (so a redraw puts the points where this draw did)
+  pd <- list(df = ncov5_df, lower = lower, upper = upper, seed = get0(".Random.seed", envir = globalenv(), inherits = FALSE))
+  if (interactive) {
+    return(DrawPaNcov5(pd, imgNm, dpi, format, interactive = TRUE))
+  }
+  .ov_plot_data(imgNm, pd, "DrawPaNcov5", list(dpi = dpi, format = format))
+  DrawPaNcov5(pd, imgNm, dpi, format)
+  return("NA")
+}
+
+# Draws the high-coverage feature count plot from pd = list(df = <Sample, HighCoverageGeneCount, Status>, lower = , upper = , seed = )
+DrawPaNcov5 <- function(pd, imgNm = "NCov5_plot", dpi = 72, format = "png", interactive = FALSE) {
+  require(ggplot2)
+  require(ggrepel)
+  require(Cairo)
+  dpi <- as.numeric(dpi)
+  ncov5_df <- pd$df; lower <- pd$lower; upper <- pd$upper
+
   g <- ggplot(ncov5_df, aes(x = "", y = HighCoverageGeneCount)) +
     geom_boxplot(outlier.shape = NA, fill = "grey80") +
     geom_jitter(aes(color = Status), width = 0.25, height = 0) +
@@ -2140,9 +2376,10 @@ qc.ncov5.plot <- function(ncov5_df,
     if (dpi == 72) dpi <- dpi * 1.34
     Cairo::Cairo(file = imgNm, width = width, height = height,
           type = format, bg = "white", dpi = dpi, unit = "in")
+    if (!is.null(pd$seed)) assign(".Random.seed", pd$seed, envir = globalenv())
     print(g)
     dev.off()
-    return("NA")
+    invisible(imgNm)
   }
 }
 
@@ -2186,6 +2423,25 @@ qc.nsig.plot <- function(nsig_df,
   dpi <- as.numeric(dpi)
   if (dpi <= 0) stop("DPI must be a positive number.")
 
+  # what the plot reads: NSig80 per sample with its status, the outlier limits, and the random-number state the jitter and
+  # label placement start from
+  pd <- list(df = nsig_df, lower = lower, upper = upper, seed = get0(".Random.seed", envir = globalenv(), inherits = FALSE))
+  if (interactive) {
+    return(DrawPaNsig(pd, imgNm, dpi, format, interactive = TRUE))
+  }
+  .ov_plot_data(imgNm, pd, "DrawPaNsig", list(dpi = dpi, format = format))
+  DrawPaNsig(pd, imgNm, dpi, format)
+  return("NA")
+}
+
+# Draws the NSig80 plot from pd = list(df = <Sample, NSig80, outlier>, lower = , upper = , seed = )
+DrawPaNsig <- function(pd, imgNm = "NSig80_plot", dpi = 72, format = "png", interactive = FALSE) {
+  require("ggplot2")
+  require("Cairo")
+  require("ggrepel")
+  dpi <- as.numeric(dpi)
+  nsig_df <- pd$df; lower <- pd$lower; upper <- pd$upper
+
   g <- ggplot(nsig_df, aes(x = "", y = NSig80)) +
     geom_boxplot(outlier.shape = NA, fill = "grey80") +
     geom_jitter(aes(color = outlier), width = 0.25, height = 0) +
@@ -2215,9 +2471,10 @@ qc.nsig.plot <- function(nsig_df,
     if (dpi == 72) dpi <- dpi * 1.34
     Cairo::Cairo(file = imgNm, width = width, height = height,
           type = format, bg = "white", dpi = dpi, unit = "in")
+    if (!is.null(pd$seed)) assign(".Random.seed", pd$seed, envir = globalenv())
     print(g)
     dev.off()
-    return("NA")
+    invisible(imgNm)
   }
 }
 
@@ -2267,6 +2524,23 @@ qc.dendrogram.plot <- function(dendro_df,
 
   dpi <- as.numeric(dpi)
   if (dpi <= 0) stop("DPI must be positive.")
+
+  # what the plot reads: the largest pair-wise distance per sample with its status and whether it is labelled, and the threshold
+  pd <- list(df = dendro_df, threshold = threshold)
+  if (interactive) {
+    return(DrawPaDendrogram(pd, imgNm, dpi, format, interactive = TRUE))
+  }
+  .ov_plot_data(imgNm, pd, "DrawPaDendrogram", list(dpi = dpi, format = format))
+  return(DrawPaDendrogram(pd, imgNm, dpi, format))
+}
+
+# Draws the sample dendrogram-distance plot from pd = list(df = <Sample, Dendrogram_Distance, Status, LabelMe>, threshold = )
+DrawPaDendrogram <- function(pd, imgNm = "Dendrogram_plot", dpi = 72, format = "png", interactive = FALSE) {
+  require(ggplot2)
+  require(ggrepel)
+  require(Cairo)
+  dpi <- as.numeric(dpi)
+  dendro_df <- pd$df; threshold <- pd$threshold
 
   set.seed(1)  # For reproducible jitter
   dendro_df$xj <- jitter(rep(1, nrow(dendro_df)), amount = 0.25)
@@ -2505,6 +2779,25 @@ qc.gini.plot <- function(gini_df,
   
   dpi <- as.numeric(dpi)
   if (dpi <= 0) stop("DPI must be a positive number.")
+
+  # what the plot reads: the Gini coefficient per sample with its status, the threshold, and the random-number state the jitter
+  # and label placement start from
+  pd <- list(df = gini_df, threshold = threshold, seed = get0(".Random.seed", envir = globalenv(), inherits = FALSE))
+  if (interactive) {
+    return(DrawPaGini(pd, imgNm, dpi, format, interactive = TRUE))
+  }
+  .ov_plot_data(imgNm, pd, "DrawPaGini", list(dpi = dpi, format = format))
+  DrawPaGini(pd, imgNm, dpi, format)
+  return("NA")
+}
+
+# Draws the Gini coefficient plot from pd = list(df = <Sample, Gini, Status>, threshold = , seed = )
+DrawPaGini <- function(pd, imgNm = "Gini_plot", dpi = 72, format = "png", interactive = FALSE) {
+  require(ggplot2)
+  require(ggrepel)
+  require(Cairo)
+  dpi <- as.numeric(dpi)
+  gini_df <- pd$df; threshold <- pd$threshold
   
   g <- ggplot(gini_df, aes(x = "", y = Gini)) +
     geom_boxplot(outlier.shape = NA, fill = "grey80") +
@@ -2533,9 +2826,10 @@ qc.gini.plot <- function(gini_df,
     if (dpi == 72) dpi <- dpi * 1.34
     Cairo::Cairo(file = imgNm, width = width, height = height,
           type = format, bg = "white", dpi = dpi, unit = "in")
+    if (!is.null(pd$seed)) assign(".Random.seed", pd$seed, envir = globalenv())
     print(g)
     dev.off()
-    return("NA")
+    invisible(imgNm)
   }
 }
 

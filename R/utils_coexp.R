@@ -497,53 +497,6 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
   expr <- attr(cem, "expression")       # features x samples
   mod <- attr(cem, "module")
 
-  ## helper ----------------------------------------------------------
-  plotDendroColoured <- function(hc, colNamed, label, file, legendPal) {
-
-    leaves <- labels(as.dendrogram(hc))
-    if (!all(leaves %in% names(colNamed)))
-      stop("Colour vector missing leaves:\n  ",
-           paste(setdiff(leaves, names(colNamed)), collapse = ", "))
-
-    colMat <- matrix(colNamed[leaves], nrow = length(leaves), ncol = 1,
-                     dimnames = list(leaves, NULL))
-
-    if (dpi == 72) dpi <- 96
-    width_in <- 10
-    height_in <- 6
-
-    # FIX: Suppress Quartz popup on macOS - close any existing devices first
-    while (dev.cur() > 1) dev.off()
-
-    Cairo::Cairo(file, width = width_in, height = height_in, dpi = dpi,
-          bg = "white", type = format, units = "in")
-
-    oldMar <- par("mar"); par(mar = oldMar + c(0, 0, 0, 4))
-    plotDendroAndColors(
-      dendro       = hc,
-      colors       = colMat,
-      groupLabels  = label,
-      dendroLabels = FALSE,
-      addGuide     = TRUE,
-      guideHang    = 0.05,
-      main         = paste("Module dendrogram"),
-      ylab         = "1 \u2212 Pearson correlation")
-
-    ## legend
-    par(fig = c(0, 1, 0, 1), new = TRUE, mar = c(0, 0, 0, 0), xpd = NA)
-    plot(0, 0, type = "n", axes = FALSE, xlab = "", ylab = "")
-    legend("topright",
-           legend = names(legendPal),
-           fill   = legendPal,
-           border = NA,
-           cex    = 0.8,
-           bty    = "n")
-
-    # FIX: Suppress Quartz popup on macOS
-    par(oldMar)
-    invisible(dev.off())
-  }
-
   # -- MODULE dendrogram --------------------------------------------
   if (mode == "module") {
     # Detect feature column name (genes vs features)
@@ -561,8 +514,11 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
     # never rendered.
     idVec <- pal
 
-    file <- sprintf("%s_module_dendro_dpi%d.%s", imgName, dpi, format)
-    plotDendroColoured(hc, idVec, "modules", file, pal)
+    # what the dendrogram reads: the clustering, the colour of each leaf, the track label and the legend colours
+    pd <- list(hc = hc, colNamed = idVec, label = "modules", pal = pal)
+    stem <- paste0(imgName, "_module_dendro_")
+    .ov_plot_data(stem, pd, "DrawCEMiDendro", list(dpi = dpi, format = format))
+    DrawCEMiDendro(pd, stem, dpi, format)
     return(1)
   }
 
@@ -600,11 +556,78 @@ PlotCEMiDendro <- function(mode      = c("sample", "module"),
   colNamed <- setNames(pal[classes], names(classes))
 
   file <- sprintf("%sdpi%d.%s", imgName, dpi, format)
-  plotDendroColoured(hc, colNamed, "sample class", file, pal)
+  pd <- list(hc = hc, colNamed = colNamed, label = "sample class", pal = pal)
+  .ov_plot_data(imgName, pd, "DrawCEMiDendro", list(dpi = dpi, format = format))
+  DrawCEMiDendro(pd, imgName, dpi, format)
   imgSet <- readSet(imgSet, "imgSet");
   imgSet$coexp_dendrogram <- file;
   saveSet(imgSet, "imgSet");
   return("OK")
+}
+
+# Draws a coloured dendrogram from pd = list(hc = <hclust>, colNamed = <colour of each leaf, named by leaf>,
+# label = <colour track label>, pal = <legend colours, named by level>)
+DrawCEMiDendro <- function(pd, imgNm, dpi = 72, format = "png") {
+
+  library(Cairo); library(WGCNA)
+
+  # FIX: Suppress Quartz popup on macOS - override device at function start
+  old_device <- getOption("device")
+  old_bitmapType <- getOption("bitmapType")
+  options(device = function(...) pdf(file = NULL))
+  if (.Platform$OS.type == "unix" && Sys.info()["sysname"] == "Darwin") {
+    options(bitmapType = "cairo")
+  }
+  on.exit({
+    options(device = old_device, bitmapType = old_bitmapType)
+  }, add = TRUE)
+
+  hc <- pd$hc; colNamed <- pd$colNamed; label <- pd$label; legendPal <- pd$pal
+  file <- sprintf("%sdpi%d.%s", imgNm, dpi, format)
+
+  leaves <- labels(as.dendrogram(hc))
+  if (!all(leaves %in% names(colNamed)))
+    stop("Colour vector missing leaves:\n  ",
+         paste(setdiff(leaves, names(colNamed)), collapse = ", "))
+
+  colMat <- matrix(colNamed[leaves], nrow = length(leaves), ncol = 1,
+                   dimnames = list(leaves, NULL))
+
+  if (dpi == 72) dpi <- 96
+  width_in <- 10
+  height_in <- 6
+
+  # FIX: Suppress Quartz popup on macOS - close any existing devices first
+  while (dev.cur() > 1) dev.off()
+
+  Cairo::Cairo(file, width = width_in, height = height_in, dpi = dpi,
+        bg = "white", type = format, units = "in")
+
+  oldMar <- par("mar"); par(mar = oldMar + c(0, 0, 0, 4))
+  plotDendroAndColors(
+    dendro       = hc,
+    colors       = colMat,
+    groupLabels  = label,
+    dendroLabels = FALSE,
+    addGuide     = TRUE,
+    guideHang    = 0.05,
+    main         = paste("Module dendrogram"),
+    ylab         = "1 \u2212 Pearson correlation")
+
+  ## legend
+  par(fig = c(0, 1, 0, 1), new = TRUE, mar = c(0, 0, 0, 0), xpd = NA)
+  plot(0, 0, type = "n", axes = FALSE, xlab = "", ylab = "")
+  legend("topright",
+         legend = names(legendPal),
+         fill   = legendPal,
+         border = NA,
+         cex    = 0.8,
+         bty    = "n")
+
+  # FIX: Suppress Quartz popup on macOS
+  par(oldMar)
+  invisible(dev.off())
+  invisible(file)
 }
 
 # =======================================================================
@@ -754,56 +777,13 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     statsTbl <- statsTbl[order(statsTbl$P_value), , drop = FALSE]
     utils::write.csv(statsTbl, "cem_module_trait_stats.csv", row.names = FALSE)
 
-    ## -- 5 - device  (min 8 x 6 in)  -------------------------------
-    colfun <- colorRampPalette(c("royalblue4", "white", "tomato"))
-
-    outFile <- sprintf("%sdpi%d.%s", imgName, dpi, match.arg(format))
-    if(dpi == 72){
-        dpi <- 96;
-    }
-    width_px  <- max(50 + 40 * ncol(corMat), 8 * dpi)
-    height_px <- max(50 + 20 * nrow(corMat), 6 * dpi)
-    width_in  <- width_px  / dpi
-    height_in <- height_px / dpi
-
-
-    # FIX: Suppress Quartz popup on macOS - close any existing devices first
-    while (dev.cur() > 1) dev.off()
-
-    if (tolower(format) == "png") {
-      Cairo::Cairo(file   = outFile,
-            width  = width_in,
-            height = height_in,
-            dpi    = dpi,
-            bg     = "white",
-            type   = "png",
-            units  = "in")
-    } else {
-      Cairo::Cairo(file   = outFile,
-            width  = width_in,
-            height = height_in,
-            bg     = "white",
-            type   = "pdf")
-    }
-
-
-    ## optional: tighten default margins a little
-    oldMar <- par("mar"); on.exit(par(oldMar), add = TRUE)
-    par(mar = c(5, 9, 4, 2) + 0.1)
-
-    labeledHeatmap(Matrix          = corMat,
-                   xLabels         = colnames(mm),
-                   yLabels         = rownames(corMat),
-                   colorLabels     = FALSE,
-                   colors          = colfun(50),
-                   textMatrix      = textMat,
-                   setStdMargins   = FALSE,
-                   cex.text        = 0.7,
-                   zlim            = c(-1, 1),
-                   main            = paste("Module \u00d7", colLabel, "Levels"))
-
-    # FIX: Suppress Quartz popup on macOS
-    invisible(dev.off())
+    ## -- 5 - draw  (min 8 x 6 in)  ---------------------------------
+    # what the heatmap reads: the module x level correlations with their printed text, and the labels
+    pd <- list(corMat = corMat, textMat = textMat, xLabels = colnames(mm), yLabels = rownames(corMat), colLabel = colLabel)
+    fmt <- match.arg(format)
+    outFile <- sprintf("%sdpi%d.%s", imgName, dpi, fmt)
+    .ov_plot_data(imgName, pd, "DrawCEMiTreatmentHeatmap", list(dpi = dpi, format = fmt))
+    DrawCEMiTreatmentHeatmap(pd, imgName, dpi, fmt)
 
     imgSet <- readSet(imgSet, "imgSet");
     imgSet$coexp_traitheat <- outFile;
@@ -815,6 +795,76 @@ PlotCEMiTreatmentHeatmap <- function(factorName,
     message("ERROR in PlotCEMiTreatmentHeatmap: ", conditionMessage(e));
     0
   })
+}
+
+# Draws the module x trait-level correlation heatmap from pd = list(corMat = , textMat = , xLabels = , yLabels = , colLabel = )
+DrawCEMiTreatmentHeatmap <- function(pd, imgNm = "cem_treatment_heatmap", dpi = 96, format = "png") {
+
+  library(WGCNA); library(Cairo)
+
+  # FIX: Suppress Quartz popup on macOS - override device at function start
+  old_device <- getOption("device")
+  old_bitmapType <- getOption("bitmapType")
+  options(device = function(...) pdf(file = NULL))
+  if (.Platform$OS.type == "unix" && Sys.info()["sysname"] == "Darwin") {
+    options(bitmapType = "cairo")
+  }
+  on.exit({
+    options(device = old_device, bitmapType = old_bitmapType)
+  }, add = TRUE)
+
+  corMat <- pd$corMat
+
+  colfun <- colorRampPalette(c("royalblue4", "white", "tomato"))
+
+  outFile <- sprintf("%sdpi%d.%s", imgNm, dpi, format)
+  if(dpi == 72){
+      dpi <- 96;
+  }
+  width_px  <- max(50 + 40 * ncol(corMat), 8 * dpi)
+  height_px <- max(50 + 20 * nrow(corMat), 6 * dpi)
+  width_in  <- width_px  / dpi
+  height_in <- height_px / dpi
+
+
+  # FIX: Suppress Quartz popup on macOS - close any existing devices first
+  while (dev.cur() > 1) dev.off()
+
+  if (tolower(format) == "png") {
+    Cairo::Cairo(file   = outFile,
+          width  = width_in,
+          height = height_in,
+          dpi    = dpi,
+          bg     = "white",
+          type   = "png",
+          units  = "in")
+  } else {
+    Cairo::Cairo(file   = outFile,
+          width  = width_in,
+          height = height_in,
+          bg     = "white",
+          type   = "pdf")
+  }
+
+
+  ## optional: tighten default margins a little
+  oldMar <- par("mar"); on.exit(par(oldMar), add = TRUE)
+  par(mar = c(5, 9, 4, 2) + 0.1)
+
+  labeledHeatmap(Matrix          = corMat,
+                 xLabels         = pd$xLabels,
+                 yLabels         = pd$yLabels,
+                 colorLabels     = FALSE,
+                 colors          = colfun(50),
+                 textMatrix      = pd$textMat,
+                 setStdMargins   = FALSE,
+                 cex.text        = 0.7,
+                 zlim            = c(-1, 1),
+                 main            = paste("Module \u00d7", pd$colLabel, "Levels"))
+
+  # FIX: Suppress Quartz popup on macOS
+  invisible(dev.off())
+  invisible(outFile)
 }
 
 PlotCemiScaleFree <- function(imgName = "coexp_scalefree",

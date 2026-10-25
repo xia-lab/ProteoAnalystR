@@ -468,38 +468,15 @@ PlotPairwiseUpsetPNG <- function(dataName  = "",
       return(invisible(NULL))
     }
 
-    # Method-standard: persist the figure's underlying data table (per-protein
-    # binary membership across the contrasts) so the AI "Refine" control can
-    # re-plot from data and users can regenerate the figure in any tool. Helper
-    # lives in wf_method.R; guard so the public package still runs
-    # standalone.
-    if (exists("WfSaveFigureData")) tryCatch(WfSaveFigureData("upset", upset.df), error = function(e) NULL)
-
     n.sets <- min(length(sig.sets), max.sets)
-    w.in <- max(8, 0.45 * n.sets + 6)
-    h.in <- 6
 
+    # what the diagram reads: the 0/1 membership of every significant feature in each contrast, and the layout limits
+    pd <- list(upset = upset.df, n.sets = n.sets, max.inter = max.inter)
     imgPath <- paste0(imgName, ".", format)
-    Cairo::Cairo(file = imgPath, unit = "in", dpi = dpi,
-                 width = w.in, height = h.in, type = format, bg = "white")
-    tryCatch({
-      print(UpSetR::upset(
-        upset.df,
-        sets         = rev(colnames(upset.df))[seq_len(min(n.sets, ncol(upset.df)))],
-        nsets        = n.sets,
-        nintersects  = max.inter,
-        order.by     = "freq",
-        keep.order   = TRUE,
-        mainbar.y.label = "Features in intersection",
-        sets.x.label    = "Sig. features per contrast",
-        point.size   = 2.4,
-        line.size    = 0.8,
-        text.scale   = c(1.3, 1.2, 1.2, 1.0, 1.1, 1.0)
-      ))
-    }, error = function(e) {
-      message("[PlotPairwiseUpsetPNG] UpSetR::upset render error: ", conditionMessage(e))
-    })
-    dev.off()
+    # Method-standard: the figure's underlying data table (per-protein binary membership across the contrasts) is also
+    # offered as the downloadable upset_data.csv.
+    .ov_plot_data(imgName, pd, "DrawPairwiseUpset", list(dpi = dpi, format = format), export = list(upset = upset.df))
+    DrawPairwiseUpset(pd, imgName, dpi, format)
 
     n.total <- nrow(upset.df)
     message("[PlotPairwiseUpsetPNG] wrote ", imgPath,
@@ -511,4 +488,36 @@ PlotPairwiseUpsetPNG <- function(dataName  = "",
     tryCatch(dev.off(), error = function(x) {})
     return(invisible(NULL))
   })
+}
+
+# Draws the pairwise UpSet diagram from pd = list(upset = <0/1 membership data frame, one column per contrast>,
+# n.sets = <contrasts shown>, max.inter = <intersections shown>)
+DrawPairwiseUpset <- function(pd, imgNm = "upset_pairwise_0", dpi = 150, format = "png") {
+  require(Cairo)
+  upset.df <- pd$upset; n.sets <- pd$n.sets; max.inter <- pd$max.inter
+  w.in <- max(8, 0.45 * n.sets + 6)
+  h.in <- 6
+
+  imgPath <- paste0(imgNm, ".", format)
+  Cairo::Cairo(file = imgPath, unit = "in", dpi = dpi,
+               width = w.in, height = h.in, type = format, bg = "white")
+  tryCatch({
+    print(UpSetR::upset(
+      upset.df,
+      sets         = rev(colnames(upset.df))[seq_len(min(n.sets, ncol(upset.df)))],
+      nsets        = n.sets,
+      nintersects  = max.inter,
+      order.by     = "freq",
+      keep.order   = TRUE,
+      mainbar.y.label = "Features in intersection",
+      sets.x.label    = "Sig. features per contrast",
+      point.size   = 2.4,
+      line.size    = 0.8,
+      text.scale   = c(1.3, 1.2, 1.2, 1.0, 1.1, 1.0)
+    ))
+  }, error = function(e) {
+    message("[PlotPairwiseUpsetPNG] UpSetR::upset render error: ", conditionMessage(e))
+  })
+  dev.off()
+  invisible(imgPath)
 }

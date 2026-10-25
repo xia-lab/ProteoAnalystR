@@ -3578,14 +3578,35 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
   analSet$conf.mat <- print(analSet$conf.table, type = "html", print.results=F, caption.placement="top", html.table.attributes="border=1 width=150" )
 
 
+  stem <- imgName;
   imgName = paste(imgName, "dpi", dpi, ".", format, sep="");
-  w <- 9;
-  h <- 8;
 
   imgSet$roc.prob.plot <- imgName;
   imgSet$roc.prob.name <- mdl.inx
-  
-  
+
+  # what the plot reads: each sample's predicted probability and class, the labels, and the hold-out predictions when shown
+  pd <- list(prob = prob.vec, cls = cls, nms = nms, show = show, showPred = showPred,
+             test.x = NULL, test.cls = NULL, test.nms = NULL);
+  if(showPred){
+    pd$test.x <- analSet$multiROC$test.res;
+    pd$test.cls <- dataSet$test.cls;
+    pd$test.nms <- colnames(dataSet$test.data);
+  }
+  .ov_plot_data(stem, pd, "DrawPaProbView", list(dpi = dpi, format = format));
+  DrawPaProbView(pd, stem, dpi, format);
+  saveSet(analSet, "analSet");
+  saveSet(imgSet, "imgSet");
+  return(imgName);
+}
+
+# Draws the predicted class probability plot from pd = list(prob = <named probability per sample>, cls = <class factor>,
+# nms = <sample names>, show = , showPred = , test.x = <hold-out probabilities or NULL>, test.cls = , test.nms = )
+DrawPaProbView <- function(pd, imgNm, dpi=150, format="png"){
+  prob.vec <- pd$prob; cls <- pd$cls; nms <- pd$nms; show <- pd$show; showPred <- pd$showPred
+  imgName = paste(imgNm, "dpi", dpi, ".", format, sep="");
+  w <- 9;
+  h <- 8;
+
   Cairo::Cairo(file = imgName, unit="in", dpi=dpi, width=w, height=h, type=format, bg="white");
   
   set.seed(123);
@@ -3608,10 +3629,10 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
   
   test.y <- test.x <- 0;
   if(showPred){
-    test.y <- rnorm(length(analSet$multiROC$test.res));
-    test.x <- analSet$multiROC$test.res;
+    test.y <- rnorm(length(pd$test.x));
+    test.x <- pd$test.x;
 
-    pchs <- ifelse(as.numeric(dataSet$test.cls) == 1, 1, 19);
+    pchs <- ifelse(as.numeric(pd$test.cls) == 1, 1, 19);
     points(test.x, test.y, pch=pchs, cex=1.5, col="red");
   }
 
@@ -3641,20 +3662,20 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
 
     if(showPred){
       # Sample names are columns (featuresxsamples orientation)
-      nms <- colnames(dataSet$test.data);
+      nms <- pd$test.nms;
 
-      act.ones <- as.numeric(dataSet$test.cls)-1 == 1;
-      act.zeros <- as.numeric(dataSet$test.cls)-1 == 0;
+      act.ones <- as.numeric(pd$test.cls)-1 == 1;
+      act.zeros <- as.numeric(pd$test.cls)-1 == 0;
 
       # leave 0.5 there
       pred.vec <- ifelse(test.x > 0.5, 1, 0.5);
-      wrong.inx <- (pred.vec != as.numeric(dataSet$test.cls)-1) & act.ones;
+      wrong.inx <- (pred.vec != as.numeric(pd$test.cls)-1) & act.ones;
       if(sum(wrong.inx) > 0){
         text(test.x[wrong.inx], test.y[wrong.inx], nms[wrong.inx], pos=4, cex=0.9);
       }
 
       pred.vec <- ifelse(test.x < 0.5, 0, 0.5);
-      wrong.inx <- pred.vec != as.numeric(dataSet$test.cls)-1 & act.zeros;
+      wrong.inx <- pred.vec != as.numeric(pd$test.cls)-1 & act.zeros;
       if(sum(wrong.inx) > 0){
         text(test.x[wrong.inx], test.y[wrong.inx], nms[wrong.inx], pos=2, cex=0.9);
       }
@@ -3662,9 +3683,7 @@ PlotProbView <- function(dataName = "", imgName, format="png", dpi=default.dpi, 
   }
   par(op)
   dev.off();
-  saveSet(analSet, "analSet");
-  saveSet(imgSet, "imgSet");
-  return(imgName);
+  invisible(imgName);
 }
 
 #'Plot a summary view of the classification result of tester prediction
@@ -3868,15 +3887,14 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
 
   anal.mode <- analSet$mode;
 
+  stem <- imgName;
   imgName = paste(imgName, "dpi", dpi, ".", format, sep="");
-  w <- 8; h <- 8;
 
   imgSet$roc.multi.plot <- imgName;
   imgSet$roc.multi.model <- mdl.inx;
 
-  Cairo::Cairo(file = imgName, unit="in", dpi=dpi, width=w, height=h, type=format, bg="white");
-
-  op <- par(mar=c(5,4,3,3));
+  # what the plot reads: the (averaged) ROC curve of each model and the legend, or the one model's curve with its text and band
+  pd <- list(mode = "none");
 
   if(mdl.inx == 0){ # compare all models
     #msg("[PlotROC] DEBUG: Comparing all models")
@@ -3895,37 +3913,14 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
     perf.avg <- ComputeAverageCurve(perf, avg.method);
     #msg("[PlotROC] DEBUG: Average curve computed")
 
-    cols <- (1:length(preds))+1;
-    #msg("[PlotROC] DEBUG: Creating plot canvas")
-    ROCR::plot(perf.avg@x.values[[1]], perf.avg@y.values[[1]], type="n", axes=F,
-               xlim=c(0,1), ylim=c(0,1),
-               xlab="1-Specificity (False positive rate)",
-               ylab="Sensitivity (True positive rate)"
-    );
-
-    #msg("[PlotROC] DEBUG: Adding plot elements")
-    box()
-    axis(side=2)
-    lab.at <- seq(0, 1, 0.2);
-    grid.at <- seq(0, 1, 0.1);
-    lab.labels <- lab.at
-    axis(side=1, at=lab.at, labels=as.graphicsAnnot(sprintf( "%.1f", lab.labels)));
-    abline(v=grid.at, lty=3, col="lightgrey");
-    abline(h=grid.at, lty=3, col="lightgrey");
-    lines(perf.avg@x.values[[1]], perf.avg@y.values[[1]], col=cols[1]);
+    curves <- list(list(x = perf.avg@x.values[[1]], y = perf.avg@y.values[[1]]));
 
     #msg("[PlotROC] DEBUG: Adding lines for ", length(preds), " models")
     for(i in 2:length(preds)){
-      if (i %% 2 == 0) {
-        #msg("[PlotROC] DEBUG: Processing model ", i)
-      }
       perf <- ROCR::performance(preds[[i]], "tpr", "fpr");
       avg <- ComputeAverageCurve(perf, avg.method);
-      lines(avg@x.values[[1]], avg@y.values[[1]], col=cols[i]);
+      curves[[i]] <- list(x = avg@x.values[[1]], y = avg@y.values[[1]]);
     }
-
-    #msg("[PlotROC] DEBUG: Adding legend")
-    best.inx <- which.max(auroc);
 
     # now add and format legends to the bottom right corner
     feats <- c("Var.", names(preds));
@@ -3949,12 +3944,7 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
     }
 
     legends <- paste(feats, vals, cis, sep=" ");
-
-    pch <- c(NA, rep(15, length(preds)));
-    cols <- c(NA, cols);
-
-    legend("bottomright", legend = legends, pch=15, col=cols);
-    #msg("[PlotROC] DEBUG: Legend added");
+    pd <- list(mode = "all", curves = curves, legends = legends);
 
   }else if(mdl.inx > 0){
 
@@ -3968,6 +3958,69 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
     x.all <- perf.avg@x.values[[1]];
     lgd <- paste("Area under the curve (AUC) =", auroc, "\n",
                  "95% CI:", auc.ci);
+
+    conf <- NULL;
+    if(show.conf){
+      res <- ComputeHighLow(perf);
+      conf <- list(low = res$con.low, high = res$con.high);
+    }
+    pd <- list(mode = "one", x = x.all, y = y.all, legend = lgd, conf = conf);
+
+  }
+
+  .ov_plot_data(stem, pd, "DrawPaRoc", list(dpi = dpi, format = format));
+  DrawPaRoc(pd, stem, dpi, format);
+
+  #msg("[PlotROC] DEBUG: Closing graphics device and saving")
+  # analSet is only read on this path; re-saving the unchanged object just
+  # rewrote analSet.qs (readSet already left it in the in-memory cache).
+  if (!file.exists("analSet.qs")) saveSet(analSet, "analSet");
+  saveSet(imgSet, "imgSet");
+  #msg("[PlotROC] DEBUG: PlotROC completed successfully")
+  return(imgName);
+}
+
+# Draws the cross-validated ROC plot from pd = list(mode = "all", curves = <list of list(x, y), one per model>, legends = <one
+# line per model and a header>) or list(mode = "one", x = , y = , legend = <text>, conf = <list(low, high) or NULL>)
+DrawPaRoc <- function(pd, imgNm, dpi=150, format="png"){
+  imgName = paste(imgNm, "dpi", dpi, ".", format, sep="");
+  w <- 8; h <- 8;
+
+  Cairo::Cairo(file = imgName, unit="in", dpi=dpi, width=w, height=h, type=format, bg="white");
+
+  op <- par(mar=c(5,4,3,3));
+
+  if(identical(pd$mode, "all")){ # compare all models
+    curves <- pd$curves;
+    cols <- (1:length(curves))+1;
+    ROCR::plot(curves[[1]]$x, curves[[1]]$y, type="n", axes=F,
+               xlim=c(0,1), ylim=c(0,1),
+               xlab="1-Specificity (False positive rate)",
+               ylab="Sensitivity (True positive rate)"
+    );
+
+    box()
+    axis(side=2)
+    lab.at <- seq(0, 1, 0.2);
+    grid.at <- seq(0, 1, 0.1);
+    lab.labels <- lab.at
+    axis(side=1, at=lab.at, labels=as.graphicsAnnot(sprintf( "%.1f", lab.labels)));
+    abline(v=grid.at, lty=3, col="lightgrey");
+    abline(h=grid.at, lty=3, col="lightgrey");
+    lines(curves[[1]]$x, curves[[1]]$y, col=cols[1]);
+
+    for(i in 2:length(curves)){
+      lines(curves[[i]]$x, curves[[i]]$y, col=cols[i]);
+    }
+
+    pch <- c(NA, rep(15, length(curves)));
+    cols <- c(NA, cols);
+
+    legend("bottomright", legend = pd$legends, pch=15, col=cols);
+
+  }else if(identical(pd$mode, "one")){
+    x.all <- pd$x;
+    y.all <- pd$y;
 
     ROCR::plot(x.all, y.all, type="n", axes=F,
                xlim=c(0,1), ylim=c(0,1),
@@ -3985,24 +4038,16 @@ PlotROC <- function(dataName = "", imgName, format="png", dpi=default.dpi, mdl.i
     abline(h=grid.at, lty=3, col="lightgrey");
     lines(x.all, y.all, type="l", lwd=2, col="blue");
 
-    if(show.conf){
-      res <- ComputeHighLow(perf);
-      suppressWarnings(polygon(c(x.all, rev(x.all)), c(res$con.low, rev(res$con.high)), col="#0000ff22"))
+    if(!is.null(pd$conf)){
+      suppressWarnings(polygon(c(x.all, rev(x.all)), c(pd$conf$low, rev(pd$conf$high)), col="#0000ff22"))
     }
 
-    legend("center", legend = lgd, bty="n");
+    legend("center", legend = pd$legend, bty="n");
 
   }
 
-  #msg("[PlotROC] DEBUG: Closing graphics device and saving")
   dev.off();
-  #msg("[PlotROC] DEBUG: Graphics device closed, file should be at: ", imgName)
-  # analSet is only read on this path; re-saving the unchanged object just
-  # rewrote analSet.qs (readSet already left it in the in-memory cache).
-  if (!file.exists("analSet.qs")) saveSet(analSet, "analSet");
-  saveSet(imgSet, "imgSet");
-  #msg("[PlotROC] DEBUG: PlotROC completed successfully")
-  return(imgName);
+  invisible(imgName);
 }
 
 #'Plot ROC for the ROC Curve Based Model Creation and Evaluation module
@@ -4224,10 +4269,8 @@ PlotAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi){
 
   anal.mode <- analSet$mode;
 
+  stem <- imgName;
   imgName = paste(imgName, "dpi", dpi, ".", format, sep="");
-  w <- 9; h <- 7;
-
-  Cairo::Cairo(file = imgName, unit="in", dpi=dpi, width=w, height=h, type=format, bg="white");
 
   if(is.null(analSet$multiROC$accu.mat)){
     #msg("[PlotAccuracy] DEBUG: Using ROCtest accu.mat")
@@ -4237,10 +4280,25 @@ PlotAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi){
     accu.mat <- analSet$multiROC$accu.mat;
   }
 
-  #msg("[PlotAccuracy] DEBUG: accu.mat is.null? ", is.null(accu.mat))
-  if (!is.null(accu.mat)) {
-    #msg("[PlotAccuracy] DEBUG: accu.mat dimensions: ", nrow(accu.mat), " x ", ncol(accu.mat))
-  }
+  # what the plot reads: the accuracy of every cross-validation run at each number of features
+  pd <- list(accu = accu.mat);
+  .ov_plot_data(stem, pd, "DrawPaAccuracy", list(dpi = dpi, format = format));
+  DrawPaAccuracy(pd, stem, dpi, format);
+
+  imgSet$roc.pred <- imgName;
+
+  saveSet(imgSet, "imgSet");
+  return(imgName);
+}
+
+# Draws the predictive accuracy plot from pd = list(accu = <runs x feature-count accuracy matrix>)
+DrawPaAccuracy <- function(pd, imgNm, dpi=150, format="png"){
+  imgName = paste(imgNm, "dpi", dpi, ".", format, sep="");
+  w <- 9; h <- 7;
+
+  Cairo::Cairo(file = imgName, unit="in", dpi=dpi, width=w, height=h, type=format, bg="white");
+
+  accu.mat <- pd$accu;
 
   # OPTIMIZED: Use colMeans instead of apply for 60-100x speedup
   mn.accu <- colMeans(accu.mat);
@@ -4260,11 +4318,8 @@ PlotAccuracy<-function(dataName = "", imgName, format="png", dpi=default.dpi){
   lbls <- colnames(accu.mat);
   axis(1, 1:length(mn.accu), labels=lbls);
 
-  imgSet$roc.pred <- imgName;
-
   dev.off();
-  saveSet(imgSet, "imgSet");
-  return(imgName);
+  invisible(imgName);
 }
 
 #'Plot classification performance using different features for Biomarker Tester
@@ -4353,12 +4408,10 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
   #msg("[PlotImpBiomarkers] DEBUG: analSet$multiROC is.null? ", is.null(analSet$multiROC))
 
   anal.mode <- analSet$mode;
+  stem <- imgName;
   imgName = paste(imgName, "dpi", dpi, ".", format, sep="");
-  w <- 8; h <- 8;
   imgSet$roc.imp.plot <- imgName;
   imgSet$roc.imp.name <- mdl.inx
-
-  Cairo::Cairo(file = imgName, unit="in", dpi=dpi, width=w, height=h, type=format, bg="white");
 
   if(is.null(dataSet$norm_explore)){
     data <- dataSet$data.norm;
@@ -4370,7 +4423,6 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
   #msg("[PlotImpBiomarkers] DEBUG: data dimensions: ", nrow(data), " x ", ncol(data))
 
   cls <- dataSet$cls;
-  op <- par(mar=c(6,10,3,7));
 
   # if(anal.mode == "explore"){
   if(mdl.inx == -1){
@@ -4477,8 +4529,38 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
 
   # Truncate long names
   vip.nms <- substr(vip.nms, 1, 20);
+
+  # what the plot reads: the importance of each plotted feature, its display name, the axis label, the Low/High pattern per
+  # class and the class labels
+  names(imp.vec) <- nms.orig;
+  pd <- list(imp = imp.vec, labels = vip.nms, xlab = xlbl, lowhigh = lowhigh[nms.orig, ,drop=FALSE], cls.lbl = levels(cls));
+  .ov_plot_data(stem, pd, "DrawPaImpBiomarkers", list(dpi = dpi, format = format));
+  DrawPaImpBiomarkers(pd, stem, dpi, format);
+
+  # Save norm_explore update if it was created
+  if(!is.null(dataSet$norm_explore)){
+    RegisterData(dataSet);
+  }
+  saveSet(analSet, "analSet");
+  saveSet(imgSet, "imgSet");
+  return(imgName);
+
+}
+
+# Draws the important-biomarker dot chart from pd = list(imp = <named importance, plotted bottom to top>, labels = <display name per
+# feature>, xlab = , lowhigh = <features x classes matrix of "Low"/"High">, cls.lbl = <class labels>)
+DrawPaImpBiomarkers <- function(pd, imgNm, dpi=150, format="png"){
+  imgName = paste(imgNm, "dpi", dpi, ".", format, sep="");
+  w <- 8; h <- 8;
+  Cairo::Cairo(file = imgName, unit="in", dpi=dpi, width=w, height=h, type=format, bg="white");
+
+  imp.vec <- pd$imp; vip.nms <- pd$labels; xlbl <- pd$xlab; lowhigh <- pd$lowhigh
+  nms.orig <- names(imp.vec)
+  feat.num <- length(imp.vec)
+  op <- par(mar=c(6,10,3,7));
+
   names(imp.vec) <- NULL;
-  
+
   xlim.ext <- GetExtendRange(imp.vec, 12);
   dotchart(imp.vec, bg="blue", xlab= xlbl, xlim=xlim.ext);
   
@@ -4496,9 +4578,6 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
   
   par(xpd=T);
   
-  # now synchronize lowhigh with imp.vec
-  lowhigh <- lowhigh[nms.orig, ,drop=FALSE];
-  
   nc <- ncol(lowhigh);
   col <- colorRampPalette(RColorBrewer::brewer.pal(10, "RdYlBu"))(nc);
   
@@ -4508,7 +4587,7 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
     bg[m,] <- ifelse(lowhigh[m,]=="High", col[1], col[2]);
   } 
   
-  cls.lbl <- levels(cls);
+  cls.lbl <- pd$cls.lbl;
   
   for (n in 1:ncol(lowhigh)){
     points(x,y, bty="n", pch=22, bg=bg[,n], cex=3);
@@ -4534,15 +4613,7 @@ PlotImpBiomarkers <- function(dataName = "", imgName, format="png", dpi=default.
   text(x[1], starty-shifty/8, "Low");
   par(op);
   dev.off();
-
-  # Save norm_explore update if it was created
-  if(!is.null(dataSet$norm_explore)){
-    RegisterData(dataSet);
-  }
-  saveSet(analSet, "analSet");
-  saveSet(imgSet, "imgSet");
-  return(imgName);
-
+  invisible(imgName);
 }
 
 
