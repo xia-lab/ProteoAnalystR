@@ -1268,7 +1268,7 @@ ReadMetaData <- function(metafilename){
   # garbage (~1e-313). .safe_numeric_matrix coerces each column by value first.
   int.mat <- .safe_numeric_matrix(dat[, quant.names, drop = FALSE])
   rownames(int.mat) <- rownames(dat)
-  int.mat[int.mat == 0] <- NA
+  if (isTRUE(getOption("pa.zeros.missing", TRUE))) int.mat[int.mat == 0] <- NA   # zeros are not detected unless the person said a zero is a value (WfSetPaLoadChoices)
 
   # --- Step 5: Format Output to Match Original Function ---
   
@@ -1556,7 +1556,7 @@ ReadMetaData <- function(metafilename){
   intens <- .safe_numeric_matrix(intens)
 
   # Replace 0 with NA (MaxQuant convention)
-  intens[intens == 0] <- NA
+  if (isTRUE(getOption("pa.zeros.missing", TRUE))) intens[intens == 0] <- NA   # zeros are not detected unless the person said a zero is a value (WfSetPaLoadChoices)
 
   # Remove rows that are all NA
   keep_rows <- rowSums(!is.na(intens)) > 0
@@ -4013,7 +4013,7 @@ SetPhosphoOptions <- function(format = "diann_report", ptm = "phospho", locProb 
                           fill = NA_real_)
   int.mat <- as.matrix(wide[, -1, drop = FALSE])
   storage.mode(int.mat) <- "numeric"
-  int.mat[int.mat == 0] <- NA_real_
+  if (isTRUE(getOption("pa.zeros.missing", TRUE))) int.mat[int.mat == 0] <- NA_real_   # zeros are not detected unless the person said a zero is a value (WfSetPaLoadChoices)
   key.map <- unique(long[, c("FeatureKey", "Peptide", "Protein", "Charge")])
   key.map <- key.map[match(wide$FeatureKey, key.map$FeatureKey), , drop = FALSE]
   feature.ids <- make.unique(paste0(key.map$Peptide, "_z", key.map$Charge))

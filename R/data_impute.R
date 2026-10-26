@@ -41,7 +41,7 @@ ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
   }
 
   # Treat strict zeros as missing (common in proteomics exports)
-  int.mat[int.mat == 0] <- NA
+  if (isTRUE(getOption("pa.zeros.missing", TRUE))) int.mat[int.mat == 0] <- NA   # zeros are not detected unless the person said a zero is a value (WfSetPaLoadChoices)
   current.msg <- msgSet$current.msg;
 
   # DETECTION FILTER (before imputation) -- proteomics only. Mirrors the phospho
@@ -414,7 +414,7 @@ ImputeMissingVarPhospho <- function(dataName = "", method = "min", min.obs.per.g
     return(0);
   }
   # Treat strict zeros as missing (common in proteomics/phospho exports)
-  int.mat[int.mat == 0] <- NA
+  if (isTRUE(getOption("pa.zeros.missing", TRUE))) int.mat[int.mat == 0] <- NA   # zeros are not detected unless the person said a zero is a value (WfSetPaLoadChoices)
 
   current.msg <- msgSet$current.msg;
   new.mat <- NULL;
