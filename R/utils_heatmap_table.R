@@ -37,8 +37,8 @@ my.prepare.heatmap.json <- function(dataSet, displayOpt="sig"){
   if(displayOpt == "all"){
     #get all
   }else if(displayOpt == "top5000"){
-    gene.variances <- apply(data.stat[all.ids, , drop = FALSE], 1, var)
-    # Sorting features by variance and selecting top 5000 if there are more than that
+    # Rank by IQR, as ExpressAnalystR does: the most variable features by interquartile range
+    gene.variances <- apply(data.stat[all.ids, , drop = FALSE], 1, IQR, na.rm = TRUE)
     if (length(gene.variances) > 5000) {
       all.ids <- names(sort(gene.variances, decreasing = TRUE)[1:5000])
     } else {
@@ -276,8 +276,8 @@ my.prepare.metadata.heatmap.json <- function(dataSet,displayOpt="sig"){
   # Sorting features by variance and selecting top 5000 if there are more than that
 
   if(displayOpt == "top5000"){
-    gene.variances <- apply(inmex.meta$plot.data, 1, var)
-    # Sorting features by variance and selecting top 5000 if there are more than that
+    # Rank by IQR, as ExpressAnalystR does
+    gene.variances <- apply(inmex.meta$plot.data, 1, IQR, na.rm = TRUE)
     if (length(gene.variances) > 5000) {
       gene.vec <- names(sort(gene.variances, decreasing = TRUE)[1:5000])
     } else{
