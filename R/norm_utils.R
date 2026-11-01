@@ -1527,36 +1527,39 @@ SummarizeProteomicsData <- function(dataName = "",
   msgSet$current.msg <- c(msgSet$current.msg,
                           "Protein-level annotation completed (input IDs parsed to UniProt).")
 
-  if (isTRUE(filter.unmapped)) {
-    sym.map <- tryCatch(
-      readDataQs("symbol.map.qs", paramSet$anal.type, dataName),
-      error = function(e) NULL
-    )
-    if (!is.null(sym.map) && is.data.frame(sym.map) && nrow(sym.map) > 0 &&
-        "uniprot" %in% colnames(sym.map) && "symbol" %in% colnames(sym.map)) {
-      # symbol == uniprot means no real gene symbol was found (UniProt ID used as fallback)
-      real.sym.inx <- !is.na(sym.map$symbol) & nzchar(sym.map$symbol) &
-                      sym.map$symbol != sym.map$uniprot
-      ids.with.sym <- unique(sym.map$uniprot[real.sym.inx])
-      mat <- dataSet$data.norm
-      keep <- intersect(rownames(mat), ids.with.sym)
-      n.before <- nrow(mat)
-      if (length(keep) > 0 && length(keep) < n.before) {
-        mat <- mat[keep, , drop = FALSE]
-        dataSet$data.norm <- mat
-        ov_qs_save(mat, "int.mat.qs")
-        ov_qs_save(mat, "orig.data.anot.qs")
-        ov_qs_save(mat, "norm.input.anot.qs")
-        ov_qs_save(mat, "data.missed.qs")
-        ov_qs_save(mat, "data.raw.qs")
-        n.removed <- n.before - nrow(mat)
+  # Proteins without a gene symbol (a UniProt ID the mapping cannot name - often an unreviewed TrEMBL accession) are counted every time
+  # and said: kept by default under their UniProt IDs; removed only when asked, and said with both numbers when that is most of the data.
+  sym.map <- tryCatch(readDataQs("symbol.map.qs", paramSet$anal.type, dataName), error = function(e) NULL)
+  if (!is.null(sym.map) && is.data.frame(sym.map) && nrow(sym.map) > 0 &&
+      "uniprot" %in% colnames(sym.map) && "symbol" %in% colnames(sym.map)) {
+    # symbol == uniprot means no real gene symbol was found (UniProt ID used as fallback)
+    real.sym.inx <- !is.na(sym.map$symbol) & nzchar(sym.map$symbol) & sym.map$symbol != sym.map$uniprot
+    ids.with.sym <- unique(sym.map$uniprot[real.sym.inx])
+    mat <- dataSet$data.norm
+    keep <- intersect(rownames(mat), ids.with.sym)
+    n.before <- nrow(mat)
+    n.none <- n.before - length(keep)
+    if (!isTRUE(filter.unmapped)) {
+      if (n.none > 0)
         msgSet$current.msg <- c(msgSet$current.msg,
-          paste0("Removed ", n.removed, " unannotated protein(s) without a gene symbol; ",
-                 nrow(mat), " proteins retained."))
-      } else if (length(keep) == 0) {
-        msgSet$current.msg <- c(msgSet$current.msg,
-          "Warning: all proteins lack a gene symbol; skipping unannotated filter.")
-      }
+          paste0(n.none, " of ", n.before, " proteins have no gene symbol in the mapping (often unreviewed TrEMBL accessions); ",
+                 "they are kept under their UniProt IDs. Gene-based steps such as enrichment cannot use them."))
+    } else if (length(keep) > 0 && length(keep) < n.before) {
+      mat <- mat[keep, , drop = FALSE]
+      dataSet$data.norm <- mat
+      ov_qs_save(mat, "int.mat.qs")
+      ov_qs_save(mat, "orig.data.anot.qs")
+      ov_qs_save(mat, "norm.input.anot.qs")
+      ov_qs_save(mat, "data.missed.qs")
+      ov_qs_save(mat, "data.raw.qs")
+      msgSet$current.msg <- c(msgSet$current.msg,
+        if (n.none > n.before / 2)
+          paste0("Warning: removed ", n.none, " of ", n.before, " proteins - most of the data - because they have no gene symbol; ",
+                 nrow(mat), " proteins retained. Uncheck \"Remove proteins without a gene symbol\" to keep them under their UniProt IDs.")
+        else paste0("Removed ", n.none, " of ", n.before, " proteins without a gene symbol; ", nrow(mat), " proteins retained."))
+    } else if (isTRUE(filter.unmapped) && length(keep) == 0) {
+      msgSet$current.msg <- c(msgSet$current.msg,
+        "Warning: no protein has a gene symbol; every protein is kept under its UniProt ID.")
     }
   }
 
