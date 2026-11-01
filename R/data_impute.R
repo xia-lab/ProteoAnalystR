@@ -6,6 +6,9 @@
 #'
 #' @param dataName The name of the dataset to be processed.
 #' @param method The imputation method to be used. Can be one of "exclude", "min", "colmin", "mean", "median", "knn_var", "knn_smp", "bpca", "ppca", "svdImpute".
+#' @param inputScale What the values are: "intensity", "log_ratio" or "ratio" (ratios to a reference). NULL = as PerformNormalization
+#'   recorded it. For ratios a missing value is not below a detection limit: the left-censored methods (min, colmin, mindet, minprob,
+#'   qrilc) are refused, zeros are values, and a protein absent from one group is not kept by imputing it as undetected.
 #'
 #' @author Guangyan Zhou \email{guangyan.zhou@mail.mcgill.ca}
 #' @details Additional details about the function, if needed.
@@ -18,10 +21,18 @@
 #' @export
 #' @license MIT License
 #'
-ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
+ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2, inputScale=NULL){
   dataSet <- readDataset(dataName);
   msgSet <- readSet(msgSet, "msgSet");
   paramSet <- readSet(paramSet, "paramSet");
+  if (is.null(inputScale)) inputScale <- paramSet$input.scale
+  is.ratio <- isTRUE(as.character(inputScale)[1] %in% c("log_ratio", "ratio"))
+  if (is.ratio && method %in% c("min", "colmin", "mindet", "minprob", "qrilc")) {
+    AddErrMsg(paste0("The values are ratios to a reference, so a missing value is not below a detection limit and '", method,
+                     "' (a left-censored, limit-of-detection imputation) is not used. Leave missing values (none: limma fits each protein ",
+                     "on the samples it was measured in), or impute them by kNN (knn_var) or SVD (svdImpute)."))
+    return(0)
+  }
 
   int.mat <- dataSet$data.norm;
   if (is.null(int.mat)) {
@@ -41,7 +52,7 @@ ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
   }
 
   # Treat strict zeros as missing (common in proteomics exports)
-  if (isTRUE(getOption("pa.zeros.missing", TRUE))) int.mat[int.mat == 0] <- NA   # zeros are not detected unless the person said a zero is a value (WfSetPaLoadChoices)
+  if (!is.ratio && isTRUE(getOption("pa.zeros.missing", TRUE))) int.mat[int.mat == 0] <- NA   # zeros are not detected unless the person said a zero is a value (WfSetPaLoadChoices); a zero ratio is a value
   current.msg <- msgSet$current.msg;
 
   # DETECTION FILTER (before imputation) -- proteomics only. Mirrors the phospho
@@ -81,6 +92,14 @@ ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
       })
       well <- if (is.matrix(well)) rowSums(well) > 0 else well
       one.group <- !keep & well
+      if (is.ratio) {
+        # A ratio missing from a whole group is not "below detection": nothing can be imputed for it, so it is said and left out.
+        if (any(one.group))
+          current.msg <- c(current.msg, paste0(
+            sum(one.group), " protein(s) measured in one group and absent or nearly absent from another are left out: the values ",
+            "are ratios to a reference, and a missing ratio is not below a detection limit."))
+        one.group[] <- FALSE
+      }
       keep <- keep | one.group
       paramSet$one.group.kept <- sum(one.group)
       if (any(one.group))
@@ -112,7 +131,8 @@ ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
     # Pass-through: keep missing values (e.g. after MSstats MBimpute
     # summarization, where remaining NAs are condition-absent proteins).
     new.mat <- int.mat;
-    current.msg <- c(current.msg, "Protein-level imputation skipped ('none'); missing values retained.");
+    current.msg <- c(current.msg, if (is.ratio) "Missing values left as they are: limma fits each protein on the samples it was measured in."
+                                  else "Protein-level imputation skipped ('none'); missing values retained.");
   }else if(method=="exclude"){
     # OPTIMIZED: Use rowSums instead of apply for 60-100x speedup
     good.inx<-rowSums(is.na(int.mat))==0

@@ -22,12 +22,29 @@
 PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, filterUnmapped,
                                  islog = "false", countOpt = "sum", removeMissing = "false", missingPercent = 50,
                                  sampleNormOpt = "none", sampleNormParam = "__manual__",
-                                 groupAwareMissing = "true") {
+                                 groupAwareMissing = "true", inputScale = "intensity") {
   paramSet <- readSet(paramSet, "paramSet");
   msgSet   <- readSet(msgSet, "msgSet");
   dataSet  <- readDataset(dataName);
   msg <- ""
   msgSet$sample.norm.msg <- character(0)
+
+  # What the values are is declared (inputScale: "intensity", "log_ratio" or "ratio"; see NormalizeData), never inferred.
+  # A method that does not apply to ratios is refused before anything is filtered, in one sentence.
+  input.scale <- if (is.null(inputScale) || !length(inputScale) || is.na(inputScale[1])) "intensity" else as.character(inputScale[1])
+  if (input.scale %in% .ratio.scales) {
+    refusal <- .ratio.norm.refusal(norm.opt, input.scale)
+    if (is.null(refusal) && identical(islog, "true"))
+      refusal <- paste0("The values are ", if (input.scale == "log_ratio") "log2 ratios to a reference, already on the log scale" else "ratios to a reference, which are log2-transformed by themselves",
+                        ", so the log transform is not applied again.")
+    if (!is.null(refusal)) {
+      msgSet$current.msg <- c(msgSet$current.msg, refusal)
+      saveSet(msgSet, "msgSet")
+      AddErrMsg(refusal)
+      return(0)
+    }
+  }
+  paramSet$input.scale <- input.scale
 
   # Any prior protein-adjusted result was derived from a different normalized
   # matrix and must not be reused after normalization is rerun.
@@ -70,7 +87,7 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
 
   data <- PerformFiltering(dataSet, var.thresh, count.thresh, filterUnmapped, countOpt,
                            removeMissing = removeMissing, missingPercent = missingPercent,
-                           groupAwareMissing = groupAwareMissing)
+                           groupAwareMissing = groupAwareMissing, inputScale = input.scale)
 
   # Check if we have data after filtering
   if (nrow(data) == 0 || ncol(data) == 0) {
@@ -199,7 +216,7 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
     msg <- msg
   } else {
     # ---- existing generic normalization ----
-    data <- NormalizeData(data, norm.opt, "NA", "NA")
+    data <- NormalizeData(data, norm.opt, "NA", "NA", inputScale = input.scale)
     if (length(data) == 1 && identical(as.numeric(data), 0)) {
       return(0)
     }
@@ -605,8 +622,10 @@ ApplyProteotypicFilter <- function(dataName) {
 
 PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, countOpt,
                              removeMissing = "false", missingPercent = 50,
-                             groupAwareMissing = "true"){
+                             groupAwareMissing = "true", inputScale = "intensity"){
   msg <- "";
+  # Ratios to a reference: a negative (or small) ratio is not low abundance, and a zero is a value (a ratio of 1).
+  is.ratio <- isTRUE(inputScale %in% .ratio.scales)
   remove.missing.flag <- isTRUE(removeMissing) ||
     identical(removeMissing, "true") ||
     identical(removeMissing, "TRUE")
@@ -716,6 +735,9 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
         rm.inx <- is.na(avg.counts) | avg.counts < count.thresh
         msg <- paste(msg, "Filtered ", sum(rm.inx), " features with low counts using average method.", collapse = " ")
     }
+  }else if (is.ratio) {
+    rm.inx <- is.na(rowMeans(data, na.rm=TRUE))     # only rows with no value at all
+    msg <- paste(msg, "Low-abundance filter not applied: the values are ratios to a reference, where a low or negative ratio is not low abundance.", collapse=" ");
   }else{
     avg.signal <- rowMeans(data, na.rm=TRUE)
     abundance.pct <- count.thresh/100;
@@ -751,7 +773,7 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
     if (is.character(data)) {
       miss.ind <- miss.ind | data == "NA"
     }
-    zero.ind <- !is.na(data) & data == 0
+    zero.ind <- !is.na(data) & data == 0 & !is.ratio
     miss.ind <- miss.ind | zero.ind
     # GROUP-AWARE. Proteomics missingness is not random: a protein below the detector limit in
     # one condition and abundant in the other is absent from half the samples BY BIOLOGY, and
@@ -881,13 +903,62 @@ NormalizeDataMetaMode <-function (nm, opt, colNorm="NA", scaleNorm="NA"){
   }
 }
 
-NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
+# Ratios to a reference (inputScale "log_ratio" or "ratio"): the normalizations and imputations that apply to them.
+.ratio.norm.opts <- c("medianCenter", "none", "quantile", "madScale")
+.ratio.impute.refused <- c("min", "colmin", "mindet", "minprob", "qrilc")
+.ratio.scales <- c("log_ratio", "ratio")
+
+# The sentence that refuses a normalization for ratio input, or NULL when it applies (or the input is not ratios).
+.ratio.norm.refusal <- function(norm.opt, input.scale) {
+  if (!isTRUE(input.scale %in% .ratio.scales) || isTRUE(norm.opt %in% .ratio.norm.opts)) return(NULL)
+  ratio.words <- if (identical(input.scale, "log_ratio")) "log2 ratios to a reference" else "ratios to a reference"
+  why <- switch(as.character(norm.opt),
+    log = , logMedian = "they are relative already and are log-transformed once at most (ratios not yet logged are log2-transformed first, by themselves)",
+    vsn = , combined = "VSN models raw intensities and their mean-variance trend, which ratios do not have",
+    median = "dividing by the sample median, which is near 0 for log ratios, blows the values up",
+    "that method is for intensities or counts")
+  paste0("The values are ", ratio.words, ", so '", norm.opt, "' normalization is not used: ", why,
+         ". For ratios use median centring (medianCenter, the default), none, quantile or MAD scaling (madScale).")
+}
+
+# inputScale: what the values ARE, declared by the person (never inferred here): "intensity" (raw or log2 intensities, the
+# default), "log_ratio" (log2 ratios to a reference channel: TMT, iTRAQ, CPTAC) or "ratio" (ratios to a reference, not yet
+# logged: SILAC). Ratios are relative already: they are median-centred ("medianCenter", the default for them), MAD-scaled
+# ("madScale"), quantile-normalized or left as they are ("none"); a log transform, VSN or a division by the sample median
+# (near 0 for log ratios) is refused with a sentence, never applied. Infinite values (a ratio to a reference of 0) are missing.
+NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA", inputScale="intensity"){
   msg <- ""
   row.nms <- rownames(data);
   col.nms <- colnames(data);
   msgSet <- readSet(msgSet, "msgSet");
   
   data <- sanitizeSmallNumbers(data)
+
+  input.scale <- if (is.null(inputScale) || !length(inputScale) || is.na(inputScale[1])) "intensity" else as.character(inputScale[1])
+  if (input.scale %in% c("log_ratio", "ratio")) {
+    err <- .ratio.norm.refusal(norm.opt, input.scale)
+    if (!is.null(err)) {
+      AddErrMsg(err)
+      msgSet$norm.msg <- msgSet$current.msg <- err
+      saveSet(msgSet, "msgSet")
+      return(0)
+    }
+    data <- as.matrix(data)
+    bad <- is.infinite(data) | is.nan(data)
+    if (any(bad)) {
+      data[bad] <- NA
+      msg <- paste(msg, paste0(sum(bad), " non-finite value(s) (Inf, -Inf or NaN: a ratio to a reference of 0) set to missing."), collapse=" ")
+    }
+    if (input.scale == "ratio") {
+      nonpos <- !is.na(data) & data <= 0
+      if (any(nonpos)) {
+        data[nonpos] <- NA
+        msg <- paste(msg, paste0(sum(nonpos), " ratio(s) of 0 or below (no ratio is) set to missing."), collapse=" ")
+      }
+      data <- log2(data)
+      msg <- paste(msg, "Ratios to a reference log2-transformed.", collapse=" ")
+    }
+  }
 
   # column(sample)-wise normalization
   if(colNorm=="SumNorm"){
@@ -1054,22 +1125,27 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
      AddErrMsg("EigenMS normalization is not available. Please choose another normalization method.");
      return(0);
   }else if(norm.opt=='median'){
-    # On a log scale the sample median is a SHIFT, not a factor: dividing log values by their
-    # median rescales every sample differently, and on centred log ratios (median near 0, as
-    # CPTAC and other TMT tables ship them) it blew values up to +/-90,000 and left nothing
-    # significant. Log-scale input (negative values, or small non-integers) is centred on the
-    # samples' common median; linear intensities are still divided by the sample median.
-    fin <- data[is.finite(data)]
-    is.log <- length(fin) > 0 && (any(fin < 0) ||
-              (max(abs(fin)) < 50 && mean(abs(fin - round(fin)) > 1e-8) > 0.5))
-    if (is.log) {
-      col.medians <- apply(data, 2, median, na.rm=TRUE);
-      data <- sweep(data, 2, col.medians - median(col.medians, na.rm=TRUE));
-      msg <- paste(msg, "Log-scale values centred on the sample median.", collapse=" ");
-    } else {
-      data<- apply(data, 2, MedianNorm);
-      msg <- paste(msg, "Normalization to sample median.", collapse=" ");
+    data<- apply(data, 2, MedianNorm);
+    msg <- paste(msg, "Normalization to sample median.", collapse=" ");
+  }else if(norm.opt=='medianCenter'){
+    # Log ratios (or log values): the sample median is a SHIFT. Each sample's median is subtracted and the median of the
+    # medians added back, so the samples share one centre and a protein's differences between samples are kept.
+    col.medians <- apply(data, 2, median, na.rm=TRUE);
+    data <- sweep(data, 2, col.medians - median(col.medians, na.rm=TRUE));
+    msg <- paste(msg, "Median centring: each sample's median subtracted, the median of the medians added back.", collapse=" ");
+  }else if(norm.opt=='madScale'){
+    # Median centring, then each sample divided by its median absolute deviation and multiplied by the median MAD, so the
+    # samples share one centre and one spread.
+    col.medians <- apply(data, 2, median, na.rm=TRUE);
+    centre <- median(col.medians, na.rm=TRUE);
+    data <- sweep(data, 2, col.medians);
+    col.mads <- apply(data, 2, stats::mad, na.rm=TRUE);
+    if (any(!is.finite(col.mads) | col.mads <= 0)) {
+      AddErrMsg("MAD scaling needs a spread in every sample; at least one sample has a median absolute deviation of 0. Use median centring instead.");
+      return(0);
     }
+    data <- sweep(data, 2, col.mads, "/") * median(col.mads) + centre;
+    msg <- paste(msg, "Median centring and MAD scaling: each sample centred on the median of the medians and scaled to the median MAD.", collapse=" ");
   }else if(norm.opt=='abundance_corr'){
     # Sample-wise protein-adjusted relative phosphorylation. This is an analysis
     # route for downstream designs (including multifactor contrasts), not an
