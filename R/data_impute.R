@@ -55,6 +55,7 @@ ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
   # Validated: iPRG-2015 empirical FDR 0.22 -> ~0 with no loss of sensitivity;
   # PXD005536 nested-interaction FDR 3 -> 0. Applied to prot/peptide only (array/
   # count data are not left-censored MNAR); disable with min.obs.per.group = 0.
+  paramSet$one.group.kept <- 0L
   if (!is.null(dataSet$type) && dataSet$type %in% c("prot", "peptide") &&
       is.numeric(min.obs.per.group) && min.obs.per.group > 0) {
     grp <- tryCatch({
@@ -68,6 +69,26 @@ ImputeMissingVar <- function(dataName="", method="min", min.obs.per.group=2){
         if (!length(cols)) rep(TRUE, nrow(int.mat)) else rowSums(!is.na(int.mat[, cols, drop = FALSE])) >= min.obs.per.group
       })
       keep <- if (is.matrix(obs.ok)) rowSums(obs.ok) == length(lvls) else obs.ok
+      # A protein WELL MEASURED in one group and absent (or nearly) from another is biology
+      # (a Y-linked protein in Female vs Male, a knocked-out gene), not an on/off artifact:
+      # the valid-value filter already asks for it in (100 - missing.percent)% of one group,
+      # so it is kept and its absent group imputed as left-censored by the method below.
+      mp <- suppressWarnings(as.numeric(paramSet$missing.percent))
+      if (length(mp) != 1L || !is.finite(mp)) mp <- 30
+      well <- sapply(lvls, function(L) {
+        cols <- which(grp == L)
+        if (!length(cols)) rep(FALSE, nrow(int.mat)) else rowMeans(!is.na(int.mat[, cols, drop = FALSE])) >= 1 - mp / 100
+      })
+      well <- if (is.matrix(well)) rowSums(well) > 0 else well
+      one.group <- !keep & well
+      keep <- keep | one.group
+      paramSet$one.group.kept <- sum(one.group)
+      if (any(one.group))
+        current.msg <- c(current.msg, paste0(
+          "Kept ", sum(one.group), " protein(s) measured in at least ", 100 - mp,
+          "% of the samples of one group and absent or nearly absent from another; ",
+          if (method %in% c("min", "colmin", "minprob", "qrilc")) "their missing values are imputed as below the detection limit."
+          else paste0("their missing values are imputed by '", method, "'.")))
       n.drop <- sum(!keep)
       if (n.drop > 0 && sum(keep) > 0) {
         int.mat <- int.mat[keep, , drop = FALSE]

@@ -589,6 +589,20 @@ ApplyProteotypicFilter <- function(dataName) {
   return(1L)
 }
 
+# Rows sharing an ID collapsed to one, by the mean of the values each sample has (a missing value stays
+# missing only when every row of the ID misses it); first-appearance order kept.
+.collapse.duplicate.rows <- function(m) {
+  ids <- rownames(m)
+  if (is.null(ids) || !anyDuplicated(ids)) return(m)
+  cn <- colnames(m)
+  m <- as.matrix(m); storage.mode(m) <- "numeric"
+  obs <- !is.na(m); m0 <- m; m0[!obs] <- 0
+  out <- rowsum(m0, ids, reorder = FALSE) / rowsum(obs * 1, ids, reorder = FALSE)
+  out[!is.finite(out)] <- NA
+  colnames(out) <- cn
+  out
+}
+
 PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, countOpt,
                              removeMissing = "false", missingPercent = 50,
                              groupAwareMissing = "true"){
@@ -663,6 +677,10 @@ PerformFiltering <- function(dataSet, var.thresh, count.thresh, filterUnmapped, 
         mapped <- anot.id[rownames(raw.data.anot)]
         hit.inx <- !is.na(mapped)
         rownames(raw.data.anot)[hit.inx] <- mapped[hit.inx]
+        # Two input rows can map to one protein (ANKHD1 and the read-through ANKHD1-EIF4EBP3 are both
+        # Q8IWZ3): left duplicated, the rows broke the differential test ("duplicate 'row.names' are
+        # not allowed") and the run reported 0 significant proteins. Collapse them by their mean.
+        raw.data.anot <- .collapse.duplicate.rows(raw.data.anot)
       }
     }
    # Set column names from dataSet$data.norm if it has columns
@@ -1036,8 +1054,22 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA"){
      AddErrMsg("EigenMS normalization is not available. Please choose another normalization method.");
      return(0);
   }else if(norm.opt=='median'){
-    data<- apply(data, 2, MedianNorm);
-    msg <- paste(msg, "Normalization to sample median.", collapse=" ");
+    # On a log scale the sample median is a SHIFT, not a factor: dividing log values by their
+    # median rescales every sample differently, and on centred log ratios (median near 0, as
+    # CPTAC and other TMT tables ship them) it blew values up to +/-90,000 and left nothing
+    # significant. Log-scale input (negative values, or small non-integers) is centred on the
+    # samples' common median; linear intensities are still divided by the sample median.
+    fin <- data[is.finite(data)]
+    is.log <- length(fin) > 0 && (any(fin < 0) ||
+              (max(abs(fin)) < 50 && mean(abs(fin - round(fin)) > 1e-8) > 0.5))
+    if (is.log) {
+      col.medians <- apply(data, 2, median, na.rm=TRUE);
+      data <- sweep(data, 2, col.medians - median(col.medians, na.rm=TRUE));
+      msg <- paste(msg, "Log-scale values centred on the sample median.", collapse=" ");
+    } else {
+      data<- apply(data, 2, MedianNorm);
+      msg <- paste(msg, "Normalization to sample median.", collapse=" ");
+    }
   }else if(norm.opt=='abundance_corr'){
     # Sample-wise protein-adjusted relative phosphorylation. This is an analysis
     # route for downstream designs (including multifactor contrasts), not an
