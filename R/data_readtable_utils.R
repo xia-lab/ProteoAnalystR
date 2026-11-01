@@ -482,11 +482,8 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     ## missing values at load so downstream na.rm summarization and the
     ## user-selected imputation step see the real missingness, instead of the
     ## legacy silent min/2 fill applied here.
-    if (nzchar(Sys.getenv("PA_NO_LOAD_FILL"))) {
-      # keep NAs
-    } else {
-      int.mat[na.inx] <- minVal/2;
-    }
+    floor.val <- .load_fill_floor(minVal);
+    if (!is.na(floor.val)) int.mat[na.inx] <- floor.val;   # NA: missing values are kept for the imputation step to decide
     # msg <- c(msg, "the remaining", sum(na.inx), "missing variables were replaced with data min");
   }
   if (nrow(int.mat) == 0 || ncol(int.mat) == 0) {
@@ -4049,4 +4046,13 @@ SetPhosphoOptions <- function(format = "diann_report", ptm = "phospho", locProb 
     prot.map = prot.map,
     aggregation = "sum of transition/isotope areas per precursor and run"
   )
+}
+
+# THE LOAD-TIME FLOOR FOR MISSING VALUES: half the smallest value, which means "below detection" only for POSITIVE intensities.
+# A table with zero or negative values (log2 ratios to a reference, centred log values) has no detection floor: half its minimum
+# is not a low value (on log ratios it is a ratio above the minimum), and filling it here took away the imputation step's choice
+# (log ratios: missing values left for limma; CPTAC-GBM, 1 Nov 2026). NA = keep the missing values. PA_NO_LOAD_FILL keeps them too.
+.load_fill_floor <- function(minVal) {
+  if (nzchar(Sys.getenv("PA_NO_LOAD_FILL")) || !is.finite(minVal) || minVal <= 0) return(NA_real_)
+  minVal / 2
 }
