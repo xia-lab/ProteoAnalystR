@@ -438,7 +438,8 @@ ReadTabExpressData <- function(fileName, metafileName="",metaContain="true",oneD
     saveSet(msgSet, "msgSet");
     return(0);
   }
-  # align to metadata order
+  # align to metadata order; a metadata row the data lacks is dropped, not kept as an empty sample
+  meta.info$meta.info <- meta.info$meta.info[rownames(meta.info$meta.info) %in% matched.cols, , drop = FALSE]
   int.mat <- int.mat[, match(rownames(meta.info$meta.info), colnames(int.mat)), drop = FALSE]
   #msg("[ReadTabExpressData] aligned intensity dims=", paste(dim(int.mat), collapse = "x"),
   #        " meta rows=", nrow(meta.info$meta.info), " meta cols=", ncol(meta.info$meta.info))
