@@ -1016,6 +1016,7 @@ ReadMetaData <- function(metafilename){
     data.smpl.nms <- colnames(dataSet$data.norm)
     nm.hits <- data.smpl.nms %in% smpl_nms;
     if(!all(nm.hits)){
+      mis.nms <- data.smpl.nms[!nm.hits];
       msgSet$current.msg = paste0("Some sample names including ",paste(mis.nms, collapse="; ") ," in your data are not in the metadata file!")
       saveSet(msgSet, "msgSet");
       return(NULL);
@@ -1024,7 +1025,8 @@ ReadMetaData <- function(metafilename){
     # now remove extra meta if present, and order them
     nm.hits2 <- which(smpl_nms %in% data.smpl.nms);
     metadata$Dataset[nm.hits2] <- sel.nms[i];
-    metadata1 <- metadata[nm.hits2,,drop=F];
+    # Put the rows in the same order as the data's samples, so each sample keeps its own group.
+    metadata1 <- metadata[match(data.smpl.nms, smpl_nms),,drop=F];
     metadata1[] <- lapply( metadata1, factor)
     dataSet$meta.info <- dataSet$metaOrig <- metadata1
     dataSet$disc.inx <-dataSet$disc.inx.orig <- disc.inx[colnames(metadata1)]
@@ -1041,7 +1043,7 @@ ReadMetaData <- function(metafilename){
   paramSet$dataSet <- list();
   meta.types <- rep("disc", ncol(metadata));
   meta.types[cont.inx] <- "cont";
-  names(meta.types) <- colnaymes(metadata);
+  names(meta.types) <- colnames(metadata);
   
   paramSet$dataSet$meta.types <- meta.types;
   paramSet$dataSet$meta.status <- rep("OK", ncol(metadata));
