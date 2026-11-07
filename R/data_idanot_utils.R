@@ -162,7 +162,7 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
     hit.inx <- !is.na(anot.id);
     matched.len <- length(feature.vec); # dummies
     minLvl <- 1;
-    current.msg <- paste("No annotation was performed."); 
+    current.msg <- ""; # skipping annotation (no organism / ID type) is the person's choice, not news
     #msg("[Annot] Skipping annotation (org/idType is NA) - keeping ", length(feature.vec), " original IDs")
   }
 
