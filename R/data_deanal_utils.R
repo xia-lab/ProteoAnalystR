@@ -2689,7 +2689,7 @@ GetProteinPeptideMapping <- function(dataName = "", proteinID = "") {
   # Create combined data frame with protein first, then peptides
   result <- data.frame(
     type = c("Protein", rep("Peptide", nrow(pep.stats))),
-    id = c(protein.display, pep.stats$id),
+    id = c(prot.lookup.id, pep.stats$id),  # plotting looks the protein up by this id; the symbol is only for display
     name = c(protein.display, pep.stats$name),
     logFC = c(prot.fc, pep.stats$logFC),
     pValue = c(prot.pval, pep.stats$pValue),
