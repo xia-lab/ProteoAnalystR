@@ -49,7 +49,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   if (is.null(resTable) || nrow(resTable) == 0){
     # No DE result at all (e.g. DE failed or has not finished) -- return the error
     # sentinel instead of continuing into de.method dispatch with NULL objects.
-    msgSet$current.msg <- paste(msgSet$current.msg, "No differential analysis result is available; please (re)run differential analysis first.");
+    msgSet$current.msg <- "No differential analysis result is available; please (re)run differential analysis first.";
     saveSet(msgSet, "msgSet");
     return(c("error", "0", "0", "0", "0", "0", "0"));
   }
@@ -89,7 +89,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   # Check dimensions
   if (is.null(dim(resTable))) {
     #msg("[GetSigfeatures] ERROR: resTable has no dimensions!")
-    msgSet$current.msg <- paste(msgSet$current.msg, "Error: DE results table has incorrect structure.")
+    msgSet$current.msg <- "Error: DE results table has incorrect structure."
     saveSet(msgSet, "msgSet")
     return(c("error", "0", "0", "0", "0", "0", "0"))
   }
@@ -245,7 +245,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
   #msg("[GetSigfeatures] DEBUG: After FC filter, nrow=", nrow(resTable))
   
   if (nrow(resTable) == 0){
-    msgSet$current.msg <- paste(msgSet$current.msg, "No significant features were identified using the given design and cutoff.");
+    msgSet$current.msg <- "No significant features were identified using the given design and cutoff.";
   }
   
   ### Note, rowname of resTable must be entrez ID
