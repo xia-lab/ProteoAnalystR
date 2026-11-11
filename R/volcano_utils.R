@@ -108,7 +108,7 @@ Volcano.Anal <- function(dataName="", fileNm="name", paired=FALSE, fcthresh=0, t
     hit.maxPos <- (which(fc.log> 10) )
     hit.maxNeg <- (which(fc.log< -10) )
     fc.log[hit.maxPos] <- 10;
-    fc.log[hit.maxNeg] <- 10;
+    fc.log[hit.maxNeg] <- -10;
   }
   #fc.all <- res$fc.all;
   
