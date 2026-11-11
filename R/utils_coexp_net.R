@@ -1184,7 +1184,13 @@ FilterNetByThresh <- function(thresh      = 0.05,
           vcount(g), "nodes and", ecount(g), "edges retained at thresh >", thresh);
   
 
-    analSet <- DecomposeGraph(overall.graph,analSet);
+    # subnetworks of the filtered graph g (overall.graph is the one before the cut)
+    res <- DecomposeGraph(g, analSet);
+    if (is.null(res)) {   # nothing of 3+ nodes is left: keep the current network
+      AddErrMsg(paste("No subnetwork of at least 3 nodes is left at edge weight >", thresh, "- try a lower cutoff."));
+      return(c(0, 0, 0));
+    }
+    analSet <- res;
     substats <- analSet$substats;
   outStats <- c(vcount(g), ecount(g), length(substats))
   analSet$overall.graph <- g;
