@@ -579,6 +579,12 @@ PerformVolcanoEnrichment<-function(dataName="", file.nm, fun.type, IDs, type, in
     gene.vec <- rownames(sigmat[which(sigmat[,inx] < -fcthreshu), , drop=FALSE]);
   }
 
+  # No feature passed the cutoffs: there is nothing to test, and naming an empty set stopped with "attempt to set an attribute on NULL".
+  if (length(gene.vec) == 0) {
+    AddErrMsg("No significant features to test for enrichment at the current cutoffs.");
+    return(0);
+  }
+
   # Check if phospho data and use appropriate functions
   is_phospho <- (!is.null(paramSet$data.type) && paramSet$data.type == "phospho")
 
