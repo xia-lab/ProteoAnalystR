@@ -34,13 +34,11 @@ Imports:
     pcaMethods, Rtsne, uwot, RSQLite, curl, pryr, png, xtable,
     RhpcBLASctl, arrow
 Suggests:
-    patchwork, PhosR, MSstatsPTM, backbone,
+    patchwork, PhosR, MSstatsPTM, backbone, XiaLabCppLib,
     multiUS, SeqKnn, rrcovNA,
     callr, BiocManager,
     testthat,
     knitr, rmarkdown
 VignetteBuilder: knitr
-Remotes:
-    github::xia-lab/XiaLabCppLib
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3

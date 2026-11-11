@@ -1398,6 +1398,11 @@ BuildSeedProteinNet <- function(){
 }
 
 ComputePCSFNet <- function(){
+    # The PCSF solver is compiled code in XiaLabCppLib, which is not on CRAN or public GitHub (Suggests only)
+    if (!requireNamespace("XiaLabCppLib", quietly = TRUE)) {
+        .setCurrentMessage("Steiner Forest Network needs the XiaLabCppLib package, which is not installed on this server. Use the web version at www.proteoanalyst.ca, or trim the network by degree or betweenness instead.")
+        return(c(0, 0, 0))
+    }
     cache <- .ppi_query_cache
     if (is.null(cache$seeds) || length(cache$seeds) == 0) {
         .setCurrentMessage("No seed proteins cached. Please run SearchNetDB first.")
@@ -1771,7 +1776,7 @@ Compute.SteinerForest <- function(ppi, terminals, w = 2, b = 1, mu = 0.0005, dum
   }
 
   ## Feed the input into the PCSF algorithm
-  output <- ov_call_sr(from,to,cost,node_names,node_prizes)
+  output <- XiaLabCppLib::call_sr(from,to,cost,node_names,node_prizes)
 
   # Check the size of output subnetwork and print a warning if it is 0
   if(length(output[[1]]) != 0){
