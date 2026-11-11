@@ -439,26 +439,26 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
 
   significant_gene_table <- list()    # holds one data-frame per comparison
 
-  for (inx in seq_along(dataSet$comp.res.list)) {
+  for (cmp.i in seq_along(dataSet$comp.res.list)) {
 
-    resTable <- dataSet$comp.res.list[[inx]]
+    cmp.tab <- dataSet$comp.res.list[[cmp.i]]
 
-    resTable <- resTable[!is.na(resTable[, 1]), , drop = FALSE]
+    cmp.tab <- cmp.tab[!is.na(cmp.tab[, 1]), , drop = FALSE]
 
-    deg.pass <- if (use.fdr)  resTable$adj.P.Val <= p.lvl
-                else                resTable$P.Value   <= p.lvl
+    deg.pass <- if (use.fdr)  cmp.tab$adj.P.Val <= p.lvl
+                else                cmp.tab$P.Value   <= p.lvl
 
-    lfc.pass <- abs(resTable[ , "logFC"]) >= fc.lvl
+    lfc.pass <- abs(cmp.tab[ , "logFC"]) >= fc.lvl
 
     all_pass <- deg.pass & lfc.pass
     if (!any(all_pass)) {                            # nothing passed
-      significant_gene_table[[inx]] <- data.frame() # keep list length constant
+      significant_gene_table[[cmp.i]] <- data.frame() # keep list length constant
       next
     }
 
-    sig <- resTable[all_pass, , drop = FALSE]
+    sig <- cmp.tab[all_pass, , drop = FALSE]
     sig$GeneID      <- rownames(sig)                # preserve raw ID
-    sig$Comparison  <- names(dataSet$comp.res.list)[[inx]]
+    sig$Comparison  <- names(dataSet$comp.res.list)[[cmp.i]]
 
     # PHOSPHO DATA CHECK: Skip Entrez annotation for phosphosites
     if (is_phospho) {
@@ -472,7 +472,7 @@ GetSigfeatures <-function(dataName="", res.nm="nm", p.lvl=0.05, fc.lvl=1, inx=1,
       sig$Name   <- res.anot$name
     }
 
-    significant_gene_table[[inx]] <- sig
+    significant_gene_table[[cmp.i]] <- sig
   }
 
   final_table <- do.call(rbind, significant_gene_table)  # may have duplicates
