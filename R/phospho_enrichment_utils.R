@@ -354,10 +354,11 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
   res.mat <- res.mat[hit.num > 0, , drop = F]
   hits.query <- hits.query[hit.num > 0]
 
-  if (nrow(res.mat) > 1) {
+  # one set left is a result too: it was treated as no result and no table was written
+  if (nrow(res.mat) > 0) {
     # order by p value
     ord.inx <- order(res.mat[, 4])
-    res.mat <- signif(res.mat[ord.inx, ], 3)
+    res.mat <- signif(res.mat[ord.inx, , drop = FALSE], 3)
     hits.query <- hits.query[ord.inx]
 
     res.mat.all <- as.data.frame(res.mat)
@@ -415,7 +416,7 @@ doEntrezIDAnotPhospho <- function(id.vec, data.org = "NA", data.idType = "NA") {
 
     res.mat.all <- res.mat.all[which(res.mat.all$features != "NA"), ]
     res.mat.all$Pathway <- NULL
-    pws <- rownames(res.mat[which(res.mat.all$features != "NA"), ])
+    pws <- rownames(res.mat[which(res.mat.all$features != "NA"), , drop = FALSE])
     fun.ids2 <- as.vector(setres$current.setids[pws])
     resTable.all <- data.frame(Pathway = pws, ID = fun.ids2, res.mat.all)
 
