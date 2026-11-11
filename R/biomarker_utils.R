@@ -774,7 +774,7 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
   }else if(clsMethod == "svm"){
     #msg("[Predict.class] DEBUG: Entering SVM branch");
     svm.obj <- e1071::svm(x.train, y.train, probability=TRUE);
-    prob.out <- attr(predict(svm.obj, x.test, probability=TRUE), "probabilities")[,2];
+    prob.out <- attr(predict(svm.obj, x.test, probability=TRUE), "probabilities")[, levels(y.train)[2]]; # by name: e1071 orders columns by first appearance, not level
     if(imp.out){
       # SVM doesn't have direct feature importance, return empty vector
       imp.vec <- rep(0, ncol(x.train));
