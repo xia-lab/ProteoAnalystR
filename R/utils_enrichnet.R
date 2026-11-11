@@ -168,7 +168,9 @@ my.enrich.net<-function(dataSet, netNm="abc", type="list", overlapType="mixed", 
 
     # Strategy 3: Entrez -> UniProt lookup (handles typical enrichment-library ID conversion)
     entrez.to.uniprot <- NULL
-    if(length(keep.inx) == 0) {
+    # only for Entrez gene nodes: symbol nodes (ORA, GSEA) with one symbol-less Entrez ID among them
+    # matched that one node here, which skipped Strategy 4 and left every other gene without a fold change
+    if(length(keep.inx) == 0 && isTRUE(mean(grepl("^[0-9]+$", gene.node.nms)) > 0.9)) {
       org <- paramSet$data.org
       up.db <- try(queryGeneDB("entrez_uniprot", org), silent = TRUE)
       if(!inherits(up.db, "try-error") && !is.null(up.db) && nrow(up.db) > 0) {

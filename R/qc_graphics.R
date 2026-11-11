@@ -925,6 +925,20 @@ DrawPaNonMissing <- function(pd, imgNm, dpi = 96, format = "png", interactive = 
   invisible(fullPath)
 }
 
+# Is the normalized matrix (data.norm) on a log scale? Ratio input and the log, VSN and count normalizations put it there,
+# so then it is known. Intensities left as uploaded ("none", "quantile", ...) are raw or log2 as uploaded, which nothing
+# declares; there the magnitude decides, as in the CV plots: log2 intensities sit far below 100, raw ones far above.
+# (Counting values <= 0 missed log2 intensities, which are all positive, and logged them a second time.)
+.qc.norm.logged <- function(dat) {
+  paramSet <- readSet(paramSet, "paramSet")
+  if (isTRUE(paramSet$input.scale %in% .ratio.scales) ||
+      isTRUE(paramSet$norm.opt %in% c("log", "logMedian", "vsn", "combined", "MORlog", "msstats", "logcount", "RLE", "TMM", "Rlr", "Loess"))) {
+    return(TRUE)
+  }
+  v <- dat[is.finite(dat)]
+  length(v) > 0 && stats::median(v) < 100
+}
+
 # MA plot (sample vs feature mean) for QC
 qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE, meta = NULL, sampleIndex = 1, mode = "single") {
   dat <- coerce.numeric.matrix(dat)
@@ -940,9 +954,7 @@ qc.maplot <- function(dat, imgNm, dpi = 96, format = "png", interactive = FALSE,
   }
 
   dat[!is.finite(dat)] <- NA_real_
-  finite_vals <- as.numeric(dat[is.finite(dat)])
-  frac_nonpos <- if (length(finite_vals) == 0) 1 else mean(finite_vals <= 0)
-  use_logged_scale <- frac_nonpos > 0.2
+  use_logged_scale <- .qc.norm.logged(dat)
 
   # Subsample features for responsiveness on large matrices
   max_features <- 5000
@@ -1111,9 +1123,7 @@ qc.maplot.json <- function(dat, imgNm, meta = NULL) {
   }
 
   dat[!is.finite(dat)] <- NA_real_
-  finite_vals <- as.numeric(dat[is.finite(dat)])
-  frac_nonpos <- if (length(finite_vals) == 0) 1 else mean(finite_vals <= 0)
-  use_logged_scale <- frac_nonpos > 0.2
+  use_logged_scale <- .qc.norm.logged(dat)
 
   max_features <- 5000
   if (nrow(dat) > max_features) {

@@ -847,7 +847,13 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
     # numeric vector so the downstream ROCR::prediction() (which builds the ROC)
     # accepts it -- an array trips "Format of predictions is invalid".
     score.out <- as.numeric(predict(pls.obj, x.test, ncomp=ncomp.use));
-    prob.out <- (score.out - min(score.out))/(max(score.out) - min(score.out));
+    # as.numeric() drops the sample names, which the Prob. View needs to place
+    # each sample (unnamed scores left every sample at the 0.5 default).
+    names(score.out) <- rownames(x.test);
+    # The 0/1-coded response already puts the class boundary at 0.5, so clip
+    # rather than min-max rescale per batch: rescaling gave NaN for a single
+    # new sample and forced any two new/hold-out samples to opposite classes.
+    prob.out <- pmin(pmax(score.out, 0), 1);
     if(imp.out){
       imp.vec <- Get.VIP(pls.obj, comp=ncomp.use);
       #msg("[Predict.class] DEBUG: PLS returning list with prob.out length=", length(prob.out), ", imp.vec length=", length(imp.vec));
