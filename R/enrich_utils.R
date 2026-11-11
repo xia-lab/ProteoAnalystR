@@ -492,6 +492,10 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
   }
 
   current.featureset <- my.lib$sets;
+  # A library whose members are locus tags (the KEGG sets of fly and worm: "Dmel_CG10160", "CELE_C01B4.6") cannot meet a query in Entrez
+  # ids, which every query here is: no set overlapped the query and the enrichment returned nothing. The members are translated to
+  # Entrez ids through the organism's locus-tag table, the one the id mapping of an uploaded list already uses.
+  current.featureset <- .entrezFromLocusTags(current.featureset, lib.path, folderNm);
   #remove empty pathways
   keep.inx <- lapply(current.featureset,length)>0
   current.featureset <- current.featureset[keep.inx]
@@ -513,6 +517,23 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
 
   assign(cache.key, res, envir = .GlobalEnv);
   return(res);
+}
+
+# The members of a gene-set library as Entrez ids. A library already in Entrez ids (any member is a plain number) is returned as it
+# is, and so is one for an organism with no locus-tag table (data/<org>/locustag.rds: names are locus tags, values Entrez ids) or
+# whose members the table does not hold. A tag the table does not hold is left out of its set; the set names are kept.
+.entrezFromLocusTags <- function(sets, lib.root, org){
+  ids <- unique(unlist(sets, use.names = FALSE));
+  if (length(ids) == 0 || any(grepl("^[0-9]+$", ids))) return(sets);
+  lt.file <- .get.pa.org.lib.path(lib.root, org, "locustag.rds");
+  if (!file.exists(lt.file)) return(sets);
+  lt <- tryCatch(readRDS(lt.file), error = function(e) NULL);
+  if (is.null(lt) || length(lt) == 0 || !any(ids %in% names(lt))) return(sets);
+  message("[EnrichLib] ", org, ": ", sum(ids %in% names(lt)), " of ", length(ids), " locus tags of the library translated to Entrez ids");
+  lapply(sets, function(s){
+    e <- unname(lt[as.character(s)]);
+    unique(as.character(e[!is.na(e)]));
+  });
 }
 
 # Load MetaboAnalyst jointpa genetic .qs file and return the same structure as .loadEnrichLib()
