@@ -3539,7 +3539,9 @@ DetectProteoformAnalysis <- function(dataName) {
   if (!file.exists(pep.qs))
     return(fail("Peptide matrix not found. Run normalization (and summarization if applicable) first."))
   if (!ov_qs_exists("diann_metadata.qs"))
-    return(fail("DIA-NN metadata not available. Re-upload the dataset to generate it."))
+    return(fail(paste0("Per-peptide isoform metadata not available. Isoform usage analysis needs peptide- or ",
+                       "precursor-level data with proteotypic flags (DIA-NN pr_matrix, FragPipe combined_peptide/combined_ion, ",
+                       "MaxQuant peptides.txt, or a Spectronaut peptide report with PEP.IsProteotypic).")))
   if (!ov_qs_exists("peptide_to_protein_map.qs"))
     return(fail("Peptide-to-protein map not found."))
 

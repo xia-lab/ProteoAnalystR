@@ -1478,6 +1478,22 @@ ReadMetaData <- function(metafilename){
   )
 }
 
+# Per-peptide metadata for isoform usage analysis and the proteotypic filter,
+# saved as diann_metadata.qs because those are the files they read. Only these
+# columns on purpose: Q.Value/PEP/Peptide.Count would switch on DIA-NN-only
+# filters and Modified.Sequence would offer modification fraction analysis.
+# `proteotypic` takes MaxQuant "yes"/"+" and Spectronaut "True" (or logicals).
+.savePeptideIsoformMeta <- function(ids, protein, proteotypic, gene = NULL, stripped = NULL) {
+  ov_qs_save(data.frame(
+    Protein.IDs = as.character(ids),
+    Protein.Group = as.character(protein),
+    Gene = if (is.null(gene)) NA_character_ else trimws(sub(";.*$", "", as.character(gene))),
+    Proteotypic = as.integer(tolower(trimws(as.character(proteotypic))) %in% c("yes", "+", "true", "1")),
+    Stripped.Sequence = if (is.null(stripped)) NA_character_ else as.character(stripped),
+    stringsAsFactors = FALSE
+  ), "diann_metadata.qs")
+}
+
 # Helper: read MaxQuant peptides.txt for peptide-level analysis
 .readMaxQuantPeptides <- function(filePath, opts = list(quantType = "intensity", removeContaminants = TRUE, removeDecoys = TRUE)) {
 
@@ -1607,6 +1623,13 @@ ReadMetaData <- function(metafilename){
       Protein = clean_prots,
       stringsAsFactors = FALSE
     )
+    # "Unique (Proteins)" = unique to one FASTA entry; older tables without it
+    # fall back to a single accession in "Proteins".
+    proteotypic <- dat[["Unique (Proteins)"]]
+    if (is.null(proteotypic) && "Proteins" %in% colnames(dat))
+      proteotypic <- lengths(strsplit(as.character(dat[["Proteins"]]), ";")) == 1
+    if (!is.null(proteotypic))
+      .savePeptideIsoformMeta(peptide_ids, clean_prots, proteotypic, dat[["Gene names"]], dat[["Sequence"]])
   }
 
   # --- Step 6: Infer Metadata from Sample Names ---
@@ -3233,6 +3256,17 @@ GetAnalysisType <- function(){
     spec_metadata
   }
 
+  # Isoform usage needs Spectronaut's per-peptide PEP.IsProteotypic flag; a
+  # report exported without it gets no metadata, so the feature stays off.
+  save.iso.meta <- function(src, ids, proteins, protein.col) {
+    if (!"PEP.IsProteotypic" %in% colnames(src)) return(invisible(NULL))
+    proteotypic <- as.character(src[["PEP.IsProteotypic"]])
+    # only the first accession is kept, so a flag on a multi-accession group
+    # cannot say which isoform the peptide belongs to
+    proteotypic[grepl("[;,]", as.character(src[[protein.col]]))] <- "False"
+    .savePeptideIsoformMeta(ids, proteins, proteotypic, src[["PG.Genes"]], src[["PEP.StrippedSequence"]])
+  }
+
   read.spectronaut.peptide <- function(raw.dat, opts = list()) {
     peptide.col <- if ("ModifiedSequence" %in% colnames(raw.dat)) {
       "ModifiedSequence"
@@ -3317,6 +3351,7 @@ GetAnalysisType <- function(){
         Protein = get.spectronaut.protein.ids(raw.dat, protein.col),
         Run = as.character(raw.dat[[run.col]]),
         Intensity = suppressWarnings(as.numeric(raw.dat[[quantity.col]])),
+        Row = seq_len(nrow(raw.dat)),
         stringsAsFactors = FALSE
       )
       long.df <- long.df[!is.na(long.df$Peptide) & nzchar(long.df$Peptide) &
@@ -3347,6 +3382,8 @@ GetAnalysisType <- function(){
 
       prot.map <- data.frame(Peptide = feature.ids, Protein = feature.map$Protein,
                              stringsAsFactors = FALSE)
+      save.iso.meta(raw.dat[long.df$Row[match(wide$FeatureKey, long.df$FeatureKey)], , drop = FALSE],
+                    feature.ids, feature.map$Protein, protein.col)
       runs <- colnames(intens)
       meta.df <- data.frame(Condition = factor(runs), stringsAsFactors = FALSE)
       rownames(meta.df) <- runs
@@ -3384,6 +3421,7 @@ GetAnalysisType <- function(){
     proteins <- proteins[valid.rows]
     rownames(intens) <- peptide.ids
     prot.map <- data.frame(Peptide = peptide.ids, Protein = proteins, stringsAsFactors = FALSE)
+    save.iso.meta(raw.dat[valid.rows, , drop = FALSE], peptide.ids, proteins, protein.col)
     runs <- colnames(intens)
     meta.df <- data.frame(Condition = factor(runs), stringsAsFactors = FALSE)
     rownames(meta.df) <- runs
