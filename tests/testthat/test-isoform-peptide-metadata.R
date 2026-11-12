@@ -114,3 +114,28 @@ test_that("Spectronaut peptide pivot report writes metadata; no PEP.IsProteotypi
   expect_identical(res$format, "spectronaut-peptide")
   expect_false(file.exists("diann_metadata.qs"))
 })
+
+test_that("GetPeptideMetaFlags reads the metadata once and refreshes when it changes", {
+  e <- .load_readtable()
+  withr::local_dir(withr::local_tempdir())
+  withr::defer(if (exists(".pa.meta.flags", envir = .GlobalEnv)) rm(".pa.meta.flags", envir = .GlobalEnv))
+  reads <- 0L
+  e$ov_qs_exists <- function(file) file.exists(file)
+  e$ov_qs_read <- function(file, ...) { reads <<- reads + 1L; readRDS(file) }
+
+  expect_identical(e$GetPeptideMetaFlags(), integer(5))   # nothing uploaded
+  e$.savePeptideIsoformMeta(c("a", "b"), c("P1-2", "P1"), c("yes", "no"), stripped = c("AAK", "CCK"))
+  saveRDS(data.frame(Peptide = c("a", "b"), Protein = c("P1-2", "P1")), "peptide_to_protein_map.qs")
+  # flags: PEP, Peptide.Count, proteotypic filter, isoform usage, modification fraction
+  expect_identical(e$GetPeptideMetaFlags(), c(0L, 0L, 1L, 1L, 0L))
+  n <- reads
+  e$GetPeptideMetaFlags(); e$GetPeptideMetaFlags()
+  expect_identical(reads, n)   # cached until the files change
+
+  saveRDS(data.frame(Proteotypic = 1L, Stripped.Sequence = "CK", Modified.Sequence = "C(UniMod:4)K", PEP = 0.01),
+          "diann_metadata.qs")
+  expect_identical(e$GetPeptideMetaFlags(), c(1L, 0L, 0L, 1L, 0L))   # fixed UniMod:4 alone: no modification fraction
+  saveRDS(data.frame(Proteotypic = 1L, Stripped.Sequence = "MK", Modified.Sequence = "M(UniMod:35)K", PEP = 0.01),
+          "diann_metadata.qs")
+  expect_identical(e$GetPeptideMetaFlags(), c(1L, 0L, 0L, 1L, 1L))
+})

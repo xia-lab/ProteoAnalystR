@@ -1494,6 +1494,38 @@ ReadMetaData <- function(metafilename){
   ), "diann_metadata.qs")
 }
 
+# Upload checks behind UploadBean.is*Available, which pages evaluate many times
+# per render: one read of the metadata files, cached until those files change.
+# Returns integer flags: 1 PEP column (DIA-NN PEP filter), 2 Peptide.Count
+# (evidence filter), 3 proteotypic filter, 4 isoform usage (DetectProteoformAnalysis:
+# proteotypic flags + peptide-to-protein map), 5 modification fraction
+# (DetectPTMOccupancy: a DIA-NN UniMod tag other than fixed UniMod:4).
+GetPeptideMetaFlags <- function() {
+  files <- c("diann_metadata", "maxquant_metadata", "peptide_to_protein_map")
+  info <- file.info(c(paste0(files, ".qs"), paste0(files, ".qs2")), extra_cols = FALSE)
+  key <- paste(as.numeric(info$mtime), info$size, collapse = "|")
+  cache <- get0(".pa.meta.flags", envir = .GlobalEnv)
+  if (identical(cache$key, key)) return(cache$flags)
+
+  dm <- if (ov_qs_exists("diann_metadata.qs")) ov_qs_read("diann_metadata.qs")
+  has <- function(col) col %in% colnames(dm)
+  pt <- if (has("Proteotypic")) dm$Proteotypic
+  proteo.filter <- if (!is.null(dm)) {
+    any(pt == 0L, na.rm = TRUE)
+  } else if (ov_qs_exists("maxquant_metadata.qs")) {
+    m <- ov_qs_read("maxquant_metadata.qs")
+    "Unique.peptides" %in% colnames(m) && any(m$Unique.peptides == 0L, na.rm = TRUE)
+  } else FALSE
+  flags <- as.integer(c(
+    has("PEP"), has("Peptide.Count"), proteo.filter,
+    ov_qs_exists("peptide_to_protein_map.qs") && any(pt == 1L, na.rm = TRUE),
+    has("Stripped.Sequence") && has("Modified.Sequence") &&
+      any(grepl("UniMod:(?!4(?![0-9]))[0-9]+", dm$Modified.Sequence, perl = TRUE))
+  ))
+  assign(".pa.meta.flags", list(key = key, flags = flags), envir = .GlobalEnv)
+  flags
+}
+
 # Helper: read MaxQuant peptides.txt for peptide-level analysis
 .readMaxQuantPeptides <- function(filePath, opts = list(quantType = "intensity", removeContaminants = TRUE, removeDecoys = TRUE)) {
 
