@@ -35,6 +35,25 @@ PerformDataAnnot <- function(dataName="", org="hsa", dataType="array", idType="e
   return(RegisterData(dataSet));   
 
 }
+# The groups of the comparison column, by name: the primary factor is the FIRST column of the sample sheet (the proposal and UpdatePrimaryMeta move it
+# there). The Quality Check page and the Report show this as "Group names"; it was the sheet's COLUMN names ("Diagnosis; Age; OGTT"), which are counted as
+# "experimental factors". A continuous first column has no groups, and says so.
+.paPrimaryGroupNames <- function(meta.info, disc.inx = NULL){
+  if(is.null(meta.info) || ncol(meta.info) == 0){
+    return("");
+  }
+  prim.nm <- names(meta.info)[1];
+  prim.disc <- if(!is.null(disc.inx) && prim.nm %in% names(disc.inx)){
+    isTRUE(disc.inx[[prim.nm]]);
+  }else{
+    !is.numeric(meta.info[, 1]);
+  }
+  if(prim.disc){
+    return(paste(levels(droplevels(factor(meta.info[, 1]))), collapse = "; "));
+  }
+  return(paste0("none (", prim.nm, " is continuous)"));
+}
+
 PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType="array", idType="entrez", lvlOpt="mean"){
 
   paramSet <- readSet(paramSet, "paramSet");
@@ -226,11 +245,7 @@ PerformDataAnnotInternal <- function(dataSet, dataName=NULL, org="hsa", dataType
   minCount <- min(col.sum);
   maxCount <- max(col.sum);
 
-  # Build metadata column names string (not factor levels)
-  grp_names = "";
-  if(!is.null(dataSet$meta.info) && ncol(dataSet$meta.info) > 0){
-    grp_names = paste(names(dataSet$meta.info), collapse = "; ");
-  }
+  grp_names = .paPrimaryGroupNames(dataSet$meta.info, dataSet$disc.inx.orig);
 
   # Build metadata factors info (for reference, if needed)
   lvls = "";
