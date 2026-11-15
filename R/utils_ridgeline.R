@@ -192,7 +192,8 @@ compute.ridgeline <- function(dataSet, imgNm = "abc", dpi=96, format="png", fun.
     }
     colnames(res) <- c("size", "expected", "overlap", "pval", "padj");
 
-    res <- res[,c(4,5,3,1,2)]
+    # drop = FALSE: a result of one pathway is a 1-row matrix, and without it the reorder returns a bare vector (no row names, no padj column)
+    res <- res[, c(4,5,3,1,2), drop = FALSE]
     res <- as.data.frame(cbind(pathway=rownames(res), res));
     res$padj <- as.numeric(res$padj)
     res$pval <- as.numeric(res$pval)
