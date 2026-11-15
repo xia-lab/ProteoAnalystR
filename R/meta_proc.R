@@ -370,7 +370,7 @@ FilteringDataOmics <- function(dataSet, countOpt="pct",count, var){
   msg <- paste(msg, "Filtered ",rmSum, " features with low counts.", collapse=" ");
   filter.val <- apply(data, 1, IQR, na.rm=T);
   nm <- "Interquartile Range";
-  rk <- rank(-filter.val, ties.method='random');
+  rk <- rank(-filter.val, ties.method = "first");
   kp.pct <- (100 - var.thresh)/100;
   remain <- rk < nrow(data)*kp.pct;
   data <- data[remain,];

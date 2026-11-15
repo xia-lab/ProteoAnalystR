@@ -2109,7 +2109,7 @@ DrawPaMeanStd <- function(pd, imgNm, dpi=96, format="png"){
 
   px   = rowMeans(x, na.rm = TRUE)
   py   = sqrt(rowV(x, mean = px, na.rm = TRUE))
-  rpx  = rank(px, na.last = FALSE, ties.method = "random")
+  rpx  = rank(px, na.last = FALSE, ties.method = "first")
   
   dm        = 0.025
   midpoints = seq(dm, 1-dm, by = dm)
