@@ -203,7 +203,7 @@ PerformNormalization <- function(dataName, norm.opt, var.thresh, count.thresh, f
         DESeq2::counts(dds, normalized = TRUE)
       },
       input_data = list(m = m),
-      packages = c("DESeq2", "qs"),
+      packages = c("DESeq2", "qs2"),
       timeout = 120,
       output_type = "qs"
     )
@@ -1084,7 +1084,7 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA", inputSca
         edgeR::calcNormFactors(input_data$data, method = input_data$method)
       },
       input_data = list(data = data, method = edger_method),
-      packages = c("edgeR", "qs"),
+      packages = c("edgeR", "qs2"),
       timeout = 120,
       output_type = "qs"
     )
@@ -1215,7 +1215,7 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA", inputSca
         edgeR::calcNormFactors(input_data$data, method = "upperquartile")
       },
       input_data = list(data = data),
-      packages = c("edgeR", "qs"),
+      packages = c("edgeR", "qs2"),
       timeout = 120,
       output_type = "qs"
     )
@@ -1234,7 +1234,7 @@ NormalizeData <-function (data, norm.opt, colNorm="NA", scaleNorm="NA", inputSca
         metagenomeSeq::MRcounts(dataMR, norm = TRUE)
       },
       input_data = list(data = data),
-      packages = c("metagenomeSeq", "qs"),
+      packages = c("metagenomeSeq", "qs2"),
       timeout = 120,
       output_type = "qs"
     )

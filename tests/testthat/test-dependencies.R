@@ -26,7 +26,7 @@ test_that("all Imports (hard dependencies) are installed and loadable", {
 test_that("key analysis backends load and report a version", {
   # The statistical engines the pipelines depend on directly.
   core <- c("MSstats", "limma", "DEqMS", "edgeR", "DESeq2", "impute", "imputeLCMD",
-            "preprocessCore", "data.table", "qs", "matrixStats", "igraph", "fgsea",
+            "preprocessCore", "data.table", "qs2", "matrixStats", "igraph", "fgsea",
             "WGCNA", "pROC")
   for (p in core) {
     ok <- requireNamespace(p, quietly = TRUE)

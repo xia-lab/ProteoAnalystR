@@ -212,9 +212,8 @@ cleanMem <- function() {
 
 # shorthand
 ShowMemoryUse <- function(..., n=30) {
-  require(pryr);
   sink(); # make sure print to screen
-  print(mem_used());
+  print(structure(sum(gc()[, 2]) * 1024^2, class = "object_size"), units = "auto");
   print(sessionInfo());
   print(.ls.objects(..., order.by="Size", decreasing=TRUE, head=TRUE, n=n));
   print(warnings());
@@ -698,10 +697,11 @@ run_func_via_microservice <- function(func, args = list(), timeout_sec = 60) {
     res <- tryCatch(
       callr::r(
         func = function(func, args) {
+          .ov_qs_old <- function(file, ...) { if (!identical(readBin(file, "raw", 4L), as.raw(c(0x0b, 0x0e, 0x0a, 0x0c)))) return(qs2::qs_read(file, ...)); if (requireNamespace("qs", quietly = TRUE)) return(qs::qread(file, ...)); stop(basename(file), " was saved by an earlier version, in a format this R cannot read. Reopen the project on the R it was made with and save it again, or run the analysis again.", call. = FALSE) }
           ov_qs_read <- function(file, ...) {
-            if (file.exists(file)) { r <- try(qs2::qs_read(file, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(file, ...)) }
-            if (endsWith(tolower(file), ".qs")) { v2 <- paste0(substr(file, 1, nchar(file) - 3L), ".qs2"); if (file.exists(v2)) { r <- try(qs2::qs_read(v2, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v2, ...)) } }
-            else if (endsWith(tolower(file), ".qs2")) { v1 <- paste0(substr(file, 1, nchar(file) - 4L), ".qs"); if (file.exists(v1)) { r <- try(qs2::qs_read(v1, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(qs::qread(v1, ...)) } }
+            if (file.exists(file)) { r <- try(qs2::qs_read(file, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(.ov_qs_old(file, ...)) }
+            if (endsWith(tolower(file), ".qs")) { v2 <- paste0(substr(file, 1, nchar(file) - 3L), ".qs2"); if (file.exists(v2)) { r <- try(qs2::qs_read(v2, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(.ov_qs_old(v2, ...)) } }
+            else if (endsWith(tolower(file), ".qs2")) { v1 <- paste0(substr(file, 1, nchar(file) - 4L), ".qs"); if (file.exists(v1)) { r <- try(qs2::qs_read(v1, ...), silent = TRUE); if (!inherits(r, "try-error")) return(r); return(.ov_qs_old(v1, ...)) } }
             stop("ov_qs_read: neither .qs2 nor .qs found for: ", file, call. = FALSE)
           }
           ov_qs_save <- function(obj, file, ...) { .a <- list(...); for (.k in c("preset", "nthreads", "check_hash")) .a[[.k]] <- NULL; do.call(qs2::qs_save, c(list(object = obj, file = file), .a)); invisible(file) }
@@ -1194,17 +1194,21 @@ sanitizeSmallNumbers <- function(mat, tol=1e-10) {
   return(make.unique(query));
 }
 
+# An earlier version wrote the original qs format (first bytes 0b 0e 0a 0c); it is read only where the qs package happens to be installed (qs left CRAN on 17 Jan 2026 and does not
+# build on R 4.6). Without it: one plain sentence. A file qs2 could not read that is not that format is qs2's to explain.
+.ov_qs_old <- function(file, ...) {
+  if (!identical(readBin(file, "raw", 4L), as.raw(c(0x0b, 0x0e, 0x0a, 0x0c)))) return(qs2::qs_read(file, ...))
+  if (requireNamespace("qs", quietly = TRUE)) return(qs::qread(file, ...))
+  stop(basename(file), " was saved by an earlier version, in a format this R cannot read. Reopen the project on the R it was made with and save it again, or run the analysis again.", call. = FALSE)
+}
+
 if (!exists("ov_qs_save", mode = "function")) {
   ov_qs_save <- function(obj, file, ...) {
     .args <- list(...)
     for (.k in c("preset", "nthreads", "check_hash")) {
       .args[[.k]] <- NULL
     }
-    if (requireNamespace("qs2", quietly = TRUE)) {
-      do.call(qs2::qs_save, c(list(object = obj, file = file), .args))
-    } else {
-      do.call(qs::qsave, c(list(x = obj, file = file), .args))
-    }
+    do.call(qs2::qs_save, c(list(object = obj, file = file), .args))
     invisible(file)
   }
 }
@@ -1212,13 +1216,9 @@ if (!exists("ov_qs_save", mode = "function")) {
 if (!exists("ov_qs_read", mode = "function")) {
   ov_qs_read <- function(file, ...) {
     read_one <- function(path) {
-      if (requireNamespace("qs2", quietly = TRUE)) {
-        res <- try(qs2::qs_read(path, ...), silent = TRUE)
-        if (!inherits(res, "try-error")) {
-          return(res)
-        }
-      }
-      qs::qread(path, ...)
+      res <- try(qs2::qs_read(path, ...), silent = TRUE)
+      if (!inherits(res, "try-error")) return(res)
+      .ov_qs_old(path, ...)
     }
     if (file.exists(file)) {
       return(read_one(file))
@@ -1325,7 +1325,10 @@ readSet <- function(obj = NULL, set = "") {
 }
 
 load_qs <- function(url) {
-  qs::qdeserialize(curl::curl_fetch_memory(url)$content)
+  x <- curl::curl_fetch_memory(url)$content
+  if (!identical(x[1:4], as.raw(c(0x0b, 0x0e, 0x0a, 0x0c)))) return(qs2::qs_deserialize(x))
+  if (requireNamespace("qs", quietly = TRUE)) return(qs::qdeserialize(x))
+  stop(basename(url), " was saved by an earlier version, in a format this R cannot read. Reopen the project on the R it was made with and save it again, or run the analysis again.", call. = FALSE)
 }
 
 #' Enable in-memory caching for readSet/saveSet

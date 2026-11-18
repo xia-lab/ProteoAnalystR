@@ -689,7 +689,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
           cnt.mat = cnt.mat, grp.fac = grp.fac, design = edger.design,
           contrast.matrix = contrast.matrix, contrast.names = contrast.names
         ),
-        packages = c("edgeR", "qs"),
+        packages = c("edgeR", "qs2"),
         timeout = 300,
         output_type = "qs"
       )
@@ -1271,7 +1271,7 @@ prepareContrast <-function(dataSet, anal.type = "reference", par1 = NULL, par2 =
         DEqMS::spectraCounteBayes(input_data$fit2)
       },
       input_data = list(fit2 = fit2),
-      packages = c("DEqMS", "limma", "qs"),
+      packages = c("DEqMS", "limma", "qs2"),
       timeout = 120,
       output_type = "qs"
     )

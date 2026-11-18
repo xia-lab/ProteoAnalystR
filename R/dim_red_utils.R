@@ -464,7 +464,7 @@ ComputeEncasing <- function(filenm, type, names.vec, level=0.95, omics="NA"){
         mesh
       },
       input_data = list(coords = coords, level = level),
-      packages = c("rgl", "qs"),
+      packages = c("rgl", "qs2"),
       timeout = 120,
       output_type = "qs"
     )
@@ -524,7 +524,7 @@ ComputeEncasingBatch <- function(filenm, type, groups_json, level = 0.95, omics 
         })
       },
       input_data = list(groups = group_data, level = level),
-      packages = c("rgl", "qs"),
+      packages = c("rgl", "qs2"),
       timeout = 120,
       output_type = "qs"
     )
