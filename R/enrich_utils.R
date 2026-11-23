@@ -160,6 +160,15 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     }
   }
 
+  # The draws are the query proteins inside the universe. With the library as background a query protein that is in
+  # no set of the library can never be a hit, and counting it as a draw inflated every Expected count and deflated
+  # every p-value (a KEGG test of 129 proteins, 45 of them in no KEGG pathway, had its Expected 1.5 times too large);
+  # the universe is the library's proteins, so the query is its proteins among them, as the measured background above
+  # and MetaboAnalyst and OmicsNet count. With the measured proteins as background the query is already among them.
+  in.univ <- !is.na(ora.vec) & ora.vec %in% current.universe;
+  ora.vec <- ora.vec[in.univ];
+  ora.nms <- ora.nms[in.univ];
+
   # Persist the actual post-mapping universe used by the test.  The analysis
   # summary previously knew the universe choice but could report its size as NA
   # for ordinary one-dataset ORA runs because this local vector was never saved.
@@ -193,6 +202,11 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
 
   if (length(current.featureset) == 0) {
     msgSet$current.msg <- "No pathway overlaps with the measured features; unable to compute enrichment.";
+    saveSet(msgSet, "msgSet");
+    return(0);
+  }
+  if (length(ora.vec) == 0) {
+    msgSet$current.msg <- "None of the query proteins is in a set of the enrichment library; unable to compute enrichment.";
     saveSet(msgSet, "msgSet");
     return(0);
   }

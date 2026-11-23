@@ -447,8 +447,12 @@ GetListScoreInfo <- function(dataName = "") {
                   inlib(u$bg.size, u$tested)))
   }
   q <- if (!is.null(u$query.input) && !is.na(u$query.input)) paste0(.paListN(u$query.input), " significant proteins") else "significant proteins"
+  # only the proteins in the library are counted: one in no set of it can never be a hit
+  out <- if (!is.null(u$query.size) && !is.na(u$query.size) && !is.null(u$query.input) && !is.na(u$query.input) && u$query.size < u$query.input)
+    paste0(" (", .paListN(u$query.size), " of them in the gene-set library and counted; the other ", .paListN(u$query.input - u$query.size),
+           " are in none of its sets, left out)") else ""
   size <- if (!is.null(u$bg.size) && !is.na(u$bg.size)) paste0(.paListN(u$bg.size), " ") else ""
-  paste0("Your ", q, " tested against all ", size, "proteins in the gene-set library as background, ",
+  paste0("Your ", q, out, " tested against all ", size, "proteins in the gene-set library as background, ",
          "a weaker claim than testing against the proteins tested in your study")
 }
 
