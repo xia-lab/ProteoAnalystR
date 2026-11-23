@@ -1104,8 +1104,10 @@ Predict.class <- function(x.train, y.train, x.test, clsMethod="pls", lvNum, imp.
 #'@param comp Number of components
 Get.VIP <- function(pls.obj, comp=2){
   w <- pls.obj$loading.weights[, 1:comp, drop=FALSE];
-  q <- pls.obj$Yloadings[1:comp];
-  vip <- sqrt(nrow(w) * apply((w^2) * (q^2), 1, sum) / sum(q^2));
+  # Wold's VIP: a component's Y-variance is its squared Y loadings (summed over the responses: caret::plsda codes the classes as one column each)
+  # times the sum of squares of its scores; the scores' part was left out, so components were weighted by their Y loadings alone.
+  ss <- colSums(matrix(pls.obj$Yloadings, ncol = ncol(pls.obj$scores))^2)[1:comp] * colSums(pls.obj$scores[, 1:comp, drop=FALSE]^2);
+  vip <- sqrt(nrow(w) * apply(sweep(w^2, 2, colSums(w^2), "/"), 1, function(r) sum(r * ss)) / sum(ss));
   return(vip);
 }
 
