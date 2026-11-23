@@ -510,6 +510,8 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
     names(set.ids) = firstup(names(set.ids));
     names(set.ids) = gsub("-", "_", names(set.ids));
   }
+  set.nms <- .uniqueSetNames(names(current.featureset), set.ids);
+  names(current.featureset) <- names(set.ids) <- set.nms;
   ov_qs_save(current.featureset, "current_featureset.qs");
   res <- list();
   res$current.setlink <- my.lib$link;
@@ -518,6 +520,16 @@ convert.uniprot.to.symbols <- function(uniprot.ids, org) {
 
   assign(cache.key, res, envir = .GlobalEnv);
   return(res);
+}
+
+# A gene-set library's names, each one unique, so that a set is one set wherever it is looked up by name (its hits, its id, its row,
+# the GSEA results). The KEGG library repeats 9 names (the subtitles of "Autophagy - animal" and "Autophagy - other" are cut off) and
+# Reactome 6: the second set of a name took the first one's id and member list in the table, or was dropped. A repeated name is
+# followed by the set's id.
+.uniqueSetNames <- function(nms, ids){
+  dup <- duplicated(nms) | duplicated(nms, fromLast = TRUE);
+  nms[dup] <- paste0(nms[dup], " (", unname(ids[dup]), ")");
+  nms;
 }
 
 # The members of a gene-set library as Entrez ids. A library already in Entrez ids (any member is a plain number) is returned as it
